@@ -1,0 +1,6 @@
+{
+  "name": "Hệ thống Web GIS Tìm kiếm & Quy tập Mộ liệt sĩ",
+  "description": "Ứng dụng Web GIS quản lý, tìm kiếm và quy tập mộ liệt sĩ với Leaflet, Firebase Firestore và Authentication.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
