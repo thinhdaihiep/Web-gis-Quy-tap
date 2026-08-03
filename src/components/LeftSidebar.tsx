@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { LayerConfig, UserRole } from '../types';
-import { Layers, ShieldAlert, Upload, Edit2, Check, X, Info, Focus } from 'lucide-react';
+import { Layers, ShieldAlert, Upload, Edit2, Check, X, Info, Focus, ChevronDown, ChevronRight, Folder } from 'lucide-react';
 
 interface LeftSidebarProps {
   layers: LayerConfig[];
   onToggleVisibility: (layerId: string) => void;
+  onToggleGroupVisibility?: (layerIds: string[], visible: boolean) => void;
   onRenameLayer: (layerId: string, newName: string) => void;
   onZoomToLayer?: (layerId: string) => void;
   currentRole: UserRole;
@@ -15,6 +16,7 @@ interface LeftSidebarProps {
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   layers,
   onToggleVisibility,
+  onToggleGroupVisibility,
   onRenameLayer,
   onZoomToLayer,
   currentRole,
@@ -23,11 +25,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 }) => {
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string>('');
+  
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
+    'business': true,
+  });
 
-  // 1. Business layers on TOP
-  const businessLayers = layers.filter((l) => !l.readOnlyForEditor);
-  // 2. Administrative boundary layer BELOW
-  const adminLayers = layers.filter((l) => l.readOnlyForEditor);
+  const toggleGroupExpand = (groupId: string) => {
+    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
 
   const startEditing = (layer: LayerConfig) => {
     if (currentRole !== 'admin') return;
@@ -49,6 +54,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const renderLayerItem = (layer: LayerConfig) => {
     const isEditing = editingLayerId === layer.id;
 
+    const layerNameLower = layer.name.toLowerCase();
+    const isBattle = layer.id === 'layer2_tran_danh' || layerNameLower.includes('trận đánh') || layerNameLower.includes('tran danh');
+    const isGrave = layer.id === 'layer1_mo_liet_si' || layerNameLower.includes('mộ liệt sĩ') || layerNameLower.includes('mo liet si') || layerNameLower.includes('mộ');
+    const isCemetery = layer.id === 'layer3_nghia_trang' || layerNameLower.includes('nghĩa trang') || layerNameLower.includes('nghia trang');
+
     return (
       <div
         key={layer.id}
@@ -61,10 +71,30 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             onChange={() => onToggleVisibility(layer.id)}
             className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer shrink-0"
           />
-          <span
-            className="w-2.5 h-2.5 rounded-full ml-2 mr-1.5 shrink-0 border border-slate-300"
-            style={{ backgroundColor: layer.color }}
-          />
+          {isBattle ? (
+            <span className="w-3.5 h-3.5 rounded-full ml-1.5 mr-1 shrink-0 bg-white border border-red-500 flex items-center justify-center shadow-2xs" title="Trận đánh">
+              <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 24 24" fill="#ef4444">
+                <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
+              </svg>
+            </span>
+          ) : isGrave ? (
+            <span className="w-3.5 h-3.5 rounded-full ml-1.5 mr-1 shrink-0 bg-white border border-emerald-600 flex items-center justify-center shadow-2xs" title="Mộ liệt sĩ">
+              <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 24 24" fill="#16a34a">
+                <path d="M12 3c-3.86 0-7 3.14-7 7v9h14v-9c0-3.86-3.14-7-7-7zm-1 3.5h2v2.5h2.5v2H13V15h-2v-4H8.5v-2H11V6.5z"/>
+              </svg>
+            </span>
+          ) : isCemetery ? (
+            <span className="w-3.5 h-3.5 rounded-[3px] ml-1.5 mr-1 shrink-0 bg-white border border-purple-600 flex items-center justify-center shadow-2xs" title="Nghĩa trang liệt sĩ">
+              <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 24 24" fill="#9333ea">
+                <path d="M4 20h16v2H4v-2zm2-2h12V10c0-3.31-2.69-6-6-6s-6 2.69-6 6v8zm5-11h2v2.5h2.5v2H13V15h-2v-3.5H8.5v-2H11V7z"/>
+              </svg>
+            </span>
+          ) : (
+            <span
+              className="w-2.5 h-2.5 rounded-full ml-2 mr-1.5 shrink-0 border border-slate-300"
+              style={{ backgroundColor: layer.color }}
+            />
+          )}
 
           {isEditing ? (
             <div className="flex items-center gap-1 flex-1">
@@ -131,6 +161,63 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     );
   };
 
+  const renderGroup = (
+    groupId: string,
+    title: string,
+    groupLayers: LayerConfig[],
+    titleColorClass: string = "text-slate-700"
+  ) => {
+    if (groupLayers.length === 0) return null;
+    
+    const isExpanded = expandedGroups[groupId];
+    const isAllVisible = groupLayers.length > 0 && groupLayers.every(l => l.visible);
+    const isSomeVisible = groupLayers.some(l => l.visible);
+
+    return (
+      <div className="mb-2">
+        <div
+          className="flex items-center justify-between px-2 py-1 mb-1 hover:bg-slate-100 rounded cursor-pointer transition-colors"
+          onClick={() => toggleGroupExpand(groupId)}
+        >
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            {isExpanded ? (
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            )}
+            <Folder className={`w-3.5 h-3.5 ${titleColorClass} shrink-0`} />
+            <span className={`text-[11px] font-bold ${titleColorClass} uppercase tracking-wider truncate`}>
+              {title}
+            </span>
+          </div>
+          
+          <div className="flex items-center ml-2" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={isAllVisible}
+              ref={el => {
+                if (el) el.indeterminate = isSomeVisible && !isAllVisible;
+              }}
+              onChange={(e) => {
+                if (onToggleGroupVisibility) {
+                  onToggleGroupVisibility(groupLayers.map(l => l.id), e.target.checked);
+                }
+              }}
+              className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+              title="Bật/tắt toàn bộ thư mục"
+            />
+          </div>
+        </div>
+        
+        {isExpanded && (
+          <div className="pl-4 space-y-0.5 border-l border-slate-100 ml-3.5 mt-1">
+            {groupLayers.map((layer) => renderLayerItem(layer))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <aside className="w-64 bg-white border-r border-slate-200 flex flex-col shrink-0 h-full text-slate-800 z-10 shadow-sm">
       {/* Sidebar Title */}
@@ -150,31 +237,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         )}
       </div>
 
-      {/* Layers List - Business Layers FIRST, Administrative Layer BELOW */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-4">
-        {/* Group 1: Dữ liệu nghiệp vụ (TOP) */}
-        <div>
-          <div className="flex items-center justify-between px-2 mb-1.5">
-            <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">
-              Dữ liệu nghiệp vụ
-            </p>
-          </div>
-          <div className="space-y-0.5">
-            {businessLayers.map((layer) => renderLayerItem(layer))}
-          </div>
-        </div>
-
-        {/* Group 2: Địa giới hành chính (BELOW) */}
-        <div>
-          <div className="flex items-center justify-between px-2 mb-1.5">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              Địa giới hành chính
-            </p>
-          </div>
-          <div className="space-y-0.5">
-            {adminLayers.map((layer) => renderLayerItem(layer))}
-          </div>
-        </div>
+      {/* Layers List */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        {layers.length === 0 ? (
+          <div className="text-xs text-slate-400 text-center py-4 italic">Chưa có lớp dữ liệu nào</div>
+        ) : (
+          layers.map((layer) => renderLayerItem(layer))
+        )}
       </div>
 
       {/* Legend Box - Positioned directly above the Import Button */}
@@ -210,30 +279,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         </div>
 
         {/* GeoJSON Import Button Area */}
-        <div>
-          <button
-            onClick={onImportClick}
-            disabled={currentRole !== 'admin'}
-            className={`w-full py-2 px-3 rounded text-xs font-bold uppercase tracking-wider shadow-sm flex items-center justify-center space-x-1.5 transition-all ${
-              currentRole === 'admin'
-                ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-[0.99]'
-                : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-80'
-            }`}
-            title={
-              currentRole !== 'admin'
-                ? 'Chỉ Quản trị viên (Admin) mới có quyền Import dữ liệu GeoJSON gốc'
-                : 'Import tập tin GeoJSON lên hệ thống Firestore'
-            }
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span>+ Import Dữ liệu GeoJSON</span>
-          </button>
-        </div>
-
-        {currentRole !== 'admin' && (
-          <div className="flex items-center space-x-1 text-[10px] text-amber-600 bg-amber-50 p-1.5 rounded border border-amber-200">
-            <ShieldAlert className="w-3 h-3 shrink-0" />
-            <span>Chỉ Admin được import GeoJSON gốc</span>
+        {currentRole === 'admin' && (
+          <div>
+            <button
+              onClick={onImportClick}
+              className="w-full py-2 px-3 rounded text-xs font-bold uppercase tracking-wider shadow-sm flex items-center justify-center space-x-1.5 transition-all bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-[0.99]"
+              title="Import tập tin GeoJSON lên hệ thống Firestore"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>+ Import Dữ liệu GeoJSON</span>
+            </button>
           </div>
         )}
       </div>

@@ -20,7 +20,7 @@ export const MapOverlay: React.FC<MapOverlayProps> = ({
   isLocating = false,
 }) => {
   return (
-    <div className="absolute top-4 right-4 z-[500] flex flex-col items-end gap-2">
+    <div className="absolute top-4 right-4 z-[500] flex flex-col items-end gap-2 pointer-events-auto">
       {/* Base Map Switcher (Top Right - Icons Only for Space Efficiency) */}
       <div className="flex gap-1 bg-white p-1 rounded-lg shadow-xl border border-slate-200 backdrop-blur-sm">
         <button

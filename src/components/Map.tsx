@@ -11,11 +11,53 @@ interface MapProps {
   baseMap: BaseMapType;
   layers: LayerConfig[];
   features: GeoJsonFeatureItem[];
+  aliasVersion?: number;
   onMapReady?: (map: L.Map) => void;
   onCursorMove?: (pos: { lat: number; lng: number } | null) => void;
 }
 
-function renderPopupProperties(feat: GeoJsonFeatureItem, lat?: number, lng?: number): string {
+function getFeatureName(feat: GeoJsonFeatureItem): { name: string, hiddenKey: string | null } {
+  const props = feat.properties || {};
+  let name = feat.name || '';
+  let hiddenKey: string | null = null;
+
+  for (const k of Object.keys(props)) {
+    const lowerKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const alias = getFieldAlias(k);
+    if (
+      alias === 'Tên' ||
+      lowerKey === 'ten' ||
+      lowerKey === 'name' ||
+      lowerKey.includes('tenxa') ||
+      lowerKey.includes('tentinh') ||
+      lowerKey.includes('tenhuyen')
+    ) {
+      const val = props[k];
+      if (val !== null && val !== undefined && String(val).trim() !== '') {
+        name = String(val);
+        hiddenKey = k;
+        break;
+      }
+    }
+  }
+
+  if (!name || name === 'Feature' || name === 'Polygon' || name === 'Point') {
+    for (const k of Object.keys(props)) {
+      if (k.toLowerCase().includes('ten')) {
+        const val = props[k];
+        if (val !== null && val !== undefined && String(val).trim() !== '') {
+          name = String(val);
+          hiddenKey = k;
+          break;
+        }
+      }
+    }
+  }
+
+  return { name, hiddenKey };
+}
+
+function renderPopupProperties(feat: GeoJsonFeatureItem, lat?: number, lng?: number, hiddenKey?: string | null): string {
   const props = feat.properties || {};
   const entries = Object.entries(props);
   let hasToaDo = false;
@@ -25,18 +67,24 @@ function renderPopupProperties(feat: GeoJsonFeatureItem, lat?: number, lng?: num
   entries.forEach(([k, v]) => {
     const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    // Ignore HienTrang, TrangThaiMoi, OBJECTID, and ID keys as requested
+    // Ignore HienTrang, TrangThaiMoi, OBJECTID, and ID keys as requested, plus the hiddenKey (like Ten)
     if (
       cleanKey === 'hientrang' ||
       cleanKey === 'trangthaimoi' ||
       cleanKey === 'objectid' ||
       cleanKey === 'id' ||
-      cleanKey === 'fid'
+      cleanKey === 'fid' ||
+      k === hiddenKey
     ) {
       return;
     }
 
     const alias = getFieldAlias(k);
+    if (!alias) {
+      // Skipped: Field is not mapped in the Field Alias Dictionary
+      return;
+    }
+
     if (alias === 'Tọa độ') hasToaDo = true;
     const valStr = v !== null && v !== undefined && String(v).trim() !== '' ? String(v) : '---';
     rows.push(`<tr style="border-bottom: 1px solid #f1f5f9;">
@@ -85,6 +133,7 @@ export const MapComponent: React.FC<MapProps> = ({
   baseMap,
   layers,
   features,
+  aliasVersion,
   onMapReady,
   onCursorMove,
 }) => {
@@ -158,6 +207,20 @@ export const MapComponent: React.FC<MapProps> = ({
       featureLayersRef.current = L.layerGroup().addTo(map);
 
       mapInstanceRef.current = map;
+
+      const updateBattleLabelsVisibility = () => {
+        if (!mapInstanceRef.current) return;
+        const container = mapInstanceRef.current.getContainer();
+        if (mapInstanceRef.current.getZoom() >= 12) {
+          container.classList.add('show-battle-labels');
+        } else {
+          container.classList.remove('show-battle-labels');
+        }
+      };
+
+      map.on('zoomend moveend zoom', updateBattleLabelsVisibility);
+      updateBattleLabelsVisibility();
+
       if (onMapReady) {
         onMapReady(map);
       }
@@ -236,20 +299,125 @@ export const MapComponent: React.FC<MapProps> = ({
           const markerLatLng = L.latLng(lat, lng);
           allBounds.push(markerLatLng);
 
-          const circleMarker = L.circleMarker(markerLatLng, {
-            radius: 8,
-            fillColor: featureColor,
-            fillOpacity: 0.9,
-            color: '#ffffff',
-            weight: 2,
-          });
+          const { name: titleName, hiddenKey } = getFeatureName(feat);
+
+          let pointMarker: L.Layer;
+
+          const isBattleLayer =
+            feat.layerId === 'layer2_tran_danh' ||
+            parentLayer?.id === 'layer2_tran_danh' ||
+            parentLayer?.name?.toLowerCase().includes('trận đánh') ||
+            parentLayer?.name?.toLowerCase().includes('tran danh') ||
+            parentLayer?.name?.toLowerCase().includes('lịch sử') ||
+            parentLayer?.name?.toLowerCase().includes('lich su');
+
+          const isGraveLayer =
+            feat.layerId === 'layer1_mo_liet_si' ||
+            parentLayer?.id === 'layer1_mo_liet_si' ||
+            parentLayer?.name?.toLowerCase().includes('mộ liệt sĩ') ||
+            parentLayer?.name?.toLowerCase().includes('mo liet si') ||
+            parentLayer?.name?.toLowerCase().includes('mộ');
+
+          const isCemeteryLayer =
+            feat.layerId === 'layer3_nghia_trang' ||
+            parentLayer?.id === 'layer3_nghia_trang' ||
+            parentLayer?.name?.toLowerCase().includes('nghĩa trang') ||
+            parentLayer?.name?.toLowerCase().includes('nghia trang');
+
+          if (isBattleLayer) {
+            const flameIcon = L.divIcon({
+              html: `
+                <div style="
+                  width: 20px;
+                  height: 20px;
+                  background-color: #ffffff;
+                  border: 2px solid #ef4444;
+                  border-radius: 50%;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+                  cursor: pointer;
+                ">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="#ef4444" stroke="#dc2626" stroke-width="0.5">
+                    <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
+                  </svg>
+                </div>
+              `,
+              className: '',
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
+              popupAnchor: [0, -10],
+            });
+            pointMarker = L.marker(markerLatLng, { icon: flameIcon });
+          } else if (isGraveLayer) {
+            const graveIcon = L.divIcon({
+              html: `
+                <div style="
+                  width: 20px;
+                  height: 20px;
+                  background-color: #ffffff;
+                  border: 2px solid #16a34a;
+                  border-radius: 50%;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+                  cursor: pointer;
+                ">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="#16a34a">
+                    <path d="M12 3c-3.86 0-7 3.14-7 7v9h14v-9c0-3.86-3.14-7-7-7zm-1 3.5h2v2.5h2.5v2H13V15h-2v-4H8.5v-2H11V6.5z"/>
+                  </svg>
+                </div>
+              `,
+              className: '',
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
+              popupAnchor: [0, -10],
+            });
+            pointMarker = L.marker(markerLatLng, { icon: graveIcon });
+          } else if (isCemeteryLayer) {
+            const cemeteryIcon = L.divIcon({
+              html: `
+                <div style="
+                  width: 20px;
+                  height: 20px;
+                  background-color: #ffffff;
+                  border: 2px solid #9333ea;
+                  border-radius: 4px;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+                  cursor: pointer;
+                ">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="#9333ea">
+                    <path d="M4 20h16v2H4v-2zm2-2h12V10c0-3.31-2.69-6-6-6s-6 2.69-6 6v8zm5-11h2v2.5h2.5v2H13V15h-2v-3.5H8.5v-2H11V7z"/>
+                  </svg>
+                </div>
+              `,
+              className: '',
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
+              popupAnchor: [0, -10],
+            });
+            pointMarker = L.marker(markerLatLng, { icon: cemeteryIcon });
+          } else {
+            pointMarker = L.circleMarker(markerLatLng, {
+              radius: 8,
+              fillColor: featureColor,
+              fillOpacity: 0.9,
+              color: '#ffffff',
+              weight: 2,
+            });
+          }
 
           const popupHtml = `
             <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
               <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
                 ${parentLayer?.name || 'Vị trí GIS'}
               </div>
-              <strong style="font-size: 13px; color: #1e3a8a;">${feat.name}</strong><br/>
+              <strong style="font-size: 13px; color: #1e3a8a;">${titleName}</strong><br/>
               <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
               ${
                 phanLoaiBadgeText
@@ -257,14 +425,23 @@ export const MapComponent: React.FC<MapProps> = ({
                   : ''
               }
               <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                ${renderPopupProperties(feat, lat, lng)}
+                ${renderPopupProperties(feat, lat, lng, hiddenKey)}
               </div>
             </div>
           `;
 
-          circleMarker.bindPopup(popupHtml);
+          pointMarker.bindPopup(popupHtml);
+
+          if ((isBattleLayer || isGraveLayer || isCemeteryLayer) && titleName) {
+            pointMarker.bindTooltip(titleName, {
+              permanent: true,
+              direction: 'bottom',
+              offset: [0, 10],
+              className: 'battle-map-label',
+            });
+          }
           
-          circleMarker.on('click', () => {
+          pointMarker.on('click', () => {
             if (onCursorMoveRef.current) {
               onCursorMoveRef.current({ lat: markerLatLng.lat, lng: markerLatLng.lng });
             }
@@ -273,7 +450,7 @@ export const MapComponent: React.FC<MapProps> = ({
             }
           });
 
-          featureLayersRef.current?.addLayer(circleMarker);
+          featureLayersRef.current?.addLayer(pointMarker);
         } else if (
           (feat.type === 'Polygon' || feat.type === 'MultiPolygon') &&
           Array.isArray(feat.coordinates)
@@ -290,6 +467,8 @@ export const MapComponent: React.FC<MapProps> = ({
           };
           collectLatLngs(leafletCoords);
 
+          const { name: titleName, hiddenKey } = getFeatureName(feat);
+
           const polygon = L.polygon(leafletCoords, {
             color: featureColor,
             fillColor: featureColor,
@@ -302,7 +481,7 @@ export const MapComponent: React.FC<MapProps> = ({
               <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
                 ${parentLayer?.name || 'Khu vực GIS'}
               </div>
-              <strong style="font-size: 13px; color: #1e3a8a;">${feat.name}</strong><br/>
+              <strong style="font-size: 13px; color: #1e3a8a;">${titleName}</strong><br/>
               <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
               ${
                 phanLoaiBadgeText
@@ -310,12 +489,41 @@ export const MapComponent: React.FC<MapProps> = ({
                   : ''
               }
               <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                ${renderPopupProperties(feat)}
+                ${renderPopupProperties(feat, undefined, undefined, hiddenKey)}
               </div>
             </div>
           `;
 
           polygon.bindPopup(popupHtml);
+
+          const isBattleLayer =
+            feat.layerId === 'layer2_tran_danh' ||
+            parentLayer?.id === 'layer2_tran_danh' ||
+            parentLayer?.name?.toLowerCase().includes('trận đánh') ||
+            parentLayer?.name?.toLowerCase().includes('tran danh') ||
+            parentLayer?.name?.toLowerCase().includes('lịch sử') ||
+            parentLayer?.name?.toLowerCase().includes('lich su');
+
+          const isGraveLayer =
+            feat.layerId === 'layer1_mo_liet_si' ||
+            parentLayer?.id === 'layer1_mo_liet_si' ||
+            parentLayer?.name?.toLowerCase().includes('mộ liệt sĩ') ||
+            parentLayer?.name?.toLowerCase().includes('mo liet si') ||
+            parentLayer?.name?.toLowerCase().includes('mộ');
+
+          const isCemeteryLayer =
+            feat.layerId === 'layer3_nghia_trang' ||
+            parentLayer?.id === 'layer3_nghia_trang' ||
+            parentLayer?.name?.toLowerCase().includes('nghĩa trang') ||
+            parentLayer?.name?.toLowerCase().includes('nghia trang');
+
+          if ((isBattleLayer || isGraveLayer || isCemeteryLayer) && titleName) {
+            polygon.bindTooltip(titleName, {
+              permanent: true,
+              direction: 'center',
+              className: 'battle-map-label',
+            });
+          }
           
           polygon.on('click', () => {
             const center = polygon.getBounds().getCenter();
@@ -348,11 +556,20 @@ export const MapComponent: React.FC<MapProps> = ({
       }
     }
 
+    if (map) {
+      const container = map.getContainer();
+      if (map.getZoom() >= 12) {
+        container.classList.add('show-battle-labels');
+      } else {
+        container.classList.remove('show-battle-labels');
+      }
+    }
+
     prevFeaturesCountRef.current = features.length;
-  }, [layers, features]);
+  }, [layers, features, aliasVersion]);
 
   return (
-    <div className="relative w-full h-full flex-1 z-0">
+    <div className="relative w-full h-full flex-1">
       <div ref={mapContainerRef} className="w-full h-full min-h-[500px]" />
     </div>
   );

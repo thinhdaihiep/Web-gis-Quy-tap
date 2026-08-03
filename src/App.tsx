@@ -21,14 +21,60 @@ import { Upload, X, Check, ShieldAlert, FileText, Server, Database } from 'lucid
 
 export default function App() {
   const [currentRole, setCurrentRole] = useState<UserRole>('admin');
+  const [isMobile, setIsMobile] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const effectiveRole: UserRole = isMobile ? 'guest' : currentRole;
+
   const [baseMap, setBaseMap] = useState<BaseMapType>('street');
   const [layers, setLayers] = useState<LayerConfig[]>(DEFAULT_LAYERS);
   const [mapFeatures, setMapFeatures] = useState<GeoJsonFeatureItem[]>(INITIAL_MAP_FEATURES);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
   const [isFieldAliasModalOpen, setIsFieldAliasModalOpen] = useState<boolean>(false);
+  const [aliasVersion, setAliasVersion] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const handleAliasesUpdated = () => {
+    setAliasVersion((prev) => prev + 1);
+  };
   const [mapInstance, setMapInstance] = useState<L.Map | null>(null);
+  const [zoomLevel, setZoomLevel] = useState<number | null>(8);
+  const [mapScale, setMapScale] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!mapInstance) return;
+
+    const updateZoomAndScale = () => {
+      const z = mapInstance.getZoom();
+      const formattedZoom = Number.isInteger(z) ? z : Number(z.toFixed(1));
+      setZoomLevel(formattedZoom);
+
+      const center = mapInstance.getCenter();
+      const latRad = (center.lat * Math.PI) / 180;
+      // 156543.03392 m/px at equator zoom 0
+      const metersPerPixel = (156543.03392 * Math.cos(latRad)) / Math.pow(2, z);
+      // Standard screen 96 DPI = 0.00026458333 m/px
+      const scale = Math.round(metersPerPixel / 0.00026458333);
+      setMapScale(scale);
+    };
+
+    updateZoomAndScale();
+
+    mapInstance.on('zoomend moveend', updateZoomAndScale);
+    return () => {
+      mapInstance.off('zoomend moveend', updateZoomAndScale);
+    };
+  }, [mapInstance]);
 
   // Pane Visibility States (Responsive & Mobile-optimized - left sidebar visible by default on desktop)
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState<boolean>(true);
@@ -69,6 +115,7 @@ export default function App() {
       if (dbAliases && Object.keys(dbAliases).length > 0) {
         try {
           localStorage.setItem('gis_field_alias_dictionary', JSON.stringify(dbAliases));
+          setAliasVersion((v) => v + 1);
         } catch (e) {
           console.warn('Lỗi lưu cache field_aliases:', e);
         }
@@ -192,6 +239,14 @@ export default function App() {
     setLayers((prevLayers) =>
       prevLayers.map((l) =>
         l.id === layerId ? { ...l, visible: !l.visible } : l
+      )
+    );
+  };
+
+  const handleToggleLayerGroupVisibility = (layerIds: string[], visible: boolean) => {
+    setLayers((prevLayers) =>
+      prevLayers.map((l) =>
+        layerIds.includes(l.id) ? { ...l, visible } : l
       )
     );
   };
@@ -340,13 +395,14 @@ export default function App() {
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-900 font-sans text-slate-900">
       {/* Top High Density Header */}
       <Header
-        currentRole={currentRole}
+        currentRole={effectiveRole}
         onRoleChange={setCurrentRole}
         isLeftSidebarOpen={isLeftSidebarOpen}
         onToggleLeftSidebar={toggleLeftSidebar}
         isRightSidebarOpen={isRightSidebarOpen}
         onToggleRightSidebar={toggleRightSidebar}
         onOpenFieldAliasModal={() => setIsFieldAliasModalOpen(true)}
+        isMobile={isMobile}
       />
 
       {/* Mobile-Optimized Search Bar below Title Bar */}
@@ -358,9 +414,9 @@ export default function App() {
       {/* Main App Body */}
       <main className="flex flex-1 overflow-hidden relative">
         {/* Mobile Backdrop when sidebars are open as overlays on small screens */}
-        {(isLeftSidebarOpen || (isRightSidebarOpen && currentRole === 'admin')) && (
+        {(isLeftSidebarOpen || (isRightSidebarOpen && effectiveRole === 'admin')) && (
           <div
-            className="md:hidden fixed inset-0 bg-black/40 z-25 backdrop-blur-xs transition-opacity"
+            className="md:hidden fixed inset-0 bg-black/40 z-[1900] backdrop-blur-xs transition-opacity"
             onClick={() => {
               setIsLeftSidebarOpen(false);
               setIsRightSidebarOpen(false);
@@ -370,15 +426,15 @@ export default function App() {
 
         {/* Left Sidebar: Layer Management */}
         {isLeftSidebarOpen && (
-          <div className="absolute md:relative inset-y-0 left-0 z-30 md:z-10 bg-white h-full shadow-2xl md:shadow-none transition-all">
+          <div className="absolute md:relative inset-y-0 left-0 z-[2000] md:z-10 bg-white h-full shadow-2xl md:shadow-none transition-all">
             <LeftSidebar
               layers={layers}
               onToggleVisibility={handleToggleLayerVisibility}
+              onToggleGroupVisibility={handleToggleLayerGroupVisibility}
               onRenameLayer={handleRenameLayer}
               onZoomToLayer={handleZoomToLayer}
-              currentRole={currentRole}
+              currentRole={effectiveRole}
               onImportClick={() => setIsImportModalOpen(true)}
-              onOpenFieldAliasModal={() => setIsFieldAliasModalOpen(true)}
               onClose={() => {
                 setIsLeftSidebarOpen(false);
                 setTimeout(() => mapInstance?.invalidateSize(), 200);
@@ -394,6 +450,7 @@ export default function App() {
             baseMap={baseMap}
             layers={layers}
             features={mapFeatures}
+            aliasVersion={aliasVersion}
             onMapReady={(map) => setMapInstance(map)}
             onCursorMove={setCursorLocation}
           />
@@ -410,10 +467,10 @@ export default function App() {
         </section>
 
         {/* Right Sidebar: Approval Queue / Draft List (Admin Only) */}
-        {currentRole === 'admin' && isRightSidebarOpen && (
-          <div className="absolute md:relative inset-y-0 right-0 z-30 md:z-10 bg-white h-full shadow-2xl md:shadow-none transition-all">
+        {effectiveRole === 'admin' && isRightSidebarOpen && (
+          <div className="absolute md:relative inset-y-0 right-0 z-[2000] md:z-10 bg-white h-full shadow-2xl md:shadow-none transition-all">
             <RightSidebar
-              currentRole={currentRole}
+              currentRole={effectiveRole}
               onApproveClick={handleApproveDraft}
               onClose={() => {
                 setIsRightSidebarOpen(false);
@@ -425,7 +482,12 @@ export default function App() {
       </main>
 
       {/* Bottom Status Bar */}
-      <Footer cursorLocation={cursorLocation} userLocation={userLocation} />
+      <Footer
+        cursorLocation={cursorLocation}
+        userLocation={userLocation}
+        zoomLevel={zoomLevel}
+        mapScale={mapScale}
+      />
 
       {/* Toast Notification */}
       {toastMessage && (
@@ -448,6 +510,7 @@ export default function App() {
       <FieldAliasModal
         isOpen={isFieldAliasModalOpen}
         onClose={() => setIsFieldAliasModalOpen(false)}
+        onAliasesUpdated={handleAliasesUpdated}
       />
     </div>
   );

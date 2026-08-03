@@ -4,9 +4,16 @@ import { Crosshair, MapPin } from 'lucide-react';
 interface FooterProps {
   cursorLocation?: { lat: number; lng: number } | null;
   userLocation?: { lat: number; lng: number; accuracy?: number } | null;
+  zoomLevel?: number | null;
+  mapScale?: number | null;
 }
 
-export const Footer: React.FC<FooterProps> = ({ cursorLocation, userLocation }) => {
+export const Footer: React.FC<FooterProps> = ({
+  cursorLocation,
+  userLocation,
+  zoomLevel,
+  mapScale,
+}) => {
   return (
     <footer className="h-7 bg-slate-900 text-slate-200 border-t border-slate-800 flex items-center justify-between px-4 text-[11px] shrink-0 z-20 font-medium">
       {/* Left side: Coordinates */}
@@ -44,8 +51,21 @@ export const Footer: React.FC<FooterProps> = ({ cursorLocation, userLocation }) 
 
       {/* Right side: Scale & Copyright */}
       <div className="flex gap-4 items-center text-[10px] text-slate-400">
-        <span className="hidden md:inline">Quy mô: 1:5.000</span>
-        <span className="hidden lg:inline">© 2026 Portal GIS Tìm Kiếm & Quy Tập Liệt Sĩ</span>
+        <span className="hidden md:inline">
+          {mapScale ? (
+            <>
+              Tỷ lệ 1:{mapScale.toLocaleString('vi-VN')}
+              {zoomLevel !== undefined && zoomLevel !== null && (
+                <span className="ml-1 text-slate-400 font-mono">(Zoom: {zoomLevel})</span>
+              )}
+            </>
+          ) : zoomLevel !== undefined && zoomLevel !== null ? (
+            `Zoom: ${zoomLevel}`
+          ) : (
+            'Tỷ lệ 1:5.000'
+          )}
+        </span>
+        <span className="hidden lg:inline">© 2026 Ban Bản đồ/Phòng Tác chiến Quân khu 5</span>
       </div>
     </footer>
   );

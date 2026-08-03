@@ -69,6 +69,11 @@ export const FieldAliasModal: React.FC<FieldAliasModalProps> = ({
       r.alias.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const handleClose = () => {
+    if (onAliasesUpdated) onAliasesUpdated();
+    onClose();
+  };
+
   return (
     <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
       <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
@@ -88,7 +93,7 @@ export const FieldAliasModal: React.FC<FieldAliasModalProps> = ({
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -213,7 +218,7 @@ export const FieldAliasModal: React.FC<FieldAliasModalProps> = ({
         {/* Footer */}
         <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="px-4 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
           >
             Đóng & Áp dụng

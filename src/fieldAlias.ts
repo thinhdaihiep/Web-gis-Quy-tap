@@ -42,6 +42,20 @@ export const DEFAULT_FIELD_ALIASES: Record<string, string> = {
   TenKhuVuc: 'Tên khu vực',
   ten_khu_vuc: 'Tên khu vực',
 
+  // Địa điểm / Địa chỉ / Vị trí
+  diadiem: 'Địa điểm',
+  DiaDiem: 'Địa điểm',
+  dia_diem: 'Địa điểm',
+  DIADIEM: 'Địa điểm',
+  diachi: 'Địa chỉ',
+  DiaChi: 'Địa chỉ',
+  dia_chi: 'Địa chỉ',
+  vitri: 'Vị trí',
+  ViTri: 'Vị trí',
+  vi_tri: 'Vị trí',
+  location: 'Địa điểm',
+  Location: 'Địa điểm',
+
   // Phân loại
   phanloai: 'Phân loại',
   PhanLoai: 'Phân loại',
@@ -156,11 +170,10 @@ export function saveCustomAliasMap(map: Record<string, string>): void {
 
 /**
  * Lookup alias for a given raw property key name.
- * Checks custom dictionary first, then built-in default map,
- * then case-insensitive variants.
+ * Returns the mapped friendly Vietnamese alias if found, or null if the key is not in the mapping dictionary.
  */
-export function getFieldAlias(key: string, customMap?: Record<string, string>): string {
-  if (!key) return '';
+export function getFieldAlias(key: string, customMap?: Record<string, string>): string | null {
+  if (!key) return null;
 
   const activeCustom = customMap || getCustomAliasMap();
 
@@ -170,17 +183,36 @@ export function getFieldAlias(key: string, customMap?: Record<string, string>): 
   // 2. Direct match in default dictionary
   if (DEFAULT_FIELD_ALIASES[key]) return DEFAULT_FIELD_ALIASES[key];
 
-  // 3. Lowercase match
   const lower = key.toLowerCase();
-  if (activeCustom[lower]) return activeCustom[lower];
-  if (DEFAULT_FIELD_ALIASES[lower]) return DEFAULT_FIELD_ALIASES[lower];
-
-  // 4. Normalized clean key (stripped special chars)
   const cleanKey = lower.replace(/[^a-z0-9]/g, '');
+
+  // 3. Lowercase / clean match in custom dictionary
+  if (activeCustom[lower]) return activeCustom[lower];
   if (activeCustom[cleanKey]) return activeCustom[cleanKey];
+
+  // 4. Lowercase / clean match in default dictionary
+  if (DEFAULT_FIELD_ALIASES[lower]) return DEFAULT_FIELD_ALIASES[lower];
   if (DEFAULT_FIELD_ALIASES[cleanKey]) return DEFAULT_FIELD_ALIASES[cleanKey];
 
-  return key; // Fallback to raw key if no alias found
+  // 5. Deep case-insensitive & clean-key match in custom dictionary
+  for (const [cKey, cAlias] of Object.entries(activeCustom)) {
+    const cLower = cKey.toLowerCase();
+    const cClean = cLower.replace(/[^a-z0-9]/g, '');
+    if (cLower === lower || (cClean && cClean === cleanKey)) {
+      return cAlias;
+    }
+  }
+
+  // 6. Deep case-insensitive & clean-key match in default dictionary
+  for (const [dKey, dAlias] of Object.entries(DEFAULT_FIELD_ALIASES)) {
+    const dLower = dKey.toLowerCase();
+    const dClean = dLower.replace(/[^a-z0-9]/g, '');
+    if (dLower === lower || (dClean && dClean === cleanKey)) {
+      return dAlias;
+    }
+  }
+
+  return null; // Not found in mapping table
 }
 
 /**

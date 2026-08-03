@@ -73,13 +73,6 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
             <p className="text-[11px] text-slate-400 pl-6">
               {layer.description}
             </p>
-
-            {layer.readOnlyForEditor && (
-              <div className="pl-6 flex items-center space-x-1 text-[10px] text-amber-400/90 font-medium">
-                <ShieldAlert className="w-3 h-3" />
-                <span>Chỉ Admin mới có quyền cập nhật dữ liệu này</span>
-              </div>
-            )}
           </div>
         ))}
       </div>

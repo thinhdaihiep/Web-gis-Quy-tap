@@ -10,6 +10,7 @@ interface HeaderProps {
   isRightSidebarOpen: boolean;
   onToggleRightSidebar: () => void;
   onOpenFieldAliasModal?: () => void;
+  isMobile?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,25 +21,26 @@ export const Header: React.FC<HeaderProps> = ({
   isRightSidebarOpen,
   onToggleRightSidebar,
   onOpenFieldAliasModal,
+  isMobile = false,
 }) => {
   return (
-    <header className="h-14 bg-[#1e293b] text-white flex items-center justify-between px-3 sm:px-4 border-b border-slate-700 shrink-0 z-20 shadow-sm">
+    <header className="h-14 bg-[#1e293b] text-white flex items-center justify-between px-2.5 sm:px-4 border-b border-slate-700 shrink-0 z-20 shadow-sm gap-1.5 sm:gap-3">
       {/* Brand Title & Pane Toggles */}
-      <div className="flex items-center gap-2 sm:gap-3">
-        <div className="w-8 h-8 bg-red-600 rounded flex items-center justify-center font-bold text-lg text-white shadow-sm shrink-0">
+      <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
+        <div className="w-7 h-7 sm:w-8 sm:h-8 bg-red-600 rounded flex items-center justify-center font-bold text-base sm:text-lg text-white shadow-sm shrink-0">
           ★
         </div>
-        <div>
-          <h1 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-100 truncate max-w-[180px] xs:max-w-none">
-            Hệ thống GIS Tìm kiếm & Quy tập Mộ Liệt sĩ
+        <div className="min-w-0 flex-1">
+          <h1 className="text-[11px] sm:text-xs md:text-sm font-bold uppercase tracking-wide text-slate-100 truncate">
+            Bản đồ tìm kiếm & quy tập mộ Liệt sĩ
           </h1>
           <p className="text-[10px] text-slate-400 hidden lg:block">
-            Bản Bản đồ/Phòng Tác chiến/Quân khu 5
+            Ban chỉ đạo tìm kiếm và quy tập mộ liệt sĩ Quân khu 5
           </p>
         </div>
 
-        {/* Pane Toggle Buttons & Field Alias Manager for Mobile & Space Optimization */}
-        <div className="flex items-center gap-1 ml-1 sm:ml-2">
+        {/* Pane Toggle Buttons */}
+        <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={onToggleLeftSidebar}
             className={`px-2 py-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
@@ -48,24 +50,24 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
             title={isLeftSidebarOpen ? 'Ẩn bảng Quản lý lớp dữ liệu' : 'Hiện bảng Quản lý lớp dữ liệu'}
           >
-            <Layers className="w-3.5 h-3.5" />
+            <Layers className="w-3.5 h-3.5 shrink-0" />
             <span className="hidden md:inline text-[11px] font-bold">Lớp dữ liệu</span>
           </button>
 
-          {/* Field Alias Dictionary button (Admin only) */}
-          {currentRole === 'admin' && onOpenFieldAliasModal && (
+          {/* Field Alias Dictionary button (Admin & Desktop only) */}
+          {!isMobile && currentRole === 'admin' && onOpenFieldAliasModal && (
             <button
               onClick={onOpenFieldAliasModal}
               className="px-2 py-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
-              title="Mở Bảng Ánh Xạ Tên Trường Thuộc Tính (Chỉ dành cho Quản lý)"
+              title="Mở Bảng Ánh Xạ Tên Trường Thuộc Tính"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5 text-blue-400" />
+              <FileSpreadsheet className="w-3.5 h-3.5 text-blue-400 shrink-0" />
               <span className="hidden lg:inline text-[11px] font-bold">Ánh xạ trường</span>
             </button>
           )}
 
-          {/* Approval toggle button only visible for Admin */}
-          {currentRole === 'admin' && (
+          {/* Approval toggle button (Admin & Desktop only) */}
+          {!isMobile && currentRole === 'admin' && (
             <button
               onClick={onToggleRightSidebar}
               className={`px-2 py-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
@@ -75,7 +77,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
               title={isRightSidebarOpen ? 'Ẩn bảng Chờ phê duyệt' : 'Hiện bảng Chờ phê duyệt'}
             >
-              <Clock className="w-3.5 h-3.5" />
+              <Clock className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden md:inline text-[11px] font-bold">Phê duyệt</span>
               <span className="bg-red-500 text-white text-[9px] font-bold px-1 rounded-full">3</span>
             </button>
@@ -83,33 +85,42 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Role Switcher for Testing / Permissions */}
-      <div className="flex items-center gap-2">
-        <div className="text-right hidden sm:block">
-          <p className="text-[10px] uppercase text-slate-400 font-semibold leading-none">
-            Vai trò
-          </p>
+      {/* Role Switcher (Desktop) / Guest Indicator (Mobile) */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {!isMobile ? (
+          <>
+            <div className="text-right hidden sm:block">
+              <p className="text-[10px] uppercase text-slate-400 font-semibold leading-none">
+                Vai trò
+              </p>
 
-          <select
-            value={currentRole}
-            onChange={(e) => onRoleChange(e.target.value as UserRole)}
-            className="bg-transparent text-xs font-bold text-red-400 focus:outline-none cursor-pointer border-b border-dashed border-red-500/50 py-0.5"
-          >
-            <option value="admin" className="bg-slate-800 text-red-400 font-bold">
-              Quản trị viên (Admin)
-            </option>
-            <option value="editor" className="bg-slate-800 text-amber-400 font-bold">
-              Biên tập viên (Editor)
-            </option>
-            <option value="guest" className="bg-slate-800 text-emerald-400 font-bold">
-              Khách (Guest)
-            </option>
-          </select>
-        </div>
+              <select
+                value={currentRole}
+                onChange={(e) => onRoleChange(e.target.value as UserRole)}
+                className="bg-transparent text-xs font-bold text-red-400 focus:outline-none cursor-pointer border-b border-dashed border-red-500/50 py-0.5"
+              >
+                <option value="admin" className="bg-slate-800 text-red-400 font-bold">
+                  Quản trị viên (Admin)
+                </option>
+                <option value="editor" className="bg-slate-800 text-amber-400 font-bold">
+                  Biên tập viên (Editor)
+                </option>
+                <option value="guest" className="bg-slate-800 text-emerald-400 font-bold">
+                  Khách (Guest)
+                </option>
+              </select>
+            </div>
 
-        <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold uppercase shadow-sm">
-          {currentRole === 'admin' ? 'AD' : currentRole === 'editor' ? 'ED' : 'GU'}
-        </div>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold uppercase shadow-sm">
+              {currentRole === 'admin' ? 'AD' : currentRole === 'editor' ? 'ED' : 'GU'}
+            </div>
+          </>
+        ) : (
+          <div className="flex items-center gap-1.5 bg-slate-800/90 px-2 py-1 rounded-md border border-slate-700 text-[10px] font-bold text-emerald-400 shadow-xs">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>Khách</span>
+          </div>
+        )}
       </div>
     </header>
   );
