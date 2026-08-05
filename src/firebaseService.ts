@@ -20,6 +20,45 @@ function optimizeCoordinates(coords: any): any {
   return coords;
 }
 
+export function isDemoFeatureId(id: string | number): boolean {
+  const s = String(id || '').toLowerCase();
+  return s.startsWith('demo_') || s.includes('demo_poly') || s.includes('demo_point');
+}
+
+// Helper to save features to LocalStorage cache
+function syncToLocalStorage(features: GeoJsonFeatureItem[]) {
+  try {
+    const existingRaw = localStorage.getItem('gis_local_map_features');
+    const existingList: GeoJsonFeatureItem[] = existingRaw ? JSON.parse(existingRaw) : [];
+    const featureMap = new Map<string, GeoJsonFeatureItem>();
+
+    existingList.forEach((f) => {
+      if (!isDemoFeatureId(f.id)) featureMap.set(String(f.id), f);
+    });
+    features.forEach((f) => {
+      if (!isDemoFeatureId(f.id)) featureMap.set(String(f.id), f);
+    });
+
+    const merged = Array.from(featureMap.values());
+    localStorage.setItem('gis_local_map_features', JSON.stringify(merged));
+  } catch (e) {
+    console.warn('Lỗi ghi LocalStorage cache:', e);
+  }
+}
+
+function getFromLocalStorage(): GeoJsonFeatureItem[] {
+  try {
+    const raw = localStorage.getItem('gis_local_map_features');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item) => !isDemoFeatureId(item.id));
+      }
+    }
+  } catch (e) {}
+  return [];
+}
+
 /**
  * Save / Update a batch of imported features into the shared Firestore database.
  * Automatically uses Layer Chunking for large datasets (>50 items or >500KB)
@@ -28,11 +67,14 @@ function optimizeCoordinates(coords: any): any {
 export async function saveImportedFeaturesToFirestore(
   features: GeoJsonFeatureItem[]
 ): Promise<{ success: boolean; count: number; error?: string }> {
-  try {
-    if (!features || features.length === 0) {
-      return { success: true, count: 0 };
-    }
+  if (!features || features.length === 0) {
+    return { success: true, count: 0 };
+  }
 
+  // 1. Always save to LocalStorage first to guarantee zero data loss
+  syncToLocalStorage(features);
+
+  try {
     // Optimize coordinates across all items
     const cleanedFeatures = features.map((feat) => ({
       ...feat,
@@ -100,18 +142,18 @@ export async function saveImportedFeaturesToFirestore(
 
     return { success: true, count: savedCount };
   } catch (err: any) {
-    console.error('Lỗi khi lưu dữ liệu lên Firestore:', err);
+    console.warn('Lưu ý CSDL Firestore (Đã lưu vào bộ nhớ máy):', err?.message || err);
 
     let userFriendlyError = err.message || 'Không thể kết nối đến CSDL Firestore.';
     if (err.code === 'resource-exhausted' || err.message?.includes('quota') || err.message?.includes('EXCEEDED')) {
-      userFriendlyError = 'Hạn ngạch Firebase đã đạt giới hạn gói miễn phí (Spark Plan). Bạn có thể nâng cấp gói Blaze trong Firebase Console.';
+      userFriendlyError = 'Hạn ngạch Firestore gói Spark đã đạt giới hạn. Dữ liệu đã được lưu an toàn vào bộ nhớ trình duyệt!';
     } else if (err.message?.includes('1,048,576') || err.message?.includes('size')) {
       userFriendlyError = 'File GeoJSON chứa đối tượng lớn hơn 1MB limit của Firestore.';
     }
 
     return {
       success: false,
-      count: 0,
+      count: features.length,
       error: userFriendlyError,
     };
   }
@@ -123,7 +165,19 @@ export async function saveImportedFeaturesToFirestore(
 export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureItem[]> {
   const itemsMap = new Map<string, GeoJsonFeatureItem>();
 
+  // Load from LocalStorage first
+  const localItems = getFromLocalStorage();
+  localItems.forEach((item) => {
+    if (!isDemoFeatureId(item.id)) itemsMap.set(String(item.id), item);
+  });
+
   try {
+    // Purge known demo items from Firestore
+    const demoIdsToDelete = ['demo_poly_1', 'demo_point_1', 'demo_point_2', 'demo_point_3'];
+    demoIdsToDelete.forEach((dId) => {
+      deleteDoc(doc(db, COLLECTION_NAME, dId)).catch(() => {});
+    });
+
     // 1. Load Layer Chunks (for large GeoJSON files)
     try {
       const chunksSnap = await getDocs(collection(db, CHUNKS_COLLECTION));
@@ -132,14 +186,16 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
         if (data && data.payloadJson) {
           try {
             const parsedList: GeoJsonFeatureItem[] = JSON.parse(data.payloadJson);
-            parsedList.forEach((item) => itemsMap.set(String(item.id), item));
+            parsedList.forEach((item) => {
+              if (!isDemoFeatureId(item.id)) itemsMap.set(String(item.id), item);
+            });
           } catch (e) {
             console.error('Lỗi parse chunk JSON:', e);
           }
         }
       });
     } catch (chunkErr) {
-      console.warn('Chưa có bộ sưu tập layer_chunks hoặc không tải được:', chunkErr);
+      console.warn('Không tải được layer_chunks (dùng LocalStorage cache):', chunkErr);
     }
 
     // 2. Load Individual feature documents
@@ -147,6 +203,12 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
       const querySnapshot = await getDocs(collection(db, COLLECTION_NAME));
       querySnapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        const featId = data.id || docSnap.id;
+        if (isDemoFeatureId(featId)) {
+          deleteDoc(doc(db, COLLECTION_NAME, docSnap.id)).catch(() => {});
+          return;
+        }
+
         let coords = data.coordinates;
         if (typeof coords === 'string') {
           try {
@@ -157,7 +219,7 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
         }
 
         const feat: GeoJsonFeatureItem = {
-          id: data.id || docSnap.id,
+          id: featId,
           layerId: data.layerId,
           name: data.name,
           code: data.code || undefined,
@@ -171,13 +233,15 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
         itemsMap.set(String(feat.id), feat);
       });
     } catch (individualErr) {
-      console.warn('Lỗi khi tải individual map_features:', individualErr);
+      console.warn('Không tải được individual map_features (dùng LocalStorage cache):', individualErr);
     }
 
-    return Array.from(itemsMap.values());
+    const allList = Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id));
+    syncToLocalStorage(allList);
+    return allList;
   } catch (err) {
-    console.warn('Lưu ý: Không thể tải dữ liệu từ CSDL dùng chung Firestore:', err);
-    return [];
+    console.warn('Không thể tải dữ liệu mới từ Firestore, sử dụng bộ nhớ đệm LocalStorage:', err);
+    return Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id));
   }
 }
 

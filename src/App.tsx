@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import L from 'leaflet';
 import { Header } from './components/Header';
 import { SearchFilterBar } from './components/SearchFilterBar';
@@ -6,18 +6,22 @@ import { MapComponent } from './components/Map';
 import { LeftSidebar } from './components/LeftSidebar';
 import { RightSidebar } from './components/RightSidebar';
 import { MapOverlay } from './components/MapOverlay';
+import { MapEditorToolbar } from './components/MapEditorToolbar';
+import { FeatureEditModal } from './components/FeatureEditModal';
+import { AttributePane } from './components/AttributePane';
 import { Footer } from './components/Footer';
 import { GeoJsonImportModal } from './components/GeoJsonImportModal';
 import { FieldAliasModal } from './components/FieldAliasModal';
-import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, GeoJsonFeatureItem, DuplicateStrategy } from './types';
+import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode } from './types';
 import {
   saveImportedFeaturesToFirestore,
   loadSharedFeaturesFromFirestore,
   loadFieldAliasDictionaryFromFirestore,
   loadLayerConfigsFromFirestore,
   saveLayerConfigsToFirestore,
+  isDemoFeatureId,
 } from './firebaseService';
-import { Upload, X, Check, ShieldAlert, FileText, Server, Database } from 'lucide-react';
+import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle } from 'lucide-react';
 
 export default function App() {
   const [currentRole, setCurrentRole] = useState<UserRole>('admin');
@@ -43,6 +47,15 @@ export default function App() {
   const [isFieldAliasModalOpen, setIsFieldAliasModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Map Editing (Phase 3) state
+  const [interactionMode, setInteractionMode] = useState<MapInteractionMode>('hand');
+  const [selectedFeature, setSelectedFeature] = useState<GeoJsonFeatureItem | null>(null);
+  const [activeDrawMode, setActiveDrawMode] = useState<DrawToolMode>('select');
+  const [editingFeature, setEditingFeature] = useState<Partial<GeoJsonFeatureItem> | null>(null);
+  const [isFeatureEditModalOpen, setIsFeatureEditModalOpen] = useState<boolean>(false);
+  const [drawingPointsCount, setDrawingPointsCount] = useState<number>(0);
+  const drawingVerticesRef = useRef<[number, number][]>([]);
 
   const handleAliasesUpdated = () => {
     setAliasVersion((prev) => prev + 1);
@@ -77,7 +90,7 @@ export default function App() {
   }, [mapInstance]);
 
   // Pane Visibility States (Responsive & Mobile-optimized - left sidebar visible by default on desktop)
-  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState<boolean>(true);
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState<boolean>(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState<boolean>(false);
 
   const toggleLeftSidebar = () => {
@@ -92,13 +105,38 @@ export default function App() {
 
   // Load shared features, field aliases, and layer configs from Firestore database on mount
   useEffect(() => {
+    // 0. Load local storage cache first so data is instantly available even offline or when quota exceeded
+    try {
+      const cached = localStorage.getItem('gis_local_map_features');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMapFeatures((prev) => {
+            const merged = prev.filter((f) => !isDemoFeatureId(f.id));
+            parsed.forEach((item: GeoJsonFeatureItem) => {
+              if (
+                !isDemoFeatureId(item.id) &&
+                !merged.some((m) => String(m.id).toLowerCase() === String(item.id).toLowerCase())
+              ) {
+                merged.push(item);
+              }
+            });
+            return merged;
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Lỗi đọc local cache:', e);
+    }
+
     async function initSharedDb() {
       // 1. Load shared map features
       const dbFeatures = await loadSharedFeaturesFromFirestore();
       if (dbFeatures && dbFeatures.length > 0) {
         setMapFeatures((prev) => {
-          const merged = [...prev];
+          const merged = prev.filter((f) => !isDemoFeatureId(f.id));
           dbFeatures.forEach((dbFeat) => {
+            if (isDemoFeatureId(dbFeat.id)) return;
             const idx = merged.findIndex((m) => String(m.id).toLowerCase() === String(dbFeat.id).toLowerCase());
             if (idx !== -1) {
               merged[idx] = dbFeat;
@@ -106,7 +144,12 @@ export default function App() {
               merged.push(dbFeat);
             }
           });
-          return merged;
+          const cleanList = merged.filter((f) => !isDemoFeatureId(f.id));
+          // Cache in local storage
+          try {
+            localStorage.setItem('gis_local_map_features', JSON.stringify(cleanList));
+          } catch (e) {}
+          return cleanList;
         });
       }
 
@@ -133,6 +176,33 @@ export default function App() {
     }
     initSharedDb();
   }, []);
+
+  // Sync state to local storage backup whenever mapFeatures changes
+  useEffect(() => {
+    if (mapFeatures.length > 0) {
+      try {
+        localStorage.setItem('gis_local_map_features', JSON.stringify(mapFeatures));
+      } catch (e) {
+        console.warn('Không thể ghi vào localStorage:', e);
+      }
+    }
+  }, [mapFeatures]);
+
+  // Backup of original feature geometry before editing
+  const originalSelectedFeatureRef = useRef<GeoJsonFeatureItem | null>(null);
+  const [pendingNextFeature, setPendingNextFeature] = useState<{ feat: GeoJsonFeatureItem | null } | null>(null);
+
+  const isUnsaved = useMemo(() => {
+    if (!selectedFeature || !originalSelectedFeatureRef.current) return false;
+    if (selectedFeature.id !== originalSelectedFeatureRef.current.id) return false;
+
+    const currentCoords = JSON.stringify(selectedFeature.coordinates);
+    const origCoords = JSON.stringify(originalSelectedFeatureRef.current.coordinates);
+    const currentProps = JSON.stringify(selectedFeature.properties);
+    const origProps = JSON.stringify(originalSelectedFeatureRef.current.properties);
+
+    return currentCoords !== origCoords || currentProps !== origProps;
+  }, [selectedFeature]);
   const handleImportConfirm = (
     targetLayerId: string,
     importedFeatures: GeoJsonFeatureItem[],
@@ -295,10 +365,6 @@ export default function App() {
     }
   };
 
-  const handleApproveDraft = (draftId: string) => {
-    showToast(`Đã phê duyệt thành công bản ghi draft: ${draftId}`);
-  };
-
   const handleLocateUser = () => {
     if (!navigator.geolocation) {
       showToast('Trình duyệt của bạn không hỗ trợ nhận diện vị trí GPS.');
@@ -384,6 +450,142 @@ export default function App() {
     );
   };
 
+  // Phase 3 Map Editing Handlers
+  const handleModeChange = (mode: DrawToolMode) => {
+    setActiveDrawMode(mode);
+    drawingVerticesRef.current = [];
+    setDrawingPointsCount(0);
+  };
+
+  const handleFinishDrawing = () => {
+    const vertices = drawingVerticesRef.current;
+    if (activeDrawMode === 'line' && vertices.length >= 2) {
+      setEditingFeature({
+        type: 'LineString',
+        coordinates: vertices,
+      });
+      setIsFeatureEditModalOpen(true);
+    } else if (activeDrawMode === 'polygon' && vertices.length >= 3) {
+      const polygonCoords = [...vertices];
+      if (
+        polygonCoords[0][0] !== polygonCoords[polygonCoords.length - 1][0] ||
+        polygonCoords[0][1] !== polygonCoords[polygonCoords.length - 1][1]
+      ) {
+        polygonCoords.push(polygonCoords[0]);
+      }
+      setEditingFeature({
+        type: 'Polygon',
+        coordinates: [polygonCoords],
+      });
+      setIsFeatureEditModalOpen(true);
+    }
+    setActiveDrawMode(null);
+    drawingVerticesRef.current = [];
+    setDrawingPointsCount(0);
+  };
+
+  const handleCancelDrawing = () => {
+    setActiveDrawMode(null);
+    drawingVerticesRef.current = [];
+    setDrawingPointsCount(0);
+  };
+
+  const handleFeatureCreate = (partialFeat: Partial<GeoJsonFeatureItem>) => {
+    setEditingFeature(partialFeat);
+    setIsFeatureEditModalOpen(true);
+    setActiveDrawMode(null);
+  };
+
+  const applyFeatureSelect = (feat: GeoJsonFeatureItem | null) => {
+    setSelectedFeature(feat);
+    if (feat) {
+      originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(feat));
+    } else {
+      originalSelectedFeatureRef.current = null;
+    }
+  };
+
+  const handleFeatureSelect = (feat: GeoJsonFeatureItem | null) => {
+    if (selectedFeature && isUnsaved) {
+      if (feat && feat.id === selectedFeature.id) return;
+      setPendingNextFeature({ feat });
+      return;
+    }
+    applyFeatureSelect(feat);
+  };
+
+  const handleFeatureGeometryUpdate = (featureId: string, newCoordinates: any) => {
+    // Quietly update local React state for real-time vertex dragging without toast or Firestore writes
+    setMapFeatures((prev) =>
+      prev.map((f) =>
+        f.id === featureId ? { ...f, coordinates: newCoordinates, updatedAt: new Date().toISOString() } : f
+      )
+    );
+    setSelectedFeature((prev) =>
+      prev && prev.id === featureId
+        ? { ...prev, coordinates: newCoordinates, updatedAt: new Date().toISOString() }
+        : prev
+    );
+  };
+
+  const handleSaveFeature = (featureToSave: GeoJsonFeatureItem, targetStatus: 'xac_dinh' | 'cho_phe_duyet') => {
+    const updatedFeat: GeoJsonFeatureItem = {
+      ...featureToSave,
+      status: targetStatus,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setMapFeatures((prev) => {
+      const idx = prev.findIndex((f) => f.id === updatedFeat.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = updatedFeat;
+        return copy;
+      } else {
+        return [...prev, updatedFeat];
+      }
+    });
+
+    originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(updatedFeat));
+    setSelectedFeature(updatedFeat);
+    saveImportedFeaturesToFirestore([updatedFeat]);
+
+    if (targetStatus === 'cho_phe_duyet') {
+      showToast('Đã lưu bản nháp và chuyển vào hàng chờ phê duyệt.');
+    } else {
+      showToast('Đã lưu thay đổi đối tượng và đồng bộ CSDL thành công!');
+    }
+  };
+
+  const handleDiscardSelection = () => {
+    if (selectedFeature && originalSelectedFeatureRef.current && originalSelectedFeatureRef.current.id === selectedFeature.id) {
+      const restored = originalSelectedFeatureRef.current;
+      setMapFeatures((prev) =>
+        prev.map((f) => (f.id === restored.id ? restored : f))
+      );
+      showToast('Đã khôi phục đối tượng về vị trí ban đầu.');
+    }
+    setSelectedFeature(null);
+    originalSelectedFeatureRef.current = null;
+  };
+
+  const handleDeleteFeature = (featureId: string) => {
+    setMapFeatures((prev) => prev.filter((f) => f.id !== featureId));
+    showToast('Đã xóa đối tượng khỏi hệ thống.');
+  };
+
+  const handleApproveDraft = (featureId: string) => {
+    setMapFeatures((prev) =>
+      prev.map((f) => (f.id === featureId ? { ...f, status: 'xac_dinh' as const } : f))
+    );
+    showToast('Đã phê duyệt bản ghi bản nháp thành công!');
+  };
+
+  const handleRejectDraft = (featureId: string) => {
+    setMapFeatures((prev) => prev.filter((f) => f.id !== featureId));
+    showToast('Đã từ chối và xóa bản nháp.');
+  };
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -445,14 +647,49 @@ export default function App() {
 
         {/* Center: Leaflet Map & Overlays */}
         <section className="flex-1 relative bg-slate-200 overflow-hidden flex flex-col">
+          {/* Phase 3 Map Editor Floating Toolbar */}
+          <MapEditorToolbar
+            currentRole={effectiveRole}
+            interactionMode={interactionMode}
+            onInteractionModeChange={(mode) => {
+              if (selectedFeature && isUnsaved) {
+                setPendingNextFeature({ feat: null });
+                return;
+              }
+              setInteractionMode(mode);
+              if (mode === 'hand') setSelectedFeature(null);
+            }}
+            activeDrawMode={activeDrawMode}
+            onDrawModeChange={handleModeChange}
+            selectedFeature={selectedFeature}
+            isUnsaved={isUnsaved}
+            onSaveSelection={() => {
+              if (selectedFeature) {
+                handleSaveFeature(selectedFeature, selectedFeature.status || 'xac_dinh');
+              }
+            }}
+            onDiscardSelection={handleDiscardSelection}
+            drawingPointsCount={drawingPointsCount}
+            onFinishDrawing={handleFinishDrawing}
+            onCancelDrawing={handleCancelDrawing}
+          />
+
           {/* Leaflet Map */}
           <MapComponent
             baseMap={baseMap}
             layers={layers}
             features={mapFeatures}
             aliasVersion={aliasVersion}
+            interactionMode={interactionMode}
+            selectedFeatureId={selectedFeature?.id || null}
+            activeDrawMode={activeDrawMode}
             onMapReady={(map) => setMapInstance(map)}
             onCursorMove={setCursorLocation}
+            onFeatureSelect={handleFeatureSelect}
+            onFeatureGeometryUpdate={handleFeatureGeometryUpdate}
+            onFeatureCreate={handleFeatureCreate}
+            onDrawingPointsChange={setDrawingPointsCount}
+            drawingVerticesRef={drawingVerticesRef}
           />
 
           {/* Map Overlay Controls (Top Right BaseMap Switcher & Zoom & GPS Locate) */}
@@ -466,12 +703,32 @@ export default function App() {
           />
         </section>
 
+        {/* Right Attribute Pane in Pointer Mode */}
+        {interactionMode === 'pointer' && selectedFeature && (
+          <AttributePane
+            feature={selectedFeature}
+            layers={layers}
+            currentRole={effectiveRole}
+            onSave={(updated, status) => {
+              handleSaveFeature(updated, status);
+            }}
+            onDelete={(id) => {
+              handleDeleteFeature(id);
+              setSelectedFeature(null);
+            }}
+            onClose={() => setSelectedFeature(null)}
+          />
+        )}
+
         {/* Right Sidebar: Approval Queue / Draft List (Admin Only) */}
         {effectiveRole === 'admin' && isRightSidebarOpen && (
           <div className="absolute md:relative inset-y-0 right-0 z-[2000] md:z-10 bg-white h-full shadow-2xl md:shadow-none transition-all">
             <RightSidebar
               currentRole={effectiveRole}
+              pendingFeatures={mapFeatures.filter((f) => f.status === 'cho_phe_duyet')}
               onApproveClick={handleApproveDraft}
+              onRejectClick={handleRejectDraft}
+              onViewFeature={handleFeatureSelect}
               onClose={() => {
                 setIsRightSidebarOpen(false);
                 setTimeout(() => mapInstance?.invalidateSize(), 200);
@@ -497,6 +754,22 @@ export default function App() {
         </div>
       )}
 
+      {/* Feature Attribute Editing Modal */}
+      {isFeatureEditModalOpen && (
+        <FeatureEditModal
+          isOpen={isFeatureEditModalOpen}
+          feature={editingFeature}
+          layers={layers}
+          currentRole={effectiveRole}
+          onSave={handleSaveFeature}
+          onDelete={handleDeleteFeature}
+          onClose={() => {
+            setIsFeatureEditModalOpen(false);
+            setEditingFeature(null);
+          }}
+        />
+      )}
+
       {/* GeoJSON Import Modal Component */}
       <GeoJsonImportModal
         isOpen={isImportModalOpen}
@@ -512,6 +785,54 @@ export default function App() {
         onClose={() => setIsFieldAliasModalOpen(false)}
         onAliasesUpdated={handleAliasesUpdated}
       />
+
+      {/* Unsaved Changes Confirmation Dialog Modal */}
+      {pendingNextFeature && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[9999] flex items-center justify-center p-4">
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 max-w-md w-full text-white shadow-2xl space-y-4">
+            <div className="flex items-center gap-2 text-amber-400 font-bold text-base">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <span>Thay đổi chưa được lưu</span>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Đối tượng <b className="text-white">{selectedFeature?.name || selectedFeature?.id}</b> có thay đổi hình học chưa được lưu lên CSDL. Bạn muốn xử lý như thế nào?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setPendingNextFeature(null)}
+                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold rounded-lg transition cursor-pointer"
+              >
+                Hủy bỏ (Tiếp tục sửa)
+              </button>
+              <button
+                onClick={() => {
+                  const next = pendingNextFeature.feat;
+                  handleDiscardSelection();
+                  applyFeatureSelect(next);
+                  setPendingNextFeature(null);
+                }}
+                className="px-3 py-1.5 bg-red-600/80 hover:bg-red-600 text-white text-xs font-semibold rounded-lg transition cursor-pointer"
+              >
+                Bỏ thay đổi (Discard)
+              </button>
+              <button
+                onClick={() => {
+                  const next = pendingNextFeature.feat;
+                  if (selectedFeature) {
+                    handleSaveFeature(selectedFeature, selectedFeature.status || 'xac_dinh');
+                  }
+                  applyFeatureSelect(next);
+                  setPendingNextFeature(null);
+                }}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition cursor-pointer flex items-center gap-1 shadow-sm"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Lưu thay đổi</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

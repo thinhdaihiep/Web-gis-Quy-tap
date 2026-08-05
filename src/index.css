@@ -90,3 +90,82 @@
 .leaflet-control {
   z-index: 500 !important;
 }
+
+/* Pointer & Hand Mode Cursor Overrides */
+
+/* Mode Hand (Popup Mode): Hovering over features shows hand pointer cursor (ngón trỏ) */
+.mode-hand .leaflet-interactive,
+.mode-hand .leaflet-marker-icon,
+.mode-hand .point-feature-marker {
+  cursor: pointer !important;
+}
+
+/* ========================================================
+   EDIT MODE (mode-pointer) STRICT CURSOR SPECIFICATION:
+   1. Outside map background: default cursor; when dragging map: grabbing.
+   2. Hovering over feature body: pointer cursor (ngón trỏ).
+   3. Hovering over vertex (or selected Point feature): grab cursor;
+      when dragging vertex or selected Point feature: grabbing cursor.
+   ======================================================== */
+
+/* 1. Map background default cursor */
+.mode-pointer .leaflet-container,
+.mode-pointer .leaflet-grab,
+.mode-pointer .leaflet-touch .leaflet-grab {
+  cursor: default !important;
+}
+
+/* Map background when dragging/panning the map */
+.mode-pointer.leaflet-dragging .leaflet-container,
+.mode-pointer .leaflet-dragging .leaflet-container,
+.mode-pointer.leaflet-drag-target,
+.mode-pointer.leaflet-drag-target .leaflet-container {
+  cursor: grabbing !important;
+}
+
+/* 2. Feature body (Polygon, Polyline, Point features) shows hand pointer cursor (ngón trỏ) */
+.mode-pointer .leaflet-interactive,
+.mode-pointer path.leaflet-interactive,
+.mode-pointer .point-feature-marker {
+  cursor: pointer !important;
+}
+
+/* 3. Vertex edit handles & Selected Point feature show GRAB cursor on hover */
+.mode-pointer .marker-icon,
+.mode-pointer .marker-icon-middle,
+.mode-pointer .leaflet-pm-draggable,
+.mode-pointer .leaflet-marker-draggable,
+.mode-pointer .point-feature-selected,
+.mode-pointer .marker-icon *,
+.mode-pointer .marker-icon-middle *,
+.mode-pointer .leaflet-pm-draggable *,
+.mode-pointer .leaflet-marker-draggable *,
+.mode-pointer .point-feature-selected *,
+.leaflet-marker-icon.leaflet-pm-draggable,
+.leaflet-marker-icon.leaflet-marker-draggable,
+.marker-icon.leaflet-pm-draggable,
+.marker-icon-middle.leaflet-pm-draggable {
+  cursor: grab !important;
+}
+
+/* 4. Vertex edit handles & Selected Point feature show GRABBING cursor when actively dragged */
+.mode-pointer .marker-icon:active,
+.mode-pointer .marker-icon-middle:active,
+.mode-pointer .leaflet-pm-draggable:active,
+.mode-pointer .leaflet-marker-draggable:active,
+.mode-pointer .point-feature-selected:active,
+.mode-pointer .marker-icon:active *,
+.mode-pointer .marker-icon-middle:active *,
+.mode-pointer .leaflet-pm-draggable:active *,
+.mode-pointer .leaflet-marker-draggable:active *,
+.mode-pointer .point-feature-selected:active *,
+.leaflet-marker-icon.leaflet-pm-draggable:active,
+.leaflet-marker-icon.leaflet-marker-draggable:active,
+.leaflet-marker-icon.leaflet-pm-draggable.leaflet-drag-target,
+.leaflet-marker-icon.leaflet-marker-draggable.leaflet-drag-target,
+.leaflet-pm-draggable.leaflet-drag-target,
+.marker-icon.leaflet-drag-target,
+.point-feature-selected.leaflet-drag-target {
+  cursor: grabbing !important;
+}
+

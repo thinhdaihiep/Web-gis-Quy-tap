@@ -54,6 +54,9 @@ export const DEFAULT_LAYERS: LayerConfig[] = [
   },
 ];
 
+export type MapInteractionMode = 'hand' | 'pointer';
+export type DrawToolMode = 'select' | 'point' | 'line' | 'polygon' | null;
+
 export interface GeoJsonFeatureItem {
   id: string;
   layerId: string;
@@ -64,6 +67,8 @@ export interface GeoJsonFeatureItem {
   properties: Record<string, any>;
   status?: 'xac_dinh' | 'chua_xac_dinh' | 'cho_phe_duyet';
   updatedAt?: string;
+  createdBy?: string;
+  editorNotes?: string;
 }
 
 export type DuplicateStrategy = 'overwrite' | 'skip' | 'append';
