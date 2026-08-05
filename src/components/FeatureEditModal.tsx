@@ -164,7 +164,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-100 leading-tight flex items-center gap-2">
-                <span>Bảng cập nhật Thuộc tính đối tượng (Attributes Table)</span>
+                <span>Bảng cập nhật Thuộc tính đối tượng</span>
               </h3>
               <p className="text-[11px] text-slate-400">
                 Hình học: <span className="font-bold text-amber-300">{feature.type}</span> | ID:{' '}
@@ -188,8 +188,8 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-800 text-slate-200 uppercase text-[10px] font-black tracking-wider">
-                  <th className="py-2.5 px-3 border-r border-slate-700 w-2/5">Tên trường (Field Name)</th>
-                  <th className="py-2.5 px-3">Giá trị (Value)</th>
+                  <th className="py-2.5 px-3 border-r border-slate-700 w-2/5">Tên trường</th>
+                  <th className="py-2.5 px-3">Giá trị</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 bg-white font-medium text-slate-800">
@@ -422,7 +422,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                 className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs cursor-pointer transition shadow-sm flex items-center gap-1.5"
               >
                 <Clock className="w-3.5 h-3.5" />
-                <span>Gửi phê duyệt (Nháp)</span>
+                <span>Gửi phê duyệt</span>
               </button>
             )}
 

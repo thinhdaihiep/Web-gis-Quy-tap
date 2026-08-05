@@ -1,5 +1,5 @@
-import React from 'react';
-import { Crosshair, MapPin } from 'lucide-react';
+import React, { useState } from 'react';
+import { Crosshair, MapPin, Copy, Check } from 'lucide-react';
 
 interface FooterProps {
   cursorLocation?: { lat: number; lng: number } | null;
@@ -14,6 +14,19 @@ export const Footer: React.FC<FooterProps> = ({
   zoomLevel,
   mapScale,
 }) => {
+  const [copied, setCopied] = useState<boolean>(false);
+
+  const activeLoc = cursorLocation || userLocation;
+
+  const handleCopyCoordinates = () => {
+    if (!activeLoc) return;
+    const coordString = `${activeLoc.lat.toFixed(6)}, ${activeLoc.lng.toFixed(6)}`;
+    navigator.clipboard.writeText(coordString).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
   return (
     <footer className="h-7 bg-slate-900 text-slate-200 border-t border-slate-800 flex items-center justify-between px-4 text-[11px] shrink-0 z-20 font-medium">
       {/* Left side: Coordinates */}
@@ -46,6 +59,25 @@ export const Footer: React.FC<FooterProps> = ({
           <span className="text-[9px] font-mono text-slate-300 bg-slate-700 px-1 rounded ml-0.5">
             WGS 84
           </span>
+
+          {/* Copy Coordinates Button */}
+          {activeLoc && (
+            <button
+              type="button"
+              onClick={handleCopyCoordinates}
+              className="ml-1 p-0.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition cursor-pointer flex items-center gap-0.5"
+              title="Sao chép tọa độ (Lat, Lng) vào Clipboard"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-400" />
+                  <span className="text-[9px] text-emerald-400 font-bold px-0.5">Đã chép</span>
+                </>
+              ) : (
+                <Copy className="w-3 h-3" />
+              )}
+            </button>
+          )}
         </div>
       </div>
 

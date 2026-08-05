@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Upload, X, ShieldAlert, FileText, Sparkles, CheckCircle2, AlertTriangle, Layers, ArrowRight, RefreshCw, Eye } from 'lucide-react';
 import proj4 from 'proj4';
 import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy } from '../types';
+import { extractObjectId } from '../fieldAlias';
 
 proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
 proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
@@ -86,12 +87,21 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
 
   // Utility to check if a feature is duplicate in current existingFeatures
   const checkIsDuplicate = (feature: GeoJsonFeatureItem): boolean => {
+    const featObjId = extractObjectId(feature);
+
     return existingFeatures.some((existing) => {
       if (existing.layerId !== selectedLayerId) return false;
+
+      // Primary check: OBJECTID match
+      const existObjId = extractObjectId(existing);
+      if (featObjId && existObjId && featObjId.toLowerCase() === existObjId.toLowerCase()) {
+        return true;
+      }
+
+      // Fallback check: ID or Code match
       const matchId = existing.id && feature.id && String(existing.id).toLowerCase() === String(feature.id).toLowerCase();
       const matchCode = existing.code && feature.code && String(existing.code).toLowerCase() === String(feature.code).toLowerCase();
-      const matchName = existing.name && feature.name && String(existing.name).toLowerCase() === String(feature.name).toLowerCase();
-      return Boolean(matchId || matchCode || matchName);
+      return Boolean(matchId || matchCode);
     });
   };
 
@@ -149,7 +159,7 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
           2: 'Đã quy tập nhưng chưa xong',
           3: 'Chưa tổ chức tìm kiếm',
           4: 'Đã tìm kiếm nhưng chưa có kết quả',
-          5: 'Chưa tìm kiếm quy tập',
+          5: 'Tìm kiếm, quy tập không rõ thông tin',
         };
         if (props.PhanLoai && phanLoaiMap[props.PhanLoai]) {
           props.TrangThaiMoi = phanLoaiMap[props.PhanLoai];
@@ -263,12 +273,10 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
             type: 'Feature',
             id: 'TD-001', // Duplicate ID to test overwrite
             properties: {
-              name: 'Trận đánh Cao điểm 1489 - Cập nhật bản đồ chiến lệ mới',
+              Ten: 'Trận đánh Cao điểm 1489 (Bản đồ quân sự mới)',
               code: 'TD-001',
-              ten_tran_danh: 'Trận đánh Cao điểm 1489 (Bản đồ quân sự mới)',
-              thoi_gian: 'Tháng 5/1972',
-              don_vi_tham_gia: 'Trung đoàn 1 & Sư đoàn 304',
-              trang_thai: 'xac_dinh',
+              ThoiGian: 'Tháng 5/1972',
+              DonVi: 'Trung đoàn 1 & Sư đoàn 304',
             },
             geometry: {
               type: 'Polygon',
@@ -287,12 +295,10 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
             type: 'Feature',
             id: 'TD-002',
             properties: {
-              name: 'Trận phục kích Thung lũng An Lao',
+              Ten: 'Trận phục kích Thung lũng An Lao',
               code: 'TD-002',
-              ten_tran_danh: 'Trận phục kích Thung lũng An Lao',
-              thoi_gian: '1965',
-              don_vi_tham_gia: 'Sư đoàn 3 Sao Vàng',
-              trang_thai: 'xac_dinh',
+              ThoiGian: '1965',
+              DonVi: 'Sư đoàn 3 Sao Vàng',
             },
             geometry: {
               type: 'Polygon',
@@ -665,7 +671,7 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
                     />
                     <div>
                       <span className="font-bold text-slate-800 text-xs">
-                        1. Ghi đè & Cập nhật (Overwrite & Update)
+                        1. Ghi đè & Cập nhật
                       </span>
                       <p className="text-[11px] text-slate-500 leading-snug">
                         Cập nhật lại tọa độ và thuộc tính mới nhất cho các đối tượng đã trùng trong lớp ({targetLayer.name}).
@@ -684,7 +690,7 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
                     />
                     <div>
                       <span className="font-bold text-slate-800 text-xs">
-                        2. Bỏ qua các đối tượng trùng (Skip Duplicates)
+                        2. Bỏ qua các đối tượng trùng
                       </span>
                       <p className="text-[11px] text-slate-500 leading-snug">
                         Giữ nguyên dữ liệu hiện có trên hệ thống, chỉ import thêm các đối tượng mới hoàn toàn.
@@ -703,7 +709,7 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
                     />
                     <div>
                       <span className="font-bold text-slate-800 text-xs">
-                        3. Nhập tất cả & Tạo mã bản sao (Append All)
+                        3. Nhập tất cả & Tạo mã bản sao
                       </span>
                       <p className="text-[11px] text-slate-500 leading-snug">
                         Tự động sinh ID mới cho các bản ghi trùng để lưu độc lập cả hai bản.

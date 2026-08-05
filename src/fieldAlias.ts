@@ -74,31 +74,31 @@ export const DEFAULT_FIELD_ALIASES: Record<string, string> = {
   MaSo: 'Mã số',
   ma_so: 'Mã số',
 
-  // Xã (phường)
-  xa: 'Xã (phường)',
-  Xa: 'Xã (phường)',
-  xaphuong: 'Xã (phường)',
-  XaPhuong: 'Xã (phường)',
-  xa_phuong: 'Xã (phường)',
-  phuong: 'Xã (phường)',
-  Phuong: 'Xã (phường)',
-  phuong_xa: 'Xã (phường)',
+  // Xã phường
+  xa: 'Xã phường',
+  Xa: 'Xã phường',
+  xaphuong: 'Xã phường',
+  XaPhuong: 'Xã phường',
+  xa_phuong: 'Xã phường',
+  phuong: 'Xã phường',
+  Phuong: 'Xã phường',
+  phuong_xa: 'Xã phường',
 
-  // Tỉnh (TP)
-  tinh: 'Tỉnh (TP)',
-  Tinh: 'Tỉnh (TP)',
-  tinhtp: 'Tỉnh (TP)',
-  TinhTP: 'Tỉnh (TP)',
-  tinh_tp: 'Tỉnh (TP)',
-  TINH_TP: 'Tỉnh (TP)',
-  tinh_thanh: 'Tỉnh (TP)',
+  // Tỉnh thành
+  tinh: 'Tỉnh thành',
+  Tinh: 'Tỉnh thành',
+  tinhtp: 'Tỉnh thành',
+  TinhTP: 'Tỉnh thành',
+  tinh_tp: 'Tỉnh thành',
+  TINH_TP: 'Tỉnh thành',
+  tinh_thanh: 'Tỉnh thành',
 
-  // Huyện / Quận
-  huyen: 'Huyện (quận)',
-  Huyen: 'Huyện (quận)',
-  quanhuyen: 'Huyện (quận)',
-  QuanHuyen: 'Huyện (quận)',
-  quan_huyen: 'Huyện (quận)',
+  // Huyện quận
+  huyen: 'Huyện quận',
+  Huyen: 'Huyện quận',
+  quanhuyen: 'Huyện quận',
+  QuanHuyen: 'Huyện quận',
+  quan_huyen: 'Huyện quận',
 
   // Tọa độ
   toado: 'Tọa độ',
@@ -177,18 +177,23 @@ export function getFieldAlias(key: string, customMap?: Record<string, string>): 
 
   const activeCustom = customMap || getCustomAliasMap();
 
-  // 1. Direct match in custom user dictionary
-  if (activeCustom[key]) return activeCustom[key];
+  // 0. Explicit deletion check in custom map
+  if (activeCustom[key] === '__DELETED__') return null;
 
-  // 2. Direct match in default dictionary
-  if (DEFAULT_FIELD_ALIASES[key]) return DEFAULT_FIELD_ALIASES[key];
+  // 1. Direct match in custom user dictionary
+  if (activeCustom[key] && activeCustom[key] !== '__DELETED__') return activeCustom[key];
 
   const lower = key.toLowerCase();
   const cleanKey = lower.replace(/[^a-z0-9]/g, '');
 
+  if (activeCustom[lower] === '__DELETED__' || activeCustom[cleanKey] === '__DELETED__') return null;
+
+  // 2. Direct match in default dictionary if not deleted
+  if (DEFAULT_FIELD_ALIASES[key]) return DEFAULT_FIELD_ALIASES[key];
+
   // 3. Lowercase / clean match in custom dictionary
-  if (activeCustom[lower]) return activeCustom[lower];
-  if (activeCustom[cleanKey]) return activeCustom[cleanKey];
+  if (activeCustom[lower] && activeCustom[lower] !== '__DELETED__') return activeCustom[lower];
+  if (activeCustom[cleanKey] && activeCustom[cleanKey] !== '__DELETED__') return activeCustom[cleanKey];
 
   // 4. Lowercase / clean match in default dictionary
   if (DEFAULT_FIELD_ALIASES[lower]) return DEFAULT_FIELD_ALIASES[lower];
@@ -196,6 +201,7 @@ export function getFieldAlias(key: string, customMap?: Record<string, string>): 
 
   // 5. Deep case-insensitive & clean-key match in custom dictionary
   for (const [cKey, cAlias] of Object.entries(activeCustom)) {
+    if (cAlias === '__DELETED__') continue;
     const cLower = cKey.toLowerCase();
     const cClean = cLower.replace(/[^a-z0-9]/g, '');
     if (cLower === lower || (cClean && cClean === cleanKey)) {
@@ -208,6 +214,13 @@ export function getFieldAlias(key: string, customMap?: Record<string, string>): 
     const dLower = dKey.toLowerCase();
     const dClean = dLower.replace(/[^a-z0-9]/g, '');
     if (dLower === lower || (dClean && dClean === cleanKey)) {
+      if (
+        activeCustom[dKey] === '__DELETED__' ||
+        activeCustom[dLower] === '__DELETED__' ||
+        activeCustom[dClean] === '__DELETED__'
+      ) {
+        return null;
+      }
       return dAlias;
     }
   }
@@ -220,13 +233,32 @@ export function getFieldAlias(key: string, customMap?: Record<string, string>): 
  */
 export function getAllAliasRules(customMap?: Record<string, string>): FieldAliasRule[] {
   const activeCustom = customMap || getCustomAliasMap();
-  const merged: Record<string, string> = { ...DEFAULT_FIELD_ALIASES, ...activeCustom };
 
   const rules: FieldAliasRule[] = [];
   const seenAliases = new Set<string>();
 
-  Object.entries(merged).forEach(([key, alias]) => {
-    // Avoid cluttering UI table with redundant lowercase duplicates
+  // 1. Process defaults first (skipping any deleted by user)
+  Object.entries(DEFAULT_FIELD_ALIASES).forEach(([key, alias]) => {
+    if (
+      activeCustom[key] === '__DELETED__' ||
+      activeCustom[key.toLowerCase()] === '__DELETED__'
+    ) {
+      return;
+    }
+    // If custom map defines a non-deleted alias for this key, custom map entry will handle it
+    if (activeCustom[key] && activeCustom[key] !== '__DELETED__') {
+      return;
+    }
+    const uniqueId = `${key.toLowerCase()}_${alias}`;
+    if (!seenAliases.has(uniqueId)) {
+      seenAliases.add(uniqueId);
+      rules.push({ key, alias });
+    }
+  });
+
+  // 2. Process custom entries
+  Object.entries(activeCustom).forEach(([key, alias]) => {
+    if (!alias || alias === '__DELETED__') return;
     const uniqueId = `${key.toLowerCase()}_${alias}`;
     if (!seenAliases.has(uniqueId)) {
       seenAliases.add(uniqueId);
@@ -236,3 +268,74 @@ export function getAllAliasRules(customMap?: Record<string, string>): FieldAlias
 
   return rules;
 }
+
+/**
+ * Utility to extract OBJECTID value from a feature item or properties dictionary.
+ */
+export function extractObjectId(feature: any): string | null {
+  if (!feature) return null;
+  const props = feature.properties || feature;
+  const val =
+    props.OBJECTID ??
+    props.objectid ??
+    props.ObjectId ??
+    props.objectId ??
+    props.OBJECT_ID ??
+    props.Object_Id ??
+    props.code ??
+    feature.code;
+
+  if (val !== undefined && val !== null && String(val).trim() !== '') {
+    return String(val).trim();
+  }
+  return null;
+}
+
+/**
+ * Utility to compute a unique key for a map feature based on layerId + OBJECTID or id.
+ */
+export function getItemUniqueKey(feat: any): string {
+  if (!feat) return 'default_unknown';
+  const layerId = feat.layerId || 'default';
+  const objId = extractObjectId(feat);
+  if (objId) {
+    return `${layerId}_objid_${objId.toLowerCase()}`;
+  }
+  return `${layerId}_id_${String(feat.id || '').toLowerCase()}`;
+}
+
+/**
+ * Utility to deduplicate a list of GeoJsonFeatureItems by layerId + OBJECTID or id.
+ * Prefers keeping the feature with the newer updatedAt date (or last in list if equal).
+ */
+export function deduplicateFeaturesList<T extends { id?: string | number; layerId?: string; updatedAt?: string; properties?: any; code?: string }>(
+  features: T[]
+): T[] {
+  if (!features || features.length <= 1) return features || [];
+
+  const map = new Map<string, T>();
+
+  features.forEach((feat) => {
+    const objId = extractObjectId(feat);
+    const layerId = feat.layerId || 'default';
+    const key = objId
+      ? `${layerId}_objid_${objId.toLowerCase()}`
+      : `${layerId}_id_${String(feat.id || '').toLowerCase()}`;
+
+    if (!map.has(key)) {
+      map.set(key, feat);
+    } else {
+      const existing = map.get(key)!;
+      const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+      const featTime = feat.updatedAt ? new Date(feat.updatedAt).getTime() : 0;
+
+      // Keep newer item (or if equal timestamp, keep feat)
+      if (featTime >= existingTime) {
+        map.set(key, feat);
+      }
+    }
+  });
+
+  return Array.from(map.values());
+}
+

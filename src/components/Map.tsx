@@ -36,43 +36,39 @@ interface MapProps {
 
 function getFeatureName(feat: GeoJsonFeatureItem): { name: string; hiddenKey: string | null } {
   const props = feat.properties || {};
-  let name = feat.name || '';
-  let hiddenKey: string | null = null;
 
+  // 1. Highest Priority: Exact property field [Ten] from database
+  if (props['Ten'] !== undefined && props['Ten'] !== null && String(props['Ten']).trim() !== '') {
+    return { name: String(props['Ten']).trim(), hiddenKey: 'Ten' };
+  }
+
+  // 2. Feature object name if non-generic
+  if (feat.name && !['Feature', 'Polygon', 'Point', 'LineString', 'MultiPolygon', 'MultiLineString'].includes(feat.name.trim())) {
+    return { name: feat.name.trim(), hiddenKey: null };
+  }
+
+  // 3. Exact property field [ten] if imported with lowercase key
+  if (props['ten'] !== undefined && props['ten'] !== null && String(props['ten']).trim() !== '') {
+    return { name: String(props['ten']).trim(), hiddenKey: 'ten' };
+  }
+
+  // 4. Exact property field [TEN] if imported with uppercase key
+  if (props['TEN'] !== undefined && props['TEN'] !== null && String(props['TEN']).trim() !== '') {
+    return { name: String(props['TEN']).trim(), hiddenKey: 'TEN' };
+  }
+
+  // 5. Check other property keys mapped to alias 'Tên' or 'name'/'Name'
   for (const k of Object.keys(props)) {
-    const lowerKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const alias = getFieldAlias(k);
-    if (
-      alias === 'Tên' ||
-      lowerKey === 'ten' ||
-      lowerKey === 'name' ||
-      lowerKey.includes('tenxa') ||
-      lowerKey.includes('tentinh') ||
-      lowerKey.includes('tenhuyen')
-    ) {
-      const val = props[k];
-      if (val !== null && val !== undefined && String(val).trim() !== '') {
-        name = String(val);
-        hiddenKey = k;
-        break;
+    const val = props[k];
+    if (val !== null && val !== undefined && String(val).trim() !== '') {
+      const alias = getFieldAlias(k);
+      if (alias === 'Tên' || k === 'name' || k === 'Name') {
+        return { name: String(val).trim(), hiddenKey: k };
       }
     }
   }
 
-  if (!name || name === 'Feature' || name === 'Polygon' || name === 'Point' || name === 'LineString') {
-    for (const k of Object.keys(props)) {
-      if (k.toLowerCase().includes('ten')) {
-        const val = props[k];
-        if (val !== null && val !== undefined && String(val).trim() !== '') {
-          name = String(val);
-          hiddenKey = k;
-          break;
-        }
-      }
-    }
-  }
-
-  return { name: name || 'Đối tượng GIS', hiddenKey };
+  return { name: feat.name || 'Đối tượng GIS', hiddenKey: null };
 }
 
 function renderPopupProperties(
@@ -292,6 +288,21 @@ export const MapComponent: React.FC<MapProps> = ({
 
       mapInstanceRef.current = map;
 
+      const updateLabelVisibility = () => {
+        if (!map) return;
+        const container = map.getContainer();
+        if (container) {
+          if (map.getZoom() > 10) {
+            container.classList.add('show-battle-labels');
+          } else {
+            container.classList.remove('show-battle-labels');
+          }
+        }
+      };
+
+      map.on('zoomend', updateLabelVisibility);
+      updateLabelVisibility();
+
       // Handle map clicks for drawing and placement
       map.on('click', (e: L.LeafletMouseEvent) => {
         const lat = e.latlng.lat;
@@ -301,55 +312,10 @@ export const MapComponent: React.FC<MapProps> = ({
           onCursorMoveRef.current({ lat, lng });
         }
 
-        const mode = activeDrawModeRef.current;
-        const modeType = interactionModeRef.current;
-
-        if (modeType === 'pointer' && mode === 'point') {
-          if (onFeatureCreateRef.current) {
-            onFeatureCreateRef.current({
-              type: 'Point',
-              coordinates: [lng, lat],
-            });
-          }
-        } else if (modeType === 'pointer' && (mode === 'line' || mode === 'polygon')) {
-          const list = drawingVerticesRef ? drawingVerticesRef.current : localVerticesRef.current;
-          list.push([lng, lat]);
-          if (onDrawingPointsChangeRef.current) {
-            onDrawingPointsChangeRef.current(list.length);
-          }
-
-          if (tempDrawLayerRef.current) {
-            tempDrawLayerRef.current.clearLayers();
-            const latLngs = list.map(([vLng, vLat]) => L.latLng(vLat, vLng));
-
-            latLngs.forEach((ll) => {
-              L.circleMarker(ll, {
-                radius: 5,
-                fillColor: '#3b82f6',
-                fillOpacity: 1,
-                color: '#ffffff',
-                weight: 2,
-              }).addTo(tempDrawLayerRef.current!);
-            });
-
-            if (mode === 'line' && latLngs.length >= 2) {
-              L.polyline(latLngs, { color: '#2563eb', weight: 3, dashArray: '6, 6' }).addTo(
-                tempDrawLayerRef.current!
-              );
-            } else if (mode === 'polygon' && latLngs.length >= 3) {
-              L.polygon(latLngs, {
-                color: '#ef4444',
-                fillColor: '#ef4444',
-                fillOpacity: 0.35,
-                weight: 2.5,
-              }).addTo(tempDrawLayerRef.current!);
-            }
-          }
-        } else {
-          if (featureClickedRef.current) {
-            featureClickedRef.current = false;
-            return;
-          }
+        if (featureClickedRef.current) {
+          featureClickedRef.current = false;
+          return;
+        }
 
           if (e && e.originalEvent && e.originalEvent.target) {
             const target = e.originalEvent.target as HTMLElement;
@@ -383,7 +349,6 @@ export const MapComponent: React.FC<MapProps> = ({
             }
             clickMarkerRef.current.setLatLng(e.latlng);
           }
-        }
       });
 
       if (onMapReady) {
@@ -509,6 +474,33 @@ export const MapComponent: React.FC<MapProps> = ({
 
       const isSelected = selectedFeatureId === feat.id;
 
+      const isSearchAreaLayer =
+        feat.layerId === 'layer4_khu_vuc_quy_tap' ||
+        parentLayer?.id === 'layer4_khu_vuc_quy_tap' ||
+        parentLayer?.name?.toLowerCase().includes('tìm kiếm') ||
+        parentLayer?.name?.toLowerCase().includes('quy tập') ||
+        parentLayer?.name?.toLowerCase().includes('khu vực');
+
+      const isBattleLayer =
+        feat.layerId === 'layer2_tran_danh' ||
+        parentLayer?.id === 'layer2_tran_danh' ||
+        parentLayer?.name?.toLowerCase().includes('trận đánh') ||
+        parentLayer?.name?.toLowerCase().includes('tran danh');
+
+      const isGraveLayer =
+        feat.layerId === 'layer1_mo_liet_si' ||
+        parentLayer?.id === 'layer1_mo_liet_si' ||
+        parentLayer?.name?.toLowerCase().includes('mộ') ||
+        parentLayer?.name?.toLowerCase().includes('mo');
+
+      const isCemeteryLayer =
+        feat.layerId === 'layer3_nghia_trang' ||
+        parentLayer?.id === 'layer3_nghia_trang' ||
+        parentLayer?.name?.toLowerCase().includes('nghĩa trang') ||
+        parentLayer?.name?.toLowerCase().includes('nghia trang');
+
+      const shouldShowLabel = isBattleLayer;
+
       try {
         let pointCoords = feat.coordinates;
         if (typeof pointCoords === 'string') {
@@ -546,78 +538,93 @@ export const MapComponent: React.FC<MapProps> = ({
 
           let pointMarker: L.Marker | L.CircleMarker;
 
-          const isBattleLayer =
-            feat.layerId === 'layer2_tran_danh' ||
-            parentLayer?.id === 'layer2_tran_danh' ||
-            parentLayer?.name?.toLowerCase().includes('trận đánh');
-
-          const isGraveLayer =
-            feat.layerId === 'layer1_mo_liet_si' ||
-            parentLayer?.id === 'layer1_mo_liet_si' ||
-            parentLayer?.name?.toLowerCase().includes('mộ');
-
-          const isCemeteryLayer =
-            feat.layerId === 'layer3_nghia_trang' ||
-            parentLayer?.id === 'layer3_nghia_trang' ||
-            parentLayer?.name?.toLowerCase().includes('nghĩa trang');
-
           // Draggable point when selected in pointer mode
           const isDraggable = interactionMode === 'pointer' && isSelected;
 
-          if (isBattleLayer) {
-            const flameIcon = L.divIcon({
+          if (isSearchAreaLayer) {
+            const size = isSelected ? 30 : 24;
+            const searchIcon = L.divIcon({
               html: `
-                <div style="width: ${isSelected ? 28 : 22}px; height: ${
-                isSelected ? 28 : 22
-              }px; background-color: #ffffff; border: ${
-                isSelected ? '3px solid #2563eb' : '2px solid #ef4444'
-              }; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="#ef4444" stroke="#dc2626" stroke-width="0.5">
-                    <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
+                <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+                  <polygon points="12 1.5 21.5 7 21.5 17 12 22.5 2.5 17 2.5 7" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#f59e0b'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+                  <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 3l4 4" />
+                    <path d="M19 5l-8 8" />
+                    <path d="M13 11l-2-2" />
+                    <path d="M10 12l-6 6a3 3 0 0 0 0 4.24l.76.76a3 3 0 0 0 4.24 0l6-6" />
+                    <path d="M12 10l2 2" />
                   </svg>
-                </div>
+                </svg>
               `,
               className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-              iconSize: [isSelected ? 28 : 22, isSelected ? 28 : 22],
-              iconAnchor: [isSelected ? 14 : 11, isSelected ? 14 : 11],
+              iconSize: [size, size],
+              iconAnchor: [size / 2, size / 2],
               popupAnchor: [0, -10],
             });
-            pointMarker = L.marker(markerLatLng, { icon: flameIcon, draggable: isDraggable });
-          } else if (isGraveLayer) {
-            const graveIcon = L.divIcon({
+            pointMarker = L.marker(markerLatLng, { icon: searchIcon, draggable: isDraggable });
+          } else if (isBattleLayer) {
+            const size = isSelected ? 30 : 24;
+            const battleIcon = L.divIcon({
               html: `
-                <div style="width: ${isSelected ? 28 : 22}px; height: ${
-                isSelected ? 28 : 22
-              }px; background-color: #ffffff; border: ${
-                isSelected ? '3px solid #2563eb' : '2px solid #16a34a'
-              }; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="#16a34a">
-                    <path d="M12 3c-3.86 0-7 3.14-7 7v9h14v-9c0-3.86-3.14-7-7-7zm-1 3.5h2v2.5h2.5v2H13V15h-2v-4H8.5v-2H11V6.5z"/>
+                <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+                  <circle cx="12" cy="12" r="10.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#dc2626'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+                  <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5" />
+                    <line x1="13" x2="19" y1="19" y2="13" />
+                    <line x1="16" x2="20" y1="16" y2="20" />
+                    <line x1="19" x2="21" y1="21" y2="19" />
+                    <polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5" />
+                    <line x1="5" x2="9" y1="14" y2="18" />
+                    <line x1="7" x2="4" y1="17" y2="20" />
+                    <line x1="3" x2="5" y1="19" y2="21" />
                   </svg>
-                </div>
+                </svg>
               `,
               className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-              iconSize: [isSelected ? 28 : 22, isSelected ? 28 : 22],
-              iconAnchor: [isSelected ? 14 : 11, isSelected ? 14 : 11],
+              iconSize: [size, size],
+              iconAnchor: [size / 2, size / 2],
+              popupAnchor: [0, -10],
+            });
+            pointMarker = L.marker(markerLatLng, { icon: battleIcon, draggable: isDraggable });
+          } else if (isGraveLayer) {
+            const size = isSelected ? 30 : 24;
+            const graveIcon = L.divIcon({
+              html: `
+                <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+                  <polygon points="12 1.5 22.5 21.5 1.5 21.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#16a34a'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+                  <svg x="5" y="7.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 20h20" />
+                    <path d="M4 20c0-4.5 3.58-8 8-8s8 3.5 8 8" />
+                    <path d="M9 12V6a3 3 0 0 1 6 0v6" />
+                    <path d="M12 7.5v3" />
+                    <path d="M10.5 9h3" />
+                  </svg>
+                </svg>
+              `,
+              className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
+              iconSize: [size, size],
+              iconAnchor: [size / 2, size / 2],
               popupAnchor: [0, -10],
             });
             pointMarker = L.marker(markerLatLng, { icon: graveIcon, draggable: isDraggable });
           } else if (isCemeteryLayer) {
+            const size = isSelected ? 30 : 24;
             const cemeteryIcon = L.divIcon({
               html: `
-                <div style="width: ${isSelected ? 28 : 22}px; height: ${
-                isSelected ? 28 : 22
-              }px; background-color: #ffffff; border: ${
-                isSelected ? '3px solid #2563eb' : '2px solid #9333ea'
-              }; border-radius: 4px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="#9333ea">
-                    <path d="M4 20h16v2H4v-2zm2-2h12V10c0-3.31-2.69-6-6-6s-6 2.69-6 6v8zm5-11h2v2.5h2.5v2H13V15h-2v-3.5H8.5v-2H11V7z"/>
+                <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+                  <rect x="1.5" y="1.5" width="21" height="21" rx="3" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#9333ea'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+                  <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9333ea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 21h18" />
+                    <path d="M5 21v-2h14v2" />
+                    <path d="M7 19v-2h10v2" />
+                    <path d="M9 17l1.5-12h3L15 17" />
+                    <polygon points="12 2 12.8 3.8 14.8 3.8 13.2 5 13.8 6.8 12 5.6 10.2 6.8 10.8 5 9.2 3.8 11.2 3.8" fill="#9333ea" stroke="none" />
                   </svg>
-                </div>
+                </svg>
               `,
               className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-              iconSize: [isSelected ? 28 : 22, isSelected ? 28 : 22],
-              iconAnchor: [isSelected ? 14 : 11, isSelected ? 14 : 11],
+              iconSize: [size, size],
+              iconAnchor: [size / 2, size / 2],
               popupAnchor: [0, -10],
             });
             pointMarker = L.marker(markerLatLng, { icon: cemeteryIcon, draggable: isDraggable });
@@ -657,7 +664,7 @@ export const MapComponent: React.FC<MapProps> = ({
             pointMarker.unbindPopup();
           }
 
-          if ((isBattleLayer || isGraveLayer || isCemeteryLayer) && titleName) {
+          if (shouldShowLabel && titleName) {
             pointMarker.bindTooltip(titleName, {
               permanent: true,
               direction: 'bottom',
@@ -750,6 +757,14 @@ export const MapComponent: React.FC<MapProps> = ({
             polygon.unbindPopup();
           }
 
+          if (shouldShowLabel && titleName) {
+            polygon.bindTooltip(titleName, {
+              permanent: true,
+              direction: 'center',
+              className: 'battle-map-label',
+            });
+          }
+
           polygon.on('click', (e: any) => {
             featureClickedRef.current = true;
             if (e && e.originalEvent) {
@@ -825,6 +840,14 @@ export const MapComponent: React.FC<MapProps> = ({
             polyline.unbindPopup();
           }
 
+          if (shouldShowLabel && titleName) {
+            polyline.bindTooltip(titleName, {
+              permanent: true,
+              direction: 'center',
+              className: 'battle-map-label',
+            });
+          }
+
           polyline.on('click', (e: any) => {
             featureClickedRef.current = true;
             if (e && e.originalEvent) {
@@ -889,6 +912,17 @@ export const MapComponent: React.FC<MapProps> = ({
     }
 
     prevFeaturesCountRef.current = features.length;
+
+    if (map) {
+      const container = map.getContainer();
+      if (container) {
+        if (map.getZoom() > 10) {
+          container.classList.add('show-battle-labels');
+        } else {
+          container.classList.remove('show-battle-labels');
+        }
+      }
+    }
   }, [layers, features, aliasVersion, interactionMode, selectedFeatureId]);
 
   return (

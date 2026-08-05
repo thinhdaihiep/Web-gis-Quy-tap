@@ -1,49 +1,42 @@
 import React from 'react';
-import { DrawToolMode, UserRole, GeoJsonFeatureItem, MapInteractionMode } from '../types';
+import { UserRole, GeoJsonFeatureItem, MapInteractionMode } from '../types';
 import {
   MousePointer,
   Hand,
-  MapPin,
-  Spline,
-  Hexagon,
+  Swords,
   Check,
   RotateCcw,
-  X,
-  Save,
 } from 'lucide-react';
+import { ShovelIcon, GraveIcon, MonumentIcon, IconWithPlus } from './GisIcons';
 
 interface MapEditorToolbarProps {
   currentRole: UserRole;
   interactionMode: MapInteractionMode;
   onInteractionModeChange: (mode: MapInteractionMode) => void;
-  activeDrawMode: DrawToolMode;
-  onDrawModeChange: (mode: DrawToolMode) => void;
   selectedFeature: GeoJsonFeatureItem | null;
   isUnsaved?: boolean;
   onSaveSelection?: () => void;
   onDiscardSelection?: () => void;
-  drawingPointsCount?: number;
-  onFinishDrawing?: () => void;
-  onCancelDrawing?: () => void;
+  onAddSearchArea?: () => void;
+  onAddBattle?: () => void;
+  onAddGrave?: () => void;
+  onAddCemetery?: () => void;
 }
 
 export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
   currentRole,
   interactionMode,
   onInteractionModeChange,
-  activeDrawMode,
-  onDrawModeChange,
   selectedFeature,
   isUnsaved = false,
   onSaveSelection,
   onDiscardSelection,
-  drawingPointsCount = 0,
-  onFinishDrawing,
-  onCancelDrawing,
+  onAddSearchArea,
+  onAddBattle,
+  onAddGrave,
+  onAddCemetery,
 }) => {
   if (currentRole === 'guest') return null;
-
-  const isDrawingActive = activeDrawMode === 'line' || activeDrawMode === 'polygon';
 
   return (
     <div className="absolute top-4 left-4 z-[1400] flex items-center gap-1.5 pointer-events-auto">
@@ -51,9 +44,9 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
       <div className="bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-slate-200/90 flex items-center gap-1 text-slate-800">
         {/* Mode 1: Kiểu Bàn Tay (Hand) */}
         <button
+          type="button"
           onClick={() => {
             onInteractionModeChange('hand');
-            onDrawModeChange(null);
           }}
           className={`p-2 rounded-xl transition cursor-pointer ${
             interactionMode === 'hand'
@@ -67,81 +60,90 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
 
         {/* Mode 2: Kiểu Con Trỏ (Pointer) */}
         <button
+          type="button"
           onClick={() => {
             onInteractionModeChange('pointer');
-            if (!activeDrawMode) onDrawModeChange('select');
           }}
           className={`p-2 rounded-xl transition cursor-pointer ${
             interactionMode === 'pointer'
               ? 'bg-blue-600 text-white shadow-xs'
               : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
-          title="Kiểu Con trỏ: Chọn đối tượng, chỉnh sửa đỉnh hình học (Geometry) & mở Bảng thuộc tính"
+          title="Kiểu Con trỏ: Chọn đối tượng, chỉnh sửa đỉnh hình học & mở Bảng thuộc tính"
         >
           <MousePointer className="w-4 h-4" />
         </button>
 
         <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
-        {/* Draw Tools */}
+        {/* 4 Nút Thêm Chuyên Dụng (Chỉ dùng biểu tượng, nội dung ở tooltip) */}
+
+        {/* 1. Thêm khu vực tìm kiếm & quy tập (Shovel + Plus) */}
         <button
+          type="button"
           onClick={() => {
-            onInteractionModeChange('pointer');
-            onDrawModeChange('point');
+            if (onAddSearchArea) onAddSearchArea();
           }}
-          className={`p-2 rounded-xl transition cursor-pointer ${
-            activeDrawMode === 'point'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
-          }`}
-          title="+ Tạo mới Điểm không gian"
+          className="p-2 rounded-xl text-slate-700 hover:bg-amber-50 hover:text-amber-700 transition cursor-pointer"
+          title="Thêm khu vực tìm kiếm & quy tập"
         >
-          <MapPin className="w-4 h-4" />
+          <IconWithPlus>
+            <ShovelIcon className="w-4 h-4 text-amber-700" />
+          </IconWithPlus>
         </button>
 
+        {/* 2. Thêm trận đánh (Swords + Plus) */}
         <button
+          type="button"
           onClick={() => {
-            onInteractionModeChange('pointer');
-            onDrawModeChange('line');
+            if (onAddBattle) onAddBattle();
           }}
-          className={`p-2 rounded-xl transition cursor-pointer ${
-            activeDrawMode === 'line'
-              ? 'bg-blue-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-blue-50 hover:text-blue-700'
-          }`}
-          title="+ Vẽ Tuyến đường không gian"
+          className="p-2 rounded-xl text-slate-700 hover:bg-red-50 hover:text-red-700 transition cursor-pointer"
+          title="Thêm trận đánh"
         >
-          <Spline className="w-4 h-4" />
+          <IconWithPlus>
+            <Swords className="w-4 h-4 text-red-600" />
+          </IconWithPlus>
         </button>
 
+        {/* 3. Thêm mộ liệt sĩ (Nấm mồ + Plus) */}
         <button
+          type="button"
           onClick={() => {
-            onInteractionModeChange('pointer');
-            onDrawModeChange('polygon');
+            if (onAddGrave) onAddGrave();
           }}
-          className={`p-2 rounded-xl transition cursor-pointer ${
-            activeDrawMode === 'polygon'
-              ? 'bg-red-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-red-50 hover:text-red-700'
-          }`}
-          title="+ Vẽ Vùng không gian"
+          className="p-2 rounded-xl text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition cursor-pointer"
+          title="Thêm mộ liệt sĩ"
         >
-          <Hexagon className="w-4 h-4" />
+          <IconWithPlus>
+            <GraveIcon className="w-4 h-4 text-emerald-600" />
+          </IconWithPlus>
         </button>
 
-        {/* Save & Discard Actions when drawing active OR selected feature has unsaved edits */}
-        {(isDrawingActive || (selectedFeature && isUnsaved)) && (
+        {/* 4. Thêm nghĩa trang (Tượng đài + Plus) */}
+        <button
+          type="button"
+          onClick={() => {
+            if (onAddCemetery) onAddCemetery();
+          }}
+          className="p-2 rounded-xl text-slate-700 hover:bg-purple-50 hover:text-purple-700 transition cursor-pointer"
+          title="Thêm nghĩa trang"
+        >
+          <IconWithPlus>
+            <MonumentIcon className="w-4 h-4 text-purple-600" />
+          </IconWithPlus>
+        </button>
+
+        {/* Save & Discard Actions when selected feature has unsaved edits */}
+        {selectedFeature && isUnsaved && (
           <>
             <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
             {/* Save Button */}
             <button
+              type="button"
               onClick={() => {
-                if (isDrawingActive && onFinishDrawing) {
-                  onFinishDrawing();
-                } else if (onSaveSelection) {
-                  onSaveSelection();
-                }
+                if (onSaveSelection) onSaveSelection();
               }}
               className="p-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition cursor-pointer flex items-center gap-1"
               title="Lưu thay đổi"
@@ -151,12 +153,9 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
 
             {/* Discard / Cancel Button */}
             <button
+              type="button"
               onClick={() => {
-                if (isDrawingActive && onCancelDrawing) {
-                  onCancelDrawing();
-                } else if (onDiscardSelection) {
-                  onDiscardSelection();
-                }
+                if (onDiscardSelection) onDiscardSelection();
               }}
               className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer flex items-center gap-1"
               title="Hủy thay đổi"
@@ -166,14 +165,7 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
           </>
         )}
       </div>
-
-      {/* Floating Vertex Count Pill during active line/polygon drawing */}
-      {isDrawingActive && (
-        <div className="bg-slate-900/90 text-white text-[11px] font-bold px-2.5 py-1.5 rounded-xl shadow-lg border border-slate-700 flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span>{drawingPointsCount} đỉnh</span>
-        </div>
-      )}
     </div>
   );
 };
+

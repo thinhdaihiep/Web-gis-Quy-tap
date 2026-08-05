@@ -12,6 +12,7 @@ import { AttributePane } from './components/AttributePane';
 import { Footer } from './components/Footer';
 import { GeoJsonImportModal } from './components/GeoJsonImportModal';
 import { FieldAliasModal } from './components/FieldAliasModal';
+import { SplashScreen } from './components/SplashScreen';
 import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode } from './types';
 import {
   saveImportedFeaturesToFirestore,
@@ -19,8 +20,10 @@ import {
   loadFieldAliasDictionaryFromFirestore,
   loadLayerConfigsFromFirestore,
   saveLayerConfigsToFirestore,
+  deleteFeatureFromFirestore,
   isDemoFeatureId,
 } from './firebaseService';
+import { extractObjectId, deduplicateFeaturesList } from './fieldAlias';
 import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle } from 'lucide-react';
 
 export default function App() {
@@ -103,6 +106,10 @@ export default function App() {
     setTimeout(() => mapInstance?.invalidateSize(), 200);
   };
 
+  // App initial loading splash state
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
+  const [splashStatusText, setSplashStatusText] = useState<string>('Nạp bộ nhớ đệm local...');
+
   // Load shared features, field aliases, and layer configs from Firestore database on mount
   useEffect(() => {
     // 0. Load local storage cache first so data is instantly available even offline or when quota exceeded
@@ -130,48 +137,60 @@ export default function App() {
     }
 
     async function initSharedDb() {
-      // 1. Load shared map features
-      const dbFeatures = await loadSharedFeaturesFromFirestore();
-      if (dbFeatures && dbFeatures.length > 0) {
-        setMapFeatures((prev) => {
-          const merged = prev.filter((f) => !isDemoFeatureId(f.id));
-          dbFeatures.forEach((dbFeat) => {
-            if (isDemoFeatureId(dbFeat.id)) return;
-            const idx = merged.findIndex((m) => String(m.id).toLowerCase() === String(dbFeat.id).toLowerCase());
-            if (idx !== -1) {
-              merged[idx] = dbFeat;
-            } else {
-              merged.push(dbFeat);
-            }
+      try {
+        setSplashStatusText('Đang kết nối CSDL Firestore & tải dữ liệu không gian...');
+        // 1. Load shared map features
+        const dbFeatures = await loadSharedFeaturesFromFirestore();
+        if (dbFeatures && dbFeatures.length > 0) {
+          setMapFeatures((prev) => {
+            const merged = prev.filter((f) => !isDemoFeatureId(f.id));
+            dbFeatures.forEach((dbFeat) => {
+              if (isDemoFeatureId(dbFeat.id)) return;
+              const idx = merged.findIndex((m) => String(m.id).toLowerCase() === String(dbFeat.id).toLowerCase());
+              if (idx !== -1) {
+                merged[idx] = dbFeat;
+              } else {
+                merged.push(dbFeat);
+              }
+            });
+            const cleanList = merged.filter((f) => !isDemoFeatureId(f.id));
+            try {
+              localStorage.setItem('gis_local_map_features', JSON.stringify(cleanList));
+            } catch (e) {}
+            return cleanList;
           });
-          const cleanList = merged.filter((f) => !isDemoFeatureId(f.id));
-          // Cache in local storage
-          try {
-            localStorage.setItem('gis_local_map_features', JSON.stringify(cleanList));
-          } catch (e) {}
-          return cleanList;
-        });
-      }
-
-      // 2. Load shared field alias dictionary from Firestore
-      const dbAliases = await loadFieldAliasDictionaryFromFirestore();
-      if (dbAliases && Object.keys(dbAliases).length > 0) {
-        try {
-          localStorage.setItem('gis_field_alias_dictionary', JSON.stringify(dbAliases));
-          setAliasVersion((v) => v + 1);
-        } catch (e) {
-          console.warn('Lỗi lưu cache field_aliases:', e);
         }
-      }
 
-      // 3. Load shared layer configs (custom layer names) from Firestore
-      const dbLayerNames = await loadLayerConfigsFromFirestore();
-      if (dbLayerNames && Object.keys(dbLayerNames).length > 0) {
-        setLayers((prevLayers) =>
-          prevLayers.map((l) =>
-            dbLayerNames[l.id] ? { ...l, name: dbLayerNames[l.id] } : l
-          )
-        );
+        setSplashStatusText('Đang nạp bảng ánh xạ thuộc tính tiếng Việt...');
+        // 2. Load shared field alias dictionary from Firestore
+        const dbAliases = await loadFieldAliasDictionaryFromFirestore();
+        if (dbAliases && Object.keys(dbAliases).length > 0) {
+          try {
+            localStorage.setItem('gis_field_alias_dictionary', JSON.stringify(dbAliases));
+            setAliasVersion((v) => v + 1);
+          } catch (e) {
+            console.warn('Lỗi lưu cache field_aliases:', e);
+          }
+        }
+
+        setSplashStatusText('Đang cấu hình danh mục lớp bản đồ...');
+        // 3. Load shared layer configs (custom layer names) from Firestore
+        const dbLayerNames = await loadLayerConfigsFromFirestore();
+        if (dbLayerNames && Object.keys(dbLayerNames).length > 0) {
+          setLayers((prevLayers) =>
+            prevLayers.map((l) =>
+              dbLayerNames[l.id] ? { ...l, name: dbLayerNames[l.id] } : l
+            )
+          );
+        }
+
+        setSplashStatusText('Hoàn tất!');
+      } catch (e) {
+        console.warn('Lỗi nạp CSDL:', e);
+      } finally {
+        setTimeout(() => {
+          setIsLoadingData(false);
+        }, 500);
       }
     }
     initSharedDb();
@@ -208,7 +227,7 @@ export default function App() {
     importedFeatures: GeoJsonFeatureItem[],
     strategy: DuplicateStrategy
   ) => {
-    let processedBatch: GeoJsonFeatureItem[] = [];
+    let finalTargetLayerFeatures: GeoJsonFeatureItem[] = [];
 
     setMapFeatures((prevFeatures) => {
       const existing = [...prevFeatures];
@@ -219,12 +238,21 @@ export default function App() {
       const newFeatures: GeoJsonFeatureItem[] = [];
 
       importedFeatures.forEach((imp) => {
+        const impObjId = extractObjectId(imp);
+
         const existingIdx = existing.findIndex((e) => {
           if (e.layerId !== targetLayerId) return false;
-          const matchId = e.id && imp.id && e.id.toLowerCase() === imp.id.toLowerCase();
-          const matchCode = e.code && imp.code && e.code.toLowerCase() === imp.code.toLowerCase();
-          const matchName = e.name && imp.name && e.name.toLowerCase() === imp.name.toLowerCase();
-          return Boolean(matchId || matchCode || matchName);
+
+          // Primary check: OBJECTID match
+          const eObjId = extractObjectId(e);
+          if (impObjId && eObjId && impObjId.toLowerCase() === eObjId.toLowerCase()) {
+            return true;
+          }
+
+          // Fallback check: ID or Code match
+          const matchId = e.id && imp.id && String(e.id).toLowerCase() === String(imp.id).toLowerCase();
+          const matchCode = e.code && imp.code && String(e.code).toLowerCase() === String(imp.code).toLowerCase();
+          return Boolean(matchId || matchCode);
         });
 
         if (existingIdx !== -1) {
@@ -235,7 +263,6 @@ export default function App() {
               updatedAt: new Date().toISOString().split('T')[0],
             };
             existing[existingIdx] = updatedItem;
-            processedBatch.push(updatedItem);
             updatedCount++;
           } else if (strategy === 'skip') {
             skippedCount++;
@@ -249,7 +276,6 @@ export default function App() {
               updatedAt: new Date().toISOString().split('T')[0],
             };
             newFeatures.push(newItem);
-            processedBatch.push(newItem);
             addedCount++;
           }
         } else {
@@ -259,10 +285,17 @@ export default function App() {
             updatedAt: new Date().toISOString().split('T')[0],
           };
           newFeatures.push(newItem);
-          processedBatch.push(newItem);
           addedCount++;
         }
       });
+
+      const nextAllFeatures = [...existing, ...newFeatures];
+      const dedupedAll = deduplicateFeaturesList(nextAllFeatures);
+      finalTargetLayerFeatures = dedupedAll.filter((f) => f.layerId === targetLayerId);
+
+      try {
+        localStorage.setItem('gis_local_map_features', JSON.stringify(dedupedAll));
+      } catch (e) {}
 
       const targetLayerObj = layers.find((l) => l.id === targetLayerId);
       const layerName = targetLayerObj ? targetLayerObj.name.split(':')[0] : targetLayerId;
@@ -273,12 +306,12 @@ export default function App() {
 
       showToast(toastMsg);
 
-      return [...existing, ...newFeatures];
+      return dedupedAll;
     });
 
-    // Auto sync to Firestore
-    if (processedBatch.length > 0) {
-      saveImportedFeaturesToFirestore(processedBatch).catch((err) =>
+    // Auto sync entire target layer dataset to Firestore via Chunking (reduces writes & payload size)
+    if (finalTargetLayerFeatures.length > 0) {
+      saveImportedFeaturesToFirestore(finalTargetLayerFeatures).catch((err) =>
         console.warn('Lỗi tự động lưu Firestore:', err)
       );
     }
@@ -570,20 +603,39 @@ export default function App() {
   };
 
   const handleDeleteFeature = (featureId: string) => {
-    setMapFeatures((prev) => prev.filter((f) => f.id !== featureId));
-    showToast('Đã xóa đối tượng khỏi hệ thống.');
+    setMapFeatures((prev) => {
+      const updated = prev.filter((f) => f.id !== featureId);
+      try {
+        localStorage.setItem('gis_local_map_features', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+    deleteFeatureFromFirestore(featureId).catch((err) =>
+      console.warn('Lỗi khi xóa đối tượng khỏi Firestore:', err)
+    );
+    if (selectedFeature?.id === featureId) {
+      setSelectedFeature(null);
+      originalSelectedFeatureRef.current = null;
+    }
+    showToast('Đã xóa đối tượng và đồng bộ CSDL thành công!');
   };
 
   const handleApproveDraft = (featureId: string) => {
-    setMapFeatures((prev) =>
-      prev.map((f) => (f.id === featureId ? { ...f, status: 'xac_dinh' as const } : f))
-    );
-    showToast('Đã phê duyệt bản ghi bản nháp thành công!');
+    setMapFeatures((prev) => {
+      const updatedList = prev.map((f) => (f.id === featureId ? { ...f, status: 'xac_dinh' as const } : f));
+      const targetFeat = updatedList.find((f) => f.id === featureId);
+      if (targetFeat) {
+        saveImportedFeaturesToFirestore([targetFeat]).catch((err) =>
+          console.warn('Lỗi đồng bộ phê duyệt lên Firestore:', err)
+        );
+      }
+      return updatedList;
+    });
+    showToast('Đã phê duyệt bản ghi và đồng bộ CSDL thành công!');
   };
 
   const handleRejectDraft = (featureId: string) => {
-    setMapFeatures((prev) => prev.filter((f) => f.id !== featureId));
-    showToast('Đã từ chối và xóa bản nháp.');
+    handleDeleteFeature(featureId);
   };
 
   const showToast = (msg: string) => {
@@ -592,6 +644,10 @@ export default function App() {
       setToastMessage(null);
     }, 4000);
   };
+
+  if (isLoadingData) {
+    return <SplashScreen statusText={splashStatusText} />;
+  }
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-900 font-sans text-slate-900">
@@ -631,10 +687,9 @@ export default function App() {
           <div className="absolute md:relative inset-y-0 left-0 z-[2000] md:z-10 bg-white h-full shadow-2xl md:shadow-none transition-all">
             <LeftSidebar
               layers={layers}
+              features={mapFeatures}
               onToggleVisibility={handleToggleLayerVisibility}
               onToggleGroupVisibility={handleToggleLayerGroupVisibility}
-              onRenameLayer={handleRenameLayer}
-              onZoomToLayer={handleZoomToLayer}
               currentRole={effectiveRole}
               onImportClick={() => setIsImportModalOpen(true)}
               onClose={() => {
@@ -659,8 +714,6 @@ export default function App() {
               setInteractionMode(mode);
               if (mode === 'hand') setSelectedFeature(null);
             }}
-            activeDrawMode={activeDrawMode}
-            onDrawModeChange={handleModeChange}
             selectedFeature={selectedFeature}
             isUnsaved={isUnsaved}
             onSaveSelection={() => {
@@ -669,9 +722,6 @@ export default function App() {
               }
             }}
             onDiscardSelection={handleDiscardSelection}
-            drawingPointsCount={drawingPointsCount}
-            onFinishDrawing={handleFinishDrawing}
-            onCancelDrawing={handleCancelDrawing}
           />
 
           {/* Leaflet Map */}

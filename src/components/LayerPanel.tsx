@@ -1,6 +1,7 @@
 import React from 'react';
 import { LayerConfig } from '../types';
-import { Layers, Eye, EyeOff, ShieldAlert, CheckCircle2, Info } from 'lucide-react';
+import { Layers, Eye, EyeOff, Info } from 'lucide-react';
+import { SearchAreaShapeBadge, BattleShapeBadge, GraveShapeBadge, CemeteryShapeBadge } from './GisIcons';
 
 interface LayerPanelProps {
   layers: LayerConfig[];
@@ -37,44 +38,64 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
 
       {/* Layer Items */}
       <div className="p-3 space-y-2.5 max-h-[70vh] overflow-y-auto divide-y divide-slate-800/60">
-        {layers.map((layer) => (
-          <div
-            key={layer.id}
-            className="pt-2.5 first:pt-0 flex flex-col space-y-1.5"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <span
-                  className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0"
-                  style={{ backgroundColor: layer.color }}
-                />
-                <span className="text-xs font-semibold text-slate-200">
-                  {layer.name}
-                </span>
+        {layers.map((layer) => {
+          const layerNameLower = layer.name.toLowerCase();
+          const isSearchArea = layer.id === 'layer4_khu_vuc_quy_tap' || layerNameLower.includes('tìm kiếm') || layerNameLower.includes('quy tập') || layerNameLower.includes('khu vực');
+          const isBattle = layer.id === 'layer2_tran_danh' || layerNameLower.includes('trận đánh') || layerNameLower.includes('tran danh');
+          const isGrave = layer.id === 'layer1_mo_liet_si' || layerNameLower.includes('mộ liệt sĩ') || layerNameLower.includes('mo liet si') || layerNameLower.includes('mộ');
+          const isCemetery = layer.id === 'layer3_nghia_trang' || layerNameLower.includes('nghĩa trang') || layerNameLower.includes('nghia trang');
+
+          return (
+            <div
+              key={layer.id}
+              className="pt-2.5 first:pt-0 flex flex-col space-y-1.5"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <div className="shrink-0">
+                    {isSearchArea ? (
+                      <SearchAreaShapeBadge className="w-4 h-4" />
+                    ) : isBattle ? (
+                      <BattleShapeBadge className="w-4 h-4" />
+                    ) : isGrave ? (
+                      <GraveShapeBadge className="w-4 h-4" />
+                    ) : isCemetery ? (
+                      <CemeteryShapeBadge className="w-4 h-4" />
+                    ) : (
+                      <span
+                        className="w-3.5 h-3.5 block rounded-full border border-white/20"
+                        style={{ backgroundColor: layer.color }}
+                      />
+                    )}
+                  </div>
+                  <span className="text-xs font-semibold text-slate-200">
+                    {layer.name}
+                  </span>
+                </div>
+
+                <button
+                  onClick={() => onToggleVisibility(layer.id)}
+                  className={`p-1.5 rounded-md transition-all flex items-center space-x-1 ${
+                    layer.visible
+                      ? 'bg-red-950/60 text-red-400 border border-red-800/50 hover:bg-red-900/60'
+                      : 'bg-slate-800 text-slate-500 hover:text-slate-300'
+                  }`}
+                  title={layer.visible ? 'Ẩn lớp' : 'Hiện lớp'}
+                >
+                  {layer.visible ? (
+                    <Eye className="w-4 h-4" />
+                  ) : (
+                    <EyeOff className="w-4 h-4" />
+                  )}
+                </button>
               </div>
 
-              <button
-                onClick={() => onToggleVisibility(layer.id)}
-                className={`p-1.5 rounded-md transition-all flex items-center space-x-1 ${
-                  layer.visible
-                    ? 'bg-red-950/60 text-red-400 border border-red-800/50 hover:bg-red-900/60'
-                    : 'bg-slate-800 text-slate-500 hover:text-slate-300'
-                }`}
-                title={layer.visible ? 'Ẩn lớp' : 'Hiện lớp'}
-              >
-                {layer.visible ? (
-                  <Eye className="w-4 h-4" />
-                ) : (
-                  <EyeOff className="w-4 h-4" />
-                )}
-              </button>
+              <p className="text-[11px] text-slate-400 pl-6">
+                {layer.description}
+              </p>
             </div>
-
-            <p className="text-[11px] text-slate-400 pl-6">
-              {layer.description}
-            </p>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Footer Info */}

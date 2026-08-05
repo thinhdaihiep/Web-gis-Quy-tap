@@ -39,6 +39,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   const [selectedLayerId, setSelectedLayerId] = useState<string>('');
   const [phanLoai, setPhanLoai] = useState<number>(1);
   const [propRows, setPropRows] = useState<EditablePropertyRow[]>([]);
+  const [showRawFieldName, setShowRawFieldName] = useState<boolean>(false);
 
   // Resizable pane width state
   const [paneWidth, setPaneWidth] = useState<number>(380);
@@ -217,12 +218,27 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       </div>
 
       {/* Pane Body: 2-Column Table Grid */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2.5 text-xs">
+        {/* Toggle show raw field name */}
+        <div className="flex items-center justify-between px-1">
+          <label className="flex items-center gap-1.5 text-[11px] text-slate-700 font-semibold cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showRawFieldName}
+              onChange={(e) => setShowRawFieldName(e.target.checked)}
+              className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+            />
+            <span>Hiện tên gốc</span>
+          </label>
+        </div>
+
         <div className="border border-slate-300 rounded-xl overflow-hidden shadow-2xs">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-800 text-slate-200 uppercase text-[10px] font-black tracking-wider">
-                <th className="py-2 px-2.5 border-r border-slate-700 w-2/5">Tên trường (Alias)</th>
+                <th className="py-2 px-2.5 border-r border-slate-700 w-2/5">
+                  {showRawFieldName ? 'Tên gốc' : 'Tên trường'}
+                </th>
                 <th className="py-2 px-2.5">Giá trị</th>
               </tr>
             </thead>
@@ -289,11 +305,12 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
               {/* Dynamic Property Rows (Locked for OBJECTID / Mã số) */}
               {propRows.map((row) => {
                 const locked = isLockedField(row.rawKey, row.aliasLabel);
+                const displayKey = showRawFieldName ? row.rawKey : row.aliasLabel;
                 return (
                   <tr key={row.rawKey} className="hover:bg-slate-50 transition">
                     <td className="py-2 px-2.5 border-r border-slate-200 font-bold bg-slate-50 text-slate-700 text-[11px] flex items-center gap-1.5">
                       {locked && <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
-                      <span>{row.aliasLabel}</span>
+                      <span className="truncate" title={displayKey}>{displayKey}</span>
                     </td>
                     <td className="py-1.5 px-2">
                       {locked ? (
@@ -347,6 +364,16 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
         )}
 
         <div className="flex items-center gap-1.5 ml-auto">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-2.5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition flex items-center gap-1 cursor-pointer"
+            title="Hủy các thay đổi chưa lưu"
+          >
+            <X className="w-3.5 h-3.5" />
+            <span>Hủy</span>
+          </button>
+
           {currentRole === 'editor' ? (
             <button
               type="button"
@@ -363,7 +390,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center gap-1 cursor-pointer"
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Lưu thay đổi</span>
+              <span>Lưu</span>
             </button>
           )}
         </div>

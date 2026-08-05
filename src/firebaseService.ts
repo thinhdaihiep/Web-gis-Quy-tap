@@ -1,6 +1,7 @@
 import { doc, setDoc, getDoc, getDocs, collection, writeBatch, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { GeoJsonFeatureItem, LayerConfig } from './types';
+import { deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
 
 const COLLECTION_NAME = 'map_features';
 const CHUNKS_COLLECTION = 'layer_chunks';
@@ -30,21 +31,13 @@ function syncToLocalStorage(features: GeoJsonFeatureItem[]) {
   try {
     const existingRaw = localStorage.getItem('gis_local_map_features');
     const existingList: GeoJsonFeatureItem[] = existingRaw ? JSON.parse(existingRaw) : [];
-    const featureMap = new Map<string, GeoJsonFeatureItem>();
-
-    existingList.forEach((f) => {
-      if (!isDemoFeatureId(f.id)) featureMap.set(String(f.id), f);
-    });
-    features.forEach((f) => {
-      if (!isDemoFeatureId(f.id)) featureMap.set(String(f.id), f);
-    });
-
-    const merged = Array.from(featureMap.values());
+    const merged = deduplicateFeaturesList([...existingList, ...features].filter((f) => !isDemoFeatureId(f.id)));
     localStorage.setItem('gis_local_map_features', JSON.stringify(merged));
   } catch (e) {
     console.warn('Lỗi ghi LocalStorage cache:', e);
   }
 }
+
 
 function getFromLocalStorage(): GeoJsonFeatureItem[] {
   try {
@@ -75,27 +68,36 @@ export async function saveImportedFeaturesToFirestore(
   syncToLocalStorage(features);
 
   try {
+    // Deduplicate list by OBJECTID / ID before saving
+    const deduped = deduplicateFeaturesList(features);
+
     // Optimize coordinates across all items
-    const cleanedFeatures = features.map((feat) => ({
+    const cleanedFeatures = deduped.map((feat) => ({
       ...feat,
       coordinates: optimizeCoordinates(feat.coordinates),
       updatedAt: feat.updatedAt || new Date().toISOString().split('T')[0],
     }));
 
-    // If batch size is larger than 30 items, use Layer Chunking strategy
-    // Group items into ~400KB compressed payload chunks (max 100 items per chunk)
-    if (cleanedFeatures.length > 30) {
-      const targetLayerId = cleanedFeatures[0].layerId || 'default';
-      const CHUNK_ITEM_COUNT = 100;
-      let chunkIdx = 0;
+    // Group features by layerId
+    const layerGroups = new Map<string, GeoJsonFeatureItem[]>();
+    cleanedFeatures.forEach((f) => {
+      const lId = f.layerId || 'default';
+      if (!layerGroups.has(lId)) layerGroups.set(lId, []);
+      layerGroups.get(lId)!.push(f);
+    });
 
-      for (let i = 0; i < cleanedFeatures.length; i += CHUNK_ITEM_COUNT) {
-        const slice = cleanedFeatures.slice(i, i + CHUNK_ITEM_COUNT);
-        const docId = `chunk_${targetLayerId}_${chunkIdx}`;
+    const CHUNK_ITEM_COUNT = 100;
+    let totalSaved = 0;
+
+    for (const [layerId, layerFeats] of layerGroups.entries()) {
+      let chunkIdx = 0;
+      for (let i = 0; i < layerFeats.length; i += CHUNK_ITEM_COUNT) {
+        const slice = layerFeats.slice(i, i + CHUNK_ITEM_COUNT);
+        const docId = `chunk_${layerId}_${chunkIdx}`;
         const docRef = doc(db, CHUNKS_COLLECTION, docId);
 
         await setDoc(docRef, {
-          layerId: targetLayerId,
+          layerId,
           chunkIndex: chunkIdx,
           featureCount: slice.length,
           payloadJson: JSON.stringify(slice),
@@ -105,42 +107,26 @@ export async function saveImportedFeaturesToFirestore(
         chunkIdx++;
       }
 
-      return { success: true, count: cleanedFeatures.length };
+      totalSaved += layerFeats.length;
+
+      // Clean up any old leftover extra chunks for this layer
+      for (let extra = chunkIdx; extra < chunkIdx + 10; extra++) {
+        const docId = `chunk_${layerId}_${extra}`;
+        const docRef = doc(db, CHUNKS_COLLECTION, docId);
+        try {
+          const snap = await getDoc(docRef);
+          if (snap.exists()) {
+            await deleteDoc(docRef);
+          } else {
+            break;
+          }
+        } catch (e) {
+          break;
+        }
+      }
     }
 
-    // Small batch (<30 items): Use standard individual feature documents
-    const CHUNK_SIZE = 400;
-    let savedCount = 0;
-
-    for (let i = 0; i < cleanedFeatures.length; i += CHUNK_SIZE) {
-      const chunk = cleanedFeatures.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-
-      chunk.forEach((feat) => {
-        const docId = String(feat.id).replace(/[\/\s#?]/g, '_');
-        const docRef = doc(db, COLLECTION_NAME, docId);
-
-        const payload = {
-          id: feat.id,
-          layerId: feat.layerId,
-          name: feat.name,
-          code: feat.code || null,
-          type: feat.type,
-          coordinates: JSON.stringify(feat.coordinates),
-          properties: feat.properties || {},
-          status: feat.status || 'xac_dinh',
-          updatedAt: feat.updatedAt,
-          syncedToSharedDbAt: new Date().toISOString(),
-        };
-
-        batch.set(docRef, payload, { merge: true });
-      });
-
-      await batch.commit();
-      savedCount += chunk.length;
-    }
-
-    return { success: true, count: savedCount };
+    return { success: true, count: totalSaved };
   } catch (err: any) {
     console.warn('Lưu ý CSDL Firestore (Đã lưu vào bộ nhớ máy):', err?.message || err);
 
@@ -168,7 +154,7 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
   // Load from LocalStorage first
   const localItems = getFromLocalStorage();
   localItems.forEach((item) => {
-    if (!isDemoFeatureId(item.id)) itemsMap.set(String(item.id), item);
+    if (!isDemoFeatureId(item.id)) itemsMap.set(getItemUniqueKey(item), item);
   });
 
   try {
@@ -187,7 +173,7 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
           try {
             const parsedList: GeoJsonFeatureItem[] = JSON.parse(data.payloadJson);
             parsedList.forEach((item) => {
-              if (!isDemoFeatureId(item.id)) itemsMap.set(String(item.id), item);
+              if (!isDemoFeatureId(item.id)) itemsMap.set(getItemUniqueKey(item), item);
             });
           } catch (e) {
             console.error('Lỗi parse chunk JSON:', e);
@@ -230,18 +216,39 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
           updatedAt: data.updatedAt,
         };
 
-        itemsMap.set(String(feat.id), feat);
+        itemsMap.set(getItemUniqueKey(feat), feat);
       });
     } catch (individualErr) {
       console.warn('Không tải được individual map_features (dùng LocalStorage cache):', individualErr);
     }
 
-    const allList = Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id));
-    syncToLocalStorage(allList);
+    const allList = deduplicateFeaturesList(Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id)));
+    try {
+      localStorage.setItem('gis_local_map_features', JSON.stringify(allList));
+    } catch (e) {}
     return allList;
   } catch (err) {
     console.warn('Không thể tải dữ liệu mới từ Firestore, sử dụng bộ nhớ đệm LocalStorage:', err);
-    return Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id));
+    return deduplicateFeaturesList(Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id)));
+  }
+}
+
+/**
+ * Delete a feature from Firestore database and update local storage cache
+ */
+export async function deleteFeatureFromFirestore(featureId: string): Promise<boolean> {
+  try {
+    const docRef = doc(db, COLLECTION_NAME, featureId);
+    await deleteDoc(docRef);
+
+    const currentLocal = getFromLocalStorage();
+    const updatedLocal = currentLocal.filter((f) => String(f.id) !== String(featureId));
+    syncToLocalStorage(updatedLocal);
+
+    return true;
+  } catch (err) {
+    console.warn('Lỗi khi xóa đối tượng khỏi Firestore:', err);
+    return false;
   }
 }
 

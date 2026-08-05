@@ -169,3 +169,18 @@
   cursor: grabbing !important;
 }
 
+/* ========================================================
+   CUSTOM MARKER SHAPE STYLES FOR LAYERS
+   ======================================================== */
+.marker-gis-svg {
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
+  transition: transform 0.15s ease-in-out;
+}
+
+.point-feature-selected .marker-gis-svg,
+.marker-gis-svg.is-selected {
+  filter: drop-shadow(0 4px 8px rgba(37,99,235,0.6));
+  transform: scale(1.15);
+}

@@ -100,13 +100,13 @@ export const Header: React.FC<HeaderProps> = ({
                 className="bg-transparent text-xs font-bold text-red-400 focus:outline-none cursor-pointer border-b border-dashed border-red-500/50 py-0.5"
               >
                 <option value="admin" className="bg-slate-800 text-red-400 font-bold">
-                  Quản trị viên (Admin)
+                  Quản trị viên
                 </option>
                 <option value="editor" className="bg-slate-800 text-amber-400 font-bold">
-                  Biên tập viên (Editor)
+                  Biên tập viên
                 </option>
                 <option value="guest" className="bg-slate-800 text-emerald-400 font-bold">
-                  Khách (Guest)
+                  Khách
                 </option>
               </select>
             </div>

@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { LayerConfig, UserRole } from '../types';
-import { Layers, ShieldAlert, Upload, Edit2, Check, X, Info, Focus, ChevronDown, ChevronRight, Folder } from 'lucide-react';
+import { LayerConfig, UserRole, GeoJsonFeatureItem } from '../types';
+import { Layers, Upload, X, Info, ChevronDown, ChevronRight, Folder } from 'lucide-react';
+import { SearchAreaShapeBadge, BattleShapeBadge, GraveShapeBadge, CemeteryShapeBadge } from './GisIcons';
 
 interface LeftSidebarProps {
   layers: LayerConfig[];
+  features?: GeoJsonFeatureItem[];
   onToggleVisibility: (layerId: string) => void;
   onToggleGroupVisibility?: (layerIds: string[], visible: boolean) => void;
-  onRenameLayer: (layerId: string, newName: string) => void;
+  onRenameLayer?: (layerId: string, newName: string) => void;
   onZoomToLayer?: (layerId: string) => void;
   currentRole: UserRole;
   onImportClick: () => void;
@@ -15,148 +17,237 @@ interface LeftSidebarProps {
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   layers,
+  features = [],
   onToggleVisibility,
   onToggleGroupVisibility,
-  onRenameLayer,
-  onZoomToLayer,
   currentRole,
   onImportClick,
   onClose,
 }) => {
-  const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState<string>('');
-  
+  const [activeInfoLayerId, setActiveInfoLayerId] = useState<string | null>(null);
+
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
-    'business': true,
+    business: true,
   });
 
   const toggleGroupExpand = (groupId: string) => {
-    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+    setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
   };
 
-  const startEditing = (layer: LayerConfig) => {
-    if (currentRole !== 'admin') return;
-    setEditingLayerId(layer.id);
-    setEditingName(layer.name);
-  };
+  const getLayerFeatures = (layer: LayerConfig) => {
+    if (!features || features.length === 0) return [];
+    const layerNameLower = layer.name.toLowerCase();
+    const isSearchArea =
+      layer.id === 'layer1_tim_kiem' ||
+      layer.id === 'layer4_khu_vuc_quy_tap' ||
+      layerNameLower.includes('tìm kiếm') ||
+      layerNameLower.includes('quy tập') ||
+      layerNameLower.includes('khu vực');
 
-  const saveRename = (layerId: string) => {
-    if (editingName.trim()) {
-      onRenameLayer(layerId, editingName.trim());
-    }
-    setEditingLayerId(null);
-  };
+    const isBattle =
+      layer.id === 'layer2_tran_danh' ||
+      layerNameLower.includes('trận đánh') ||
+      layerNameLower.includes('tran danh');
 
-  const cancelRename = () => {
-    setEditingLayerId(null);
+    const isGrave =
+      layer.id === 'layer3_mo_chi' ||
+      layer.id === 'layer1_mo_liet_si' ||
+      layerNameLower.includes('mộ liệt sĩ') ||
+      layerNameLower.includes('mo liet si') ||
+      (layerNameLower.includes('mộ') && !layerNameLower.includes('nghĩa trang'));
+
+    const isCemetery =
+      layer.id === 'layer4_nghia_trang' ||
+      layer.id === 'layer3_nghia_trang' ||
+      layerNameLower.includes('nghĩa trang') ||
+      layerNameLower.includes('nghia trang');
+
+    return features.filter((f) => {
+      if (f.layerId === layer.id) return true;
+      const fLayerLower = (f.layerId || '').toLowerCase();
+      if (
+        isSearchArea &&
+        (fLayerLower.includes('tim_kiem') ||
+          fLayerLower.includes('quy_tap') ||
+          f.type === 'Polygon' ||
+          f.type === 'MultiPolygon')
+      )
+        return true;
+      if (isBattle && fLayerLower.includes('tran_danh')) return true;
+      if (isGrave && (fLayerLower.includes('mo_chi') || fLayerLower.includes('mo_liet_si'))) return true;
+      if (isCemetery && fLayerLower.includes('nghia_trang')) return true;
+      return false;
+    });
   };
 
   const renderLayerItem = (layer: LayerConfig) => {
-    const isEditing = editingLayerId === layer.id;
-
     const layerNameLower = layer.name.toLowerCase();
-    const isBattle = layer.id === 'layer2_tran_danh' || layerNameLower.includes('trận đánh') || layerNameLower.includes('tran danh');
-    const isGrave = layer.id === 'layer1_mo_liet_si' || layerNameLower.includes('mộ liệt sĩ') || layerNameLower.includes('mo liet si') || layerNameLower.includes('mộ');
-    const isCemetery = layer.id === 'layer3_nghia_trang' || layerNameLower.includes('nghĩa trang') || layerNameLower.includes('nghia trang');
+    const isSearchArea =
+      layer.id === 'layer1_tim_kiem' ||
+      layer.id === 'layer4_khu_vuc_quy_tap' ||
+      layerNameLower.includes('tìm kiếm') ||
+      layerNameLower.includes('quy tập') ||
+      layerNameLower.includes('khu vực');
+    const isBattle =
+      layer.id === 'layer2_tran_danh' ||
+      layerNameLower.includes('trận đánh') ||
+      layerNameLower.includes('tran danh');
+    const isGrave =
+      layer.id === 'layer3_mo_chi' ||
+      layer.id === 'layer1_mo_liet_si' ||
+      layerNameLower.includes('mộ liệt sĩ') ||
+      layerNameLower.includes('mo liet si') ||
+      (layerNameLower.includes('mộ') && !layerNameLower.includes('nghĩa trang'));
+    const isCemetery =
+      layer.id === 'layer4_nghia_trang' ||
+      layer.id === 'layer3_nghia_trang' ||
+      layerNameLower.includes('nghĩa trang') ||
+      layerNameLower.includes('nghia trang');
+
+    const isInfoActive = activeInfoLayerId === layer.id;
 
     return (
-      <div
-        key={layer.id}
-        className="flex items-center justify-between px-2 py-1.5 hover:bg-slate-100 rounded transition-colors group text-slate-800"
-      >
-        <div className="flex items-center min-w-0 flex-1 mr-1">
-          <input
-            type="checkbox"
-            checked={layer.visible}
-            onChange={() => onToggleVisibility(layer.id)}
-            className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer shrink-0"
-          />
-          {isBattle ? (
-            <span className="w-3.5 h-3.5 rounded-full ml-1.5 mr-1 shrink-0 bg-white border border-red-500 flex items-center justify-center shadow-2xs" title="Trận đánh">
-              <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 24 24" fill="#ef4444">
-                <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
-              </svg>
-            </span>
-          ) : isGrave ? (
-            <span className="w-3.5 h-3.5 rounded-full ml-1.5 mr-1 shrink-0 bg-white border border-emerald-600 flex items-center justify-center shadow-2xs" title="Mộ liệt sĩ">
-              <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 24 24" fill="#16a34a">
-                <path d="M12 3c-3.86 0-7 3.14-7 7v9h14v-9c0-3.86-3.14-7-7-7zm-1 3.5h2v2.5h2.5v2H13V15h-2v-4H8.5v-2H11V6.5z"/>
-              </svg>
-            </span>
-          ) : isCemetery ? (
-            <span className="w-3.5 h-3.5 rounded-[3px] ml-1.5 mr-1 shrink-0 bg-white border border-purple-600 flex items-center justify-center shadow-2xs" title="Nghĩa trang liệt sĩ">
-              <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 24 24" fill="#9333ea">
-                <path d="M4 20h16v2H4v-2zm2-2h12V10c0-3.31-2.69-6-6-6s-6 2.69-6 6v8zm5-11h2v2.5h2.5v2H13V15h-2v-3.5H8.5v-2H11V7z"/>
-              </svg>
-            </span>
-          ) : (
-            <span
-              className="w-2.5 h-2.5 rounded-full ml-2 mr-1.5 shrink-0 border border-slate-300"
-              style={{ backgroundColor: layer.color }}
+      <div key={layer.id} className="space-y-1">
+        <div className="flex items-center justify-between px-2 py-1.5 hover:bg-slate-100 rounded transition-colors group text-slate-800">
+          <div className="flex items-center min-w-0 flex-1 mr-1">
+            <input
+              type="checkbox"
+              checked={layer.visible}
+              onChange={() => onToggleVisibility(layer.id)}
+              className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer shrink-0"
             />
-          )}
-
-          {isEditing ? (
-            <div className="flex items-center gap-1 flex-1">
-              <input
-                type="text"
-                value={editingName}
-                onChange={(e) => setEditingName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') saveRename(layer.id);
-                  if (e.key === 'Escape') cancelRename();
-                }}
-                className="text-xs bg-white border border-blue-500 rounded px-1.5 py-0.5 text-slate-900 w-full focus:outline-none"
-                autoFocus
-              />
-              <button
-                onClick={() => saveRename(layer.id)}
-                className="text-emerald-600 hover:bg-emerald-50 p-1 rounded cursor-pointer shrink-0"
-                title="Lưu tên mới"
-              >
-                <Check className="w-3 h-3" />
-              </button>
-              <button
-                onClick={cancelRename}
-                className="text-slate-400 hover:bg-slate-200 p-1 rounded cursor-pointer shrink-0"
-                title="Hủy"
-              >
-                <X className="w-3 h-3" />
-              </button>
+            <div className="ml-1.5 mr-1 shrink-0">
+              {isSearchArea ? (
+                <SearchAreaShapeBadge className="w-4 h-4" />
+              ) : isBattle ? (
+                <BattleShapeBadge className="w-4 h-4" />
+              ) : isGrave ? (
+                <GraveShapeBadge className="w-4 h-4" />
+              ) : isCemetery ? (
+                <CemeteryShapeBadge className="w-4 h-4" />
+              ) : (
+                <span
+                  className="w-2.5 h-2.5 rounded-full block border border-slate-300"
+                  style={{ backgroundColor: layer.color }}
+                />
+              )}
             </div>
-          ) : (
+
             <span className="text-xs text-slate-700 font-medium truncate group-hover:text-slate-900 flex-1">
               {layer.name}
             </span>
-          )}
-        </div>
+          </div>
 
-        {/* Action buttons */}
-        <div className="flex items-center gap-0.5">
-          {onZoomToLayer && (
+          {/* Action button: Info only (no text label) */}
+          <div className="flex items-center">
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onZoomToLayer(layer.id);
+                setActiveInfoLayerId((prev) => (prev === layer.id ? null : layer.id));
               }}
-              className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition cursor-pointer shrink-0"
-              title="Phóng tới phạm vi lớp này"
+              className={`p-1 rounded transition cursor-pointer shrink-0 ${
+                isInfoActive
+                  ? 'text-blue-600 bg-blue-100'
+                  : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'
+              }`}
+              title="Thông tin thống kê lớp"
             >
-              <Focus className="w-3 h-3" />
+              <Info className="w-3.5 h-3.5" />
             </button>
-          )}
-
-          {/* Rename button for Admin */}
-          {currentRole === 'admin' && !isEditing && (
-            <button
-              onClick={() => startEditing(layer)}
-              className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition cursor-pointer shrink-0"
-              title="Đổi tên lớp (Quyền Admin)"
-            >
-              <Edit2 className="w-3 h-3" />
-            </button>
-          )}
+          </div>
         </div>
+
+        {/* Info statistics panel */}
+        {isInfoActive && (() => {
+          const layerFeats = getLayerFeatures(layer);
+          const totalCount = layerFeats.length;
+
+          const phanLoaiCounts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+          if (isSearchArea) {
+            layerFeats.forEach((f) => {
+              const p = f.properties || {};
+              const val = p.PhanLoai ?? p.phan_loai ?? p.phanLoai ?? p['Phân loại'] ?? p.Phanloai;
+              const num = val !== undefined && val !== null ? parseInt(String(val).replace(/[^0-9]/g, ''), 10) : NaN;
+              if (!isNaN(num) && num >= 1 && num <= 5) {
+                phanLoaiCounts[num] = (phanLoaiCounts[num] || 0) + 1;
+              } else {
+                phanLoaiCounts[5] = (phanLoaiCounts[5] || 0) + 1;
+              }
+            });
+          }
+
+          return (
+            <div className="ml-5 my-1 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5 shadow-xs animate-in fade-in duration-150">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-1">
+                <span className="font-bold text-slate-700 text-[10px] uppercase tracking-wider flex items-center gap-1">
+                  <Info className="w-3 h-3 text-blue-600 shrink-0" />
+                  <span>Thống kê sơ bộ</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveInfoLayerId(null)}
+                  className="text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
+                  title="Đóng"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between text-slate-700">
+                <span className="font-medium text-[11px]">Tổng số lượng:</span>
+                <span className="font-bold text-blue-700 bg-blue-100/80 px-1.5 py-0.5 rounded text-[11px]">
+                  {totalCount} đối tượng
+                </span>
+              </div>
+
+              {isSearchArea && (
+                <div className="pt-1 border-t border-slate-200/80 space-y-1">
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Chi tiết theo Phân loại:
+                  </div>
+                  <div className="space-y-1 text-[10.5px]">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                        <span className="truncate text-slate-600">1. Đã tìm kiếm quy tập xong</span>
+                      </div>
+                      <span className="font-bold text-slate-800 ml-1">{phanLoaiCounts[1]}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                        <span className="truncate text-slate-600">2. Đã quy tập chưa xong</span>
+                      </div>
+                      <span className="font-bold text-slate-800 ml-1">{phanLoaiCounts[2]}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="w-2 h-2 rounded-full bg-pink-500 shrink-0" />
+                        <span className="truncate text-slate-600">3. Chưa tổ chức tìm kiếm</span>
+                      </div>
+                      <span className="font-bold text-slate-800 ml-1">{phanLoaiCounts[3]}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
+                        <span className="truncate text-slate-600">4. Đã tìm chưa có kết quả</span>
+                      </div>
+                      <span className="font-bold text-slate-800 ml-1">{phanLoaiCounts[4]}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="w-2 h-2 rounded-full bg-purple-500 shrink-0" />
+                        <span className="truncate text-slate-600">5. Tìm kiếm, quy tập không rõ thông tin</span>
+                      </div>
+                      <span className="font-bold text-slate-800 ml-1">{phanLoaiCounts[5]}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -264,7 +355,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               <span className="text-slate-700 truncate">2. Đã tìm kiếm, quy tập nhưng chưa hết</span>
             </div>
             <div className="flex items-center">
-              <span className="w-2.5 h-2.5 rounded-sm bg-blue-500 mr-2 shrink-0 border border-blue-600/30" />
+              <span className="w-2.5 h-2.5 rounded-sm bg-pink-500 mr-2 shrink-0 border border-pink-600/30" />
               <span className="text-slate-700 truncate">3. Có thông tin nhưng chưa tìm kiếm</span>
             </div>
             <div className="flex items-center">
@@ -273,7 +364,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             </div>
             <div className="flex items-center">
               <span className="w-2.5 h-2.5 rounded-sm bg-slate-400 mr-2 shrink-0 border border-slate-500/30" />
-              <span className="text-slate-700 truncate">5. Đã quy tập nhưng chưa rõ thông tin </span>
+              <span className="text-slate-700 truncate">5. Tìm kiếm, quy tập không rõ thông tin</span>
             </div>
           </div>
         </div>
