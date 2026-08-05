@@ -316,11 +316,7 @@ export function deduplicateFeaturesList<T extends { id?: string | number; layerI
   const map = new Map<string, T>();
 
   features.forEach((feat) => {
-    const objId = extractObjectId(feat);
-    const layerId = feat.layerId || 'default';
-    const key = objId
-      ? `${layerId}_objid_${objId.toLowerCase()}`
-      : `${layerId}_id_${String(feat.id || '').toLowerCase()}`;
+    const key = getItemUniqueKey(feat);
 
     if (!map.has(key)) {
       map.set(key, feat);

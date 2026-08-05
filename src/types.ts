@@ -7,7 +7,7 @@ export interface UserProfile {
   role: UserRole;
 }
 
-export type BaseMapType = 'street' | 'satellite';
+export type BaseMapType = 'street' | 'esri_topo' | 'satellite';
 
 export interface LayerConfig {
   id: string;
@@ -78,7 +78,7 @@ export const PHAN_LOAI_COLORS: Record<number, { color: string; label: string }> 
   2: { color: '#f59e0b', label: '2. Đã quy tập nhưng chưa xong' },
   3: { color: '#ec4899', label: '3. Chưa tổ chức tìm kiếm' },
   4: { color: '#ef4444', label: '4. Đã tìm kiếm nhưng chưa có kết quả' },
-  5: { color: '#8b5cf6', label: '5. Tìm kiếm, quy tập không rõ thông tin' },
+  5: { color: '#94a3b8', label: '5. Tìm kiếm, quy tập không rõ thông tin' },
 };
 
 export const INITIAL_MAP_FEATURES: GeoJsonFeatureItem[] = [];

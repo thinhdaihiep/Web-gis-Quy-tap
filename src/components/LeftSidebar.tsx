@@ -179,21 +179,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
           return (
             <div className="ml-5 my-1 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5 shadow-xs animate-in fade-in duration-150">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-1">
-                <span className="font-bold text-slate-700 text-[10px] uppercase tracking-wider flex items-center gap-1">
-                  <Info className="w-3 h-3 text-blue-600 shrink-0" />
-                  <span>Thống kê sơ bộ</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setActiveInfoLayerId(null)}
-                  className="text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
-                  title="Đóng"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-
               <div className="flex items-center justify-between text-slate-700">
                 <span className="font-medium text-[11px]">Tổng số lượng:</span>
                 <span className="font-bold text-blue-700 bg-blue-100/80 px-1.5 py-0.5 rounded text-[11px]">
@@ -237,7 +222,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                     </div>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5 truncate">
-                        <span className="w-2 h-2 rounded-full bg-purple-500 shrink-0" />
+                        <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0" />
                         <span className="truncate text-slate-600">5. Tìm kiếm, quy tập không rõ thông tin</span>
                       </div>
                       <span className="font-bold text-slate-800 ml-1">{phanLoaiCounts[5]}</span>

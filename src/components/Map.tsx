@@ -208,7 +208,7 @@ export const MapComponent: React.FC<MapProps> = ({
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
-  const baseLayersRef = useRef<{ street: L.TileLayer; satellite: L.TileLayer } | null>(null);
+  const baseLayersRef = useRef<Record<BaseMapType, L.TileLayer> | null>(null);
   const featureLayersRef = useRef<L.LayerGroup | null>(null);
   const tempDrawLayerRef = useRef<L.LayerGroup | null>(null);
   const clickMarkerRef = useRef<L.CircleMarker | null>(null);
@@ -252,26 +252,79 @@ export const MapComponent: React.FC<MapProps> = ({
     if (!mapContainerRef.current) return;
 
     if (!mapInstanceRef.current) {
+      // Restore map center and zoom level from LocalStorage if available
+      let initialCenter: [number, number] = [14.5, 108.3];
+      let initialZoom = 8;
+      let hasSavedView = false;
+      try {
+        const savedView = localStorage.getItem('gis_map_view_state');
+        if (savedView) {
+          const parsed = JSON.parse(savedView);
+          if (
+            parsed &&
+            typeof parsed.lat === 'number' &&
+            !isNaN(parsed.lat) &&
+            typeof parsed.lng === 'number' &&
+            !isNaN(parsed.lng) &&
+            typeof parsed.zoom === 'number' &&
+            !isNaN(parsed.zoom)
+          ) {
+            initialCenter = [parsed.lat, parsed.lng];
+            initialZoom = parsed.zoom;
+            hasSavedView = true;
+          }
+        }
+      } catch (e) {}
+
+      if (hasSavedView) {
+        hasFittedInitialRef.current = true;
+      }
+
       const map = L.map(mapContainerRef.current, {
-        center: [14.5, 108.3],
-        zoom: 8,
+        center: initialCenter,
+        zoom: initialZoom,
         zoomControl: false,
       });
 
-      const streetLayer = L.tileLayer(
-        'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+      const saveViewState = () => {
+        if (!map) return;
+        try {
+          const center = map.getCenter();
+          const zoom = map.getZoom();
+          localStorage.setItem(
+            'gis_map_view_state',
+            JSON.stringify({
+              lat: Number(center.lat.toFixed(6)),
+              lng: Number(center.lng.toFixed(6)),
+              zoom: Math.round(zoom * 10) / 10,
+            })
+          );
+        } catch (e) {}
+      };
+
+      map.on('moveend', saveViewState);
+      map.on('zoomend', saveViewState);
+
+      // 1. OpenStreetMap Standard (Tiếng Việt đầy đủ cấp Thôn/Xóm/Xã)
+      const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+      });
+
+      // 2. ESRI World Topo Map (Địa hình & Đường đồng mức)
+      const esriTopoLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
         {
-          attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+          attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, iPC, USGS, FAO, NPS, NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), swisstopo, MapmyIndia, &copy; OpenStreetMap contributors, and the GIS User Community',
           maxZoom: 19,
-          subdomains: 'abcd',
         }
       );
 
+      // 3. ESRI World Imagery (Vệ tinh)
       const satelliteLayer = L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         {
-          attribution: 'Esri World Imagery',
+          attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
           maxZoom: 18,
         }
       );
@@ -280,6 +333,7 @@ export const MapComponent: React.FC<MapProps> = ({
 
       baseLayersRef.current = {
         street: streetLayer,
+        esri_topo: esriTopoLayer,
         satellite: satelliteLayer,
       };
 
@@ -371,13 +425,14 @@ export const MapComponent: React.FC<MapProps> = ({
 
     if (!map || !baseLayers) return;
 
-    if (baseMap === 'street') {
-      if (map.hasLayer(baseLayers.satellite)) map.removeLayer(baseLayers.satellite);
-      if (!map.hasLayer(baseLayers.street)) map.addLayer(baseLayers.street);
-    } else if (baseMap === 'satellite') {
-      if (map.hasLayer(baseLayers.street)) map.removeLayer(baseLayers.street);
-      if (!map.hasLayer(baseLayers.satellite)) map.addLayer(baseLayers.satellite);
-    }
+    (Object.keys(baseLayers) as BaseMapType[]).forEach((key) => {
+      const layer = baseLayers[key];
+      if (key === baseMap) {
+        if (!map.hasLayer(layer)) map.addLayer(layer);
+      } else {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+      }
+    });
   }, [baseMap]);
 
   // Update Map Cursor based on draw mode & interaction mode

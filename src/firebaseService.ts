@@ -53,6 +53,32 @@ function getFromLocalStorage(): GeoJsonFeatureItem[] {
 }
 
 /**
+ * Save or update a single feature in Firestore without altering layer chunks.
+ */
+export async function saveSingleFeatureToFirestore(
+  feature: GeoJsonFeatureItem
+): Promise<boolean> {
+  if (!feature) return false;
+
+  // 1. Always update LocalStorage cache first
+  syncToLocalStorage([feature]);
+
+  try {
+    const docRef = doc(db, COLLECTION_NAME, String(feature.id));
+    const cleaned = {
+      ...feature,
+      coordinates: optimizeCoordinates(feature.coordinates),
+      updatedAt: feature.updatedAt || new Date().toISOString().split('T')[0],
+    };
+    await setDoc(docRef, cleaned, { merge: true });
+    return true;
+  } catch (err) {
+    console.warn('Lỗi khi lưu đối tượng đơn lẻ vào Firestore:', err);
+    return false;
+  }
+}
+
+/**
  * Save / Update a batch of imported features into the shared Firestore database.
  * Automatically uses Layer Chunking for large datasets (>50 items or >500KB)
  * to reduce Firestore write operations by 99% (preventing Quota / Resource Exhausted limits).
@@ -66,6 +92,16 @@ export async function saveImportedFeaturesToFirestore(
 
   // 1. Always save to LocalStorage first to guarantee zero data loss
   syncToLocalStorage(features);
+
+  // If saving small batch (< 20 items), save as individual documents to avoid touching layer chunks
+  if (features.length < 20) {
+    let count = 0;
+    for (const f of features) {
+      const ok = await saveSingleFeatureToFirestore(f);
+      if (ok) count++;
+    }
+    return { success: true, count };
+  }
 
   try {
     // Deduplicate list by OBJECTID / ID before saving
@@ -157,6 +193,8 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
     if (!isDemoFeatureId(item.id)) itemsMap.set(getItemUniqueKey(item), item);
   });
 
+  let firestoreChunkItemsCount = 0;
+
   try {
     // Purge known demo items from Firestore
     const demoIdsToDelete = ['demo_poly_1', 'demo_point_1', 'demo_point_2', 'demo_point_3'];
@@ -173,7 +211,10 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
           try {
             const parsedList: GeoJsonFeatureItem[] = JSON.parse(data.payloadJson);
             parsedList.forEach((item) => {
-              if (!isDemoFeatureId(item.id)) itemsMap.set(getItemUniqueKey(item), item);
+              if (!isDemoFeatureId(item.id)) {
+                itemsMap.set(getItemUniqueKey(item), item);
+                firestoreChunkItemsCount++;
+              }
             });
           } catch (e) {
             console.error('Lỗi parse chunk JSON:', e);
@@ -184,7 +225,7 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
       console.warn('Không tải được layer_chunks (dùng LocalStorage cache):', chunkErr);
     }
 
-    // 2. Load Individual feature documents
+    // 2. Load Individual feature documents (single edits/approvals override chunks)
     try {
       const querySnapshot = await getDocs(collection(db, COLLECTION_NAME));
       querySnapshot.forEach((docSnap) => {
@@ -223,9 +264,18 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
     }
 
     const allList = deduplicateFeaturesList(Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id)));
+    
+    // Cache to LocalStorage
     try {
       localStorage.setItem('gis_local_map_features', JSON.stringify(allList));
     } catch (e) {}
+
+    // Auto-repair Firestore chunks if local cache had full dataset but Firestore chunks were partially lost
+    if (allList.length > firestoreChunkItemsCount + 50) {
+      console.log(`[Auto-Healing] Restoring missing chunks in Firestore (${firestoreChunkItemsCount} in DB vs ${allList.length} total)...`);
+      saveImportedFeaturesToFirestore(allList).catch((e) => console.warn('Lỗi tự động khắc phục CSDL:', e));
+    }
+
     return allList;
   } catch (err) {
     console.warn('Không thể tải dữ liệu mới từ Firestore, sử dụng bộ nhớ đệm LocalStorage:', err);

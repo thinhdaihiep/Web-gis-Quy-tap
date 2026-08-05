@@ -16,6 +16,7 @@ import { SplashScreen } from './components/SplashScreen';
 import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode } from './types';
 import {
   saveImportedFeaturesToFirestore,
+  saveSingleFeatureToFirestore,
   loadSharedFeaturesFromFirestore,
   loadFieldAliasDictionaryFromFirestore,
   loadLayerConfigsFromFirestore,
@@ -119,16 +120,8 @@ export default function App() {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setMapFeatures((prev) => {
-            const merged = prev.filter((f) => !isDemoFeatureId(f.id));
-            parsed.forEach((item: GeoJsonFeatureItem) => {
-              if (
-                !isDemoFeatureId(item.id) &&
-                !merged.some((m) => String(m.id).toLowerCase() === String(item.id).toLowerCase())
-              ) {
-                merged.push(item);
-              }
-            });
-            return merged;
+            const list = [...prev, ...parsed].filter((f) => !isDemoFeatureId(f.id));
+            return deduplicateFeaturesList(list);
           });
         }
       }
@@ -143,21 +136,11 @@ export default function App() {
         const dbFeatures = await loadSharedFeaturesFromFirestore();
         if (dbFeatures && dbFeatures.length > 0) {
           setMapFeatures((prev) => {
-            const merged = prev.filter((f) => !isDemoFeatureId(f.id));
-            dbFeatures.forEach((dbFeat) => {
-              if (isDemoFeatureId(dbFeat.id)) return;
-              const idx = merged.findIndex((m) => String(m.id).toLowerCase() === String(dbFeat.id).toLowerCase());
-              if (idx !== -1) {
-                merged[idx] = dbFeat;
-              } else {
-                merged.push(dbFeat);
-              }
-            });
-            const cleanList = merged.filter((f) => !isDemoFeatureId(f.id));
+            const merged = deduplicateFeaturesList([...prev, ...dbFeatures].filter((f) => !isDemoFeatureId(f.id)));
             try {
-              localStorage.setItem('gis_local_map_features', JSON.stringify(cleanList));
+              localStorage.setItem('gis_local_map_features', JSON.stringify(merged));
             } catch (e) {}
-            return cleanList;
+            return merged;
           });
         }
 
@@ -581,7 +564,7 @@ export default function App() {
 
     originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(updatedFeat));
     setSelectedFeature(updatedFeat);
-    saveImportedFeaturesToFirestore([updatedFeat]);
+    saveSingleFeatureToFirestore(updatedFeat);
 
     if (targetStatus === 'cho_phe_duyet') {
       showToast('Đã lưu bản nháp và chuyển vào hàng chờ phê duyệt.');
@@ -625,7 +608,7 @@ export default function App() {
       const updatedList = prev.map((f) => (f.id === featureId ? { ...f, status: 'xac_dinh' as const } : f));
       const targetFeat = updatedList.find((f) => f.id === featureId);
       if (targetFeat) {
-        saveImportedFeaturesToFirestore([targetFeat]).catch((err) =>
+        saveSingleFeatureToFirestore(targetFeat).catch((err) =>
           console.warn('Lỗi đồng bộ phê duyệt lên Firestore:', err)
         );
       }
