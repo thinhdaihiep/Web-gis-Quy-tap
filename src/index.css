@@ -75,10 +75,10 @@
   visibility: visible !important;
 }
 
-/* Ensure Leaflet Popups are rendered ON TOP of map tool buttons and overlay controls */
+/* Ensure Leaflet Popups are rendered ON TOP of map controls but BELOW sidebars and panels */
 .leaflet-popup-pane,
 .leaflet-popup {
-  z-index: 1500 !important;
+  z-index: 600 !important;
 }
 
 /* Ensure Map Controls and Overlay Tool Buttons have lower z-index priority than Popups */

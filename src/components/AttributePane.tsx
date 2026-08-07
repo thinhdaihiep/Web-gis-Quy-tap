@@ -7,8 +7,9 @@ import {
   Clock,
   Trash2,
   Lock,
+  RotateCw,
 } from 'lucide-react';
-import { getFieldAlias } from '../fieldAlias';
+import { getFieldAlias, sortPropertyRows } from '../fieldAlias';
 
 interface AttributePaneProps {
   feature: GeoJsonFeatureItem | null;
@@ -16,6 +17,7 @@ interface AttributePaneProps {
   currentRole: UserRole;
   onSave: (feature: GeoJsonFeatureItem, status: 'xac_dinh' | 'cho_phe_duyet') => void;
   onDelete?: (featureId: string) => void;
+  onReload?: (featureId: string) => Promise<void>;
   onClose: () => void;
 }
 
@@ -31,19 +33,29 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   currentRole,
   onSave,
   onDelete,
+  onReload,
   onClose,
 }) => {
-  if (!feature) return null;
-
   const [name, setName] = useState<string>('');
   const [selectedLayerId, setSelectedLayerId] = useState<string>('');
   const [phanLoai, setPhanLoai] = useState<number>(1);
   const [propRows, setPropRows] = useState<EditablePropertyRow[]>([]);
   const [showRawFieldName, setShowRawFieldName] = useState<boolean>(false);
+  const [isReloading, setIsReloading] = useState<boolean>(false);
 
   // Resizable pane width state
   const [paneWidth, setPaneWidth] = useState<number>(380);
   const [isResizing, setIsResizing] = useState<boolean>(false);
+
+  const handleReloadClick = async () => {
+    if (!onReload || !feature) return;
+    setIsReloading(true);
+    try {
+      await onReload(String(feature.id));
+    } finally {
+      setIsReloading(false);
+    }
+  };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -87,28 +99,60 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   useEffect(() => {
     if (feature) {
       setName(feature.name || feature.properties?.Ten || feature.properties?.ten || '');
-      setSelectedLayerId(feature.layerId || (layers.length > 0 ? layers[0].id : 'layer2_tran_danh'));
+      const featLayerId = feature.layerId || (layers.length > 0 ? layers[0].id : 'layer2_tran_danh');
+      setSelectedLayerId(featLayerId);
 
       const pLoai = feature.properties?.PhanLoai ?? feature.properties?.phanLoai ?? 1;
       setPhanLoai(Number(pLoai) || 1);
 
-      const existingProps = feature.properties || {};
+      const targetLayer = layers.find((l) => l.id === featLayerId);
+      const isBattleLayer =
+        featLayerId === 'layer2_tran_danh' ||
+        targetLayer?.name.toLowerCase().includes('trận đánh') ||
+        targetLayer?.name.toLowerCase().includes('tran danh') ||
+        targetLayer?.name.toLowerCase().includes('chiến dịch') ||
+        targetLayer?.name.toLowerCase().includes('chien dich');
+
+      const existingProps: Record<string, any> = { ...(feature.properties || {}) };
+
+      delete existingProps['TrangThaiMoi'];
+      delete existingProps['trang_thai_moi'];
+      delete existingProps['trangthaimoi'];
+      delete existingProps['ChiHuy'];
+      delete existingProps['chihuy'];
+      delete existingProps['chi_huy'];
+      delete existingProps['KetQua'];
+      delete existingProps['ketqua'];
+      delete existingProps['ket_qua'];
+
+      if (isBattleLayer) {
+        const hasBenTa = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'benta');
+        if (!hasBenTa) existingProps['BenTa'] = '';
+
+        const hasBenDich = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'bendich');
+        if (!hasBenDich) existingProps['BenDich'] = '';
+
+        const hasThoiGian = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'thoigian');
+        if (!hasThoiGian) existingProps['ThoiGian'] = '';
+
+        const hasGhiChu = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'ghichu');
+        if (!hasGhiChu) existingProps['GhiChu'] = '';
+      }
+
       const handledKeys = new Set(['ten', 'Ten', 'name', 'Name', 'phanloai', 'PhanLoai', 'phanLoai']);
 
       const rows: EditablePropertyRow[] = [];
 
       Object.entries(existingProps).forEach(([k, v]) => {
-        if (handledKeys.has(k) || v === null || v === undefined) return;
+        if (handledKeys.has(k)) return;
 
         const alias = getFieldAlias(k);
-        // Only include fields that have a defined alias in fieldAlias dictionary
-        if (alias) {
-          rows.push({
-            rawKey: k,
-            aliasLabel: alias,
-            value: String(v),
-          });
-        }
+
+        rows.push({
+          rawKey: k,
+          aliasLabel: alias || k,
+          value: v !== null && v !== undefined ? String(v) : '',
+        });
       });
 
       // Ensure OBJECTID is always present and placed at the top as a locked field
@@ -128,9 +172,11 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
         });
       }
 
-      setPropRows(rows);
+      setPropRows(sortPropertyRows(rows));
     }
   }, [feature, layers]);
+
+  if (!feature) return null;
 
   const handleValueChange = (rawKey: string, val: string) => {
     setPropRows((prev) =>
@@ -175,7 +221,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   return (
     <aside
       style={{ width: `${paneWidth}px` }}
-      className="relative bg-white border-l border-slate-200 h-full shadow-2xl flex flex-col z-[1500] shrink-0 animate-in slide-in-from-right duration-200 select-none"
+      className="relative bg-white border-l border-slate-200 h-full shadow-2xl flex flex-col z-[2000] shrink-0 animate-in slide-in-from-right duration-200"
     >
       {/* Resizable handle on the left edge */}
       <div
@@ -208,13 +254,27 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
           </div>
         </div>
 
-        <button
-          onClick={onClose}
-          className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"
-          title="Đóng Bảng thuộc tính"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {onReload && (
+            <button
+              onClick={handleReloadClick}
+              disabled={isReloading}
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0 disabled:opacity-50 flex items-center gap-1"
+              title="Tải lại geometry & thuộc tính đối tượng này từ CSDL Firebase"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${isReloading ? 'animate-spin text-blue-400' : ''}`} />
+              <span className="hidden sm:inline text-[10px] font-bold">Reload</span>
+            </button>
+          )}
+
+          <button
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"
+            title="Đóng Bảng thuộc tính"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Pane Body: 2-Column Table Grid */}
@@ -303,7 +363,14 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
               )}
 
               {/* Dynamic Property Rows (Locked for OBJECTID / Mã số) */}
-              {propRows.map((row) => {
+              {propRows
+                .filter(
+                  (row) =>
+                    showRawFieldName ||
+                    isLockedField(row.rawKey, row.aliasLabel) ||
+                    !!getFieldAlias(row.rawKey)
+                )
+                .map((row) => {
                 const locked = isLockedField(row.rawKey, row.aliasLabel);
                 const displayKey = showRawFieldName ? row.rawKey : row.aliasLabel;
                 return (
@@ -346,23 +413,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       </div>
 
       {/* Pane Footer Actions */}
-      <div className="bg-slate-50 border-t border-slate-200 p-3 flex items-center justify-between shrink-0 gap-2">
-        {onDelete && (
-          <button
-            type="button"
-            onClick={() => {
-              if (confirm('Bạn có chắc chắn muốn xóa đối tượng này?')) {
-                onDelete(feature.id);
-                onClose();
-              }
-            }}
-            className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg font-bold text-xs transition cursor-pointer flex items-center gap-1"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Xóa</span>
-          </button>
-        )}
-
+      <div className="bg-slate-50 border-t border-slate-200 p-3 flex items-center justify-end shrink-0 gap-2">
         <div className="flex items-center gap-1.5 ml-auto">
           <button
             type="button"

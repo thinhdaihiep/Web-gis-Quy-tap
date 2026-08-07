@@ -9,7 +9,7 @@ import {
   Table,
   Layers,
 } from 'lucide-react';
-import { getFieldAlias } from '../fieldAlias';
+import { getFieldAlias, sortPropertyRows } from '../fieldAlias';
 
 interface FeatureEditModalProps {
   isOpen: boolean;
@@ -36,8 +36,6 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   onDelete,
   onClose,
 }) => {
-  if (!isOpen || !feature) return null;
-
   const [name, setName] = useState<string>('');
   const [selectedLayerId, setSelectedLayerId] = useState<string>('');
   const [phanLoai, setPhanLoai] = useState<number>(1);
@@ -67,22 +65,51 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       setEditorNotes(feature.editorNotes || '');
 
       // Parse custom dynamic properties
-      const existingProps = feature.properties || {};
+      const targetLayer = layers.find((l) => l.id === (feature.layerId || 'layer2_tran_danh'));
+      const isBattleLayer =
+        feature.layerId === 'layer2_tran_danh' ||
+        targetLayer?.name.toLowerCase().includes('trận đánh') ||
+        targetLayer?.name.toLowerCase().includes('tran danh') ||
+        targetLayer?.name.toLowerCase().includes('chiến dịch') ||
+        targetLayer?.name.toLowerCase().includes('chien dich');
+
+      const existingProps: Record<string, any> = { ...(feature.properties || {}) };
+
+      delete existingProps['TrangThaiMoi'];
+      delete existingProps['trang_thai_moi'];
+      delete existingProps['trangthaimoi'];
+      delete existingProps['ChiHuy'];
+      delete existingProps['chihuy'];
+      delete existingProps['chi_huy'];
+      delete existingProps['KetQua'];
+      delete existingProps['ketqua'];
+      delete existingProps['ket_qua'];
+
+      if (isBattleLayer) {
+        const hasBenTa = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'benta');
+        if (!hasBenTa) existingProps['BenTa'] = '';
+
+        const hasBenDich = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'bendich');
+        if (!hasBenDich) existingProps['BenDich'] = '';
+      }
+
       const knownKeys = ['Ten', 'ten', 'PhanLoai', 'phanLoai', 'ThoiGian', 'thoiGian', 'DonVi', 'donVi', 'GhiChu', 'ghiChu', 'MoTa'];
       
       const rows: AttributeRow[] = [];
       Object.entries(existingProps).forEach(([k, v]) => {
-        if (!knownKeys.includes(k) && v !== null && v !== undefined) {
+        if (!knownKeys.includes(k)) {
           rows.push({
             id: `row-${Math.random().toString(36).substr(2, 9)}`,
             key: k,
-            value: String(v),
+            value: v !== null && v !== undefined ? String(v) : '',
           });
         }
       });
-      setCustomRows(rows);
+      setCustomRows(sortPropertyRows(rows));
     }
   }, [feature, layers]);
+
+  if (!isOpen || !feature) return null;
 
   const handleAddRow = () => {
     if (!newKey.trim()) return;

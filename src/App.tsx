@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import L from 'leaflet';
 import { Header } from './components/Header';
-import { SearchFilterBar } from './components/SearchFilterBar';
+import { SearchPane } from './components/SearchPane';
 import { MapComponent } from './components/Map';
 import { LeftSidebar } from './components/LeftSidebar';
 import { RightSidebar } from './components/RightSidebar';
@@ -17,6 +17,7 @@ import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRol
 import {
   saveImportedFeaturesToFirestore,
   saveSingleFeatureToFirestore,
+  fetchSingleFeatureFromFirestore,
   loadSharedFeaturesFromFirestore,
   loadFieldAliasDictionaryFromFirestore,
   loadLayerConfigsFromFirestore,
@@ -24,8 +25,78 @@ import {
   deleteFeatureFromFirestore,
   isDemoFeatureId,
 } from './firebaseService';
-import { extractObjectId, deduplicateFeaturesList } from './fieldAlias';
-import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle } from 'lucide-react';
+import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
+import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw } from 'lucide-react';
+
+function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: any } {
+  if (!featOrGeom) return { type: 'Point', coordinates: [0, 0] };
+  const type = featOrGeom.type || featOrGeom.geometry?.type || 'Point';
+  const coordinates = featOrGeom.coordinates || featOrGeom.geometry?.coordinates || [0, 0];
+  return { type, coordinates };
+}
+
+function computeFeatureCenter(featOrGeom: any): [number, number] {
+  const { type, coordinates } = getFeatureCoordsAndType(featOrGeom);
+  if (type === 'Point' && Array.isArray(coordinates) && typeof coordinates[0] === 'number') {
+    return [coordinates[0], coordinates[1]];
+  }
+
+  let totalLng = 0;
+  let totalLat = 0;
+  let count = 0;
+
+  const extract = (arr: any) => {
+    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+      totalLng += arr[0];
+      totalLat += arr[1];
+      count++;
+    } else if (Array.isArray(arr)) {
+      arr.forEach(extract);
+    }
+  };
+
+  extract(coordinates);
+  if (count === 0) return [0, 0];
+  return [totalLng / count, totalLat / count];
+}
+
+function shiftFeatureCoordinates(featOrGeom: any, deltaLng: number, deltaLat: number): any {
+  const { coordinates } = getFeatureCoordsAndType(featOrGeom);
+
+  const shift = (arr: any): any => {
+    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+      return [
+        Number((arr[0] + deltaLng).toFixed(6)),
+        Number((arr[1] + deltaLat).toFixed(6)),
+      ];
+    }
+    if (Array.isArray(arr)) {
+      return arr.map(shift);
+    }
+    return arr;
+  };
+
+  return shift(coordinates);
+}
+
+function isInvalidOrTargetToDeleteFeature(f: any): boolean {
+  if (!f) return true;
+  if (isDemoFeatureId(f.id)) return true;
+  const strId = String(f.id || '');
+  const strObjId = String(
+    f.properties?.OBJECTID ||
+      f.properties?.objectid ||
+      f.properties?.ObjectID ||
+      f.objectid ||
+      f.OBJECTID ||
+      ''
+  );
+
+  if (strId.includes('1785978345694') || strObjId.includes('1785978345694')) {
+    return true;
+  }
+  return false;
+}
 
 export default function App() {
   const [currentRole, setCurrentRole] = useState<UserRole>('admin');
@@ -51,6 +122,11 @@ export default function App() {
   const [isFieldAliasModalOpen, setIsFieldAliasModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<{
+    type: 'save' | 'delete';
+    feature: GeoJsonFeatureItem;
+    message: string;
+  } | null>(null);
 
   // Map Editing (Phase 3) state
   const [interactionMode, setInteractionMode] = useState<MapInteractionMode>('hand');
@@ -60,6 +136,13 @@ export default function App() {
   const [isFeatureEditModalOpen, setIsFeatureEditModalOpen] = useState<boolean>(false);
   const [drawingPointsCount, setDrawingPointsCount] = useState<number>(0);
   const drawingVerticesRef = useRef<[number, number][]>([]);
+
+  // Clipboard & Pending Ghost Paste State
+  const [clipboard, setClipboard] = useState<{
+    feature: GeoJsonFeatureItem;
+    mode: 'copy' | 'cut';
+  } | null>(null);
+  const [pendingPasteFeature, setPendingPasteFeature] = useState<GeoJsonFeatureItem | null>(null);
 
   const handleAliasesUpdated = () => {
     setAliasVersion((prev) => prev + 1);
@@ -96,9 +179,16 @@ export default function App() {
   // Pane Visibility States (Responsive & Mobile-optimized - left sidebar visible by default on desktop)
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState<boolean>(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState<boolean>(false);
+  const [isSearchPaneOpen, setIsSearchPaneOpen] = useState<boolean>(false);
 
   const toggleLeftSidebar = () => {
-    setIsLeftSidebarOpen((prev) => !prev);
+    setIsLeftSidebarOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setIsSearchPaneOpen(false);
+      }
+      return next;
+    });
     setTimeout(() => mapInstance?.invalidateSize(), 200);
   };
 
@@ -107,9 +197,50 @@ export default function App() {
     setTimeout(() => mapInstance?.invalidateSize(), 200);
   };
 
+  const toggleSearchPane = () => {
+    setIsSearchPaneOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setIsLeftSidebarOpen(false);
+      }
+      return next;
+    });
+    setTimeout(() => mapInstance?.invalidateSize(), 200);
+  };
+
+  const handleJumpToFeature = (feat: GeoJsonFeatureItem) => {
+    setSelectedFeature(feat);
+
+    // Bật hiển thị layer nếu layer đó đang bị ẩn
+    if (feat.layerId) {
+      setLayers((prevLayers) =>
+        prevLayers.map((l) => (l.id === feat.layerId ? { ...l, visible: true } : l))
+      );
+    }
+
+    if (!mapInstance) return;
+
+    const points: [number, number][] = [];
+    const collectCoords = (arr: any) => {
+      if (Array.isArray(arr) && arr.length === 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+        points.push([arr[1], arr[0]]);
+      } else if (Array.isArray(arr)) {
+        arr.forEach(collectCoords);
+      }
+    };
+
+    collectCoords(feat.coordinates);
+
+    if (points.length === 0) return;
+
+    const bounds = L.latLngBounds(points);
+    const center = bounds.getCenter();
+    mapInstance.flyTo(center, 14, { duration: 1.0 });
+  };
+
   // App initial loading splash state
   const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
-  const [splashStatusText, setSplashStatusText] = useState<string>('Nạp bộ nhớ đệm local...');
+  const [splashStatusText, setSplashStatusText] = useState<string>('Nạp bộ nhớ đệm cục bộ...');
 
   // Load shared features, field aliases, and layer configs from Firestore database on mount
   useEffect(() => {
@@ -120,7 +251,7 @@ export default function App() {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setMapFeatures((prev) => {
-            const list = [...prev, ...parsed].filter((f) => !isDemoFeatureId(f.id));
+            const list = [...prev, ...parsed].filter((f) => !isInvalidOrTargetToDeleteFeature(f));
             return deduplicateFeaturesList(list);
           });
         }
@@ -131,12 +262,12 @@ export default function App() {
 
     async function initSharedDb() {
       try {
-        setSplashStatusText('Đang kết nối CSDL Firestore & tải dữ liệu không gian...');
+        setSplashStatusText('Đang kết nối CSDL & tải dữ liệu không gian...');
         // 1. Load shared map features
         const dbFeatures = await loadSharedFeaturesFromFirestore();
         if (dbFeatures && dbFeatures.length > 0) {
           setMapFeatures((prev) => {
-            const merged = deduplicateFeaturesList([...prev, ...dbFeatures].filter((f) => !isDemoFeatureId(f.id)));
+            const merged = deduplicateFeaturesList([...prev, ...dbFeatures].filter((f) => !isInvalidOrTargetToDeleteFeature(f)));
             try {
               localStorage.setItem('gis_local_map_features', JSON.stringify(merged));
             } catch (e) {}
@@ -337,17 +468,15 @@ export default function App() {
     );
   };
 
-  const handleRenameLayer = (layerId: string, newName: string) => {
-    setLayers((prevLayers) => {
-      const updated = prevLayers.map((l) =>
-        l.id === layerId ? { ...l, name: newName } : l
-      );
-      saveLayerConfigsToFirestore(updated).catch((err) =>
-        console.warn('Lỗi đồng bộ tên lớp lên Firestore:', err)
-      );
-      return updated;
-    });
-    showToast(`Đã đổi tên lớp thành: "${newName}" và lưu lên CSDL dùng chung`);
+  const handleRenameLayer = async (layerId: string, newName: string) => {
+    const updated = layers.map((l) => (l.id === layerId ? { ...l, name: newName } : l));
+    setLayers(updated);
+    const success = await saveLayerConfigsToFirestore(updated);
+    if (success) {
+      showToast(`Đã đổi tên lớp thành: "${newName}" và lưu lên Firebase thành công!`);
+    } else {
+      showToast(`Đã đổi tên lớp thành: "${newName}" (đã lưu tạm máy cục bộ).`);
+    }
   };
 
   const handleZoomToLayer = (layerId: string) => {
@@ -551,25 +680,91 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
 
+    // 1. Instantly update local state and localStorage cache
     setMapFeatures((prev) => {
-      const idx = prev.findIndex((f) => f.id === updatedFeat.id);
+      const idx = prev.findIndex(
+        (f) => String(f.id) === String(updatedFeat.id) || getItemUniqueKey(f) === getItemUniqueKey(updatedFeat)
+      );
+      let updatedList: GeoJsonFeatureItem[];
       if (idx >= 0) {
         const copy = [...prev];
         copy[idx] = updatedFeat;
-        return copy;
+        updatedList = copy;
       } else {
-        return [...prev, updatedFeat];
+        updatedList = [...prev, updatedFeat];
       }
+      try {
+        localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
+      } catch (e) {}
+      return updatedList;
     });
 
     originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(updatedFeat));
     setSelectedFeature(updatedFeat);
-    saveSingleFeatureToFirestore(updatedFeat);
 
+    // 2. Immediate feedback
     if (targetStatus === 'cho_phe_duyet') {
       showToast('Đã lưu bản nháp và chuyển vào hàng chờ phê duyệt.');
     } else {
-      showToast('Đã lưu thay đổi đối tượng và đồng bộ CSDL thành công!');
+      showToast('Đã lưu thay đổi thành công!');
+    }
+
+    // 3. Background sync to Firebase
+    saveSingleFeatureToFirestore(updatedFeat)
+      .then((success) => {
+        if (success) {
+          if (syncError && syncError.feature.id === updatedFeat.id) {
+            setSyncError(null);
+          }
+        } else {
+          setSyncError({
+            type: 'save',
+            feature: updatedFeat,
+            message: 'Chưa thể đồng bộ đối tượng lên CSDL Firebase.',
+          });
+          showToast('Lưu ý: Chưa đồng bộ được CSDL Firebase.');
+        }
+      })
+      .catch((err) => {
+        setSyncError({
+          type: 'save',
+          feature: updatedFeat,
+          message: 'Lỗi kết nối Firebase: ' + (err?.message || 'Lỗi mạng'),
+        });
+        showToast('Chưa đồng bộ được CSDL Firebase.');
+      });
+  };
+
+  const handleReloadFeature = async (featureId: string) => {
+    if (!featureId) return;
+    try {
+      const freshFeature = await fetchSingleFeatureFromFirestore(featureId);
+      if (freshFeature) {
+        setMapFeatures((prev) => {
+          const idx = prev.findIndex(
+            (f) => String(f.id) === String(featureId) || getItemUniqueKey(f) === getItemUniqueKey(freshFeature)
+          );
+          let updatedList: GeoJsonFeatureItem[];
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = freshFeature;
+            updatedList = copy;
+          } else {
+            updatedList = [...prev, freshFeature];
+          }
+          try {
+            localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
+          } catch (e) {}
+          return updatedList;
+        });
+        setSelectedFeature(freshFeature);
+        originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(freshFeature));
+        showToast('Đã tải lại dữ liệu đối tượng từ CSDL Firebase thành công!');
+      } else {
+        showToast('Không tìm thấy bản ghi đối tượng này trên CSDL Firebase.');
+      }
+    } catch (err) {
+      showToast('Không thể kết nối CSDL Firebase để tải lại.');
     }
   };
 
@@ -586,35 +781,362 @@ export default function App() {
   };
 
   const handleDeleteFeature = (featureId: string) => {
+    const targetFeat = mapFeatures.find((f) => String(f.id) === String(featureId));
+
+    // 1. Immediate local removal
     setMapFeatures((prev) => {
-      const updated = prev.filter((f) => f.id !== featureId);
+      const updated = prev.filter((f) => String(f.id) !== String(featureId));
       try {
         localStorage.setItem('gis_local_map_features', JSON.stringify(updated));
       } catch (e) {}
       return updated;
     });
-    deleteFeatureFromFirestore(featureId).catch((err) =>
-      console.warn('Lỗi khi xóa đối tượng khỏi Firestore:', err)
-    );
-    if (selectedFeature?.id === featureId) {
+
+    if (selectedFeature && String(selectedFeature.id) === String(featureId)) {
       setSelectedFeature(null);
       originalSelectedFeatureRef.current = null;
     }
-    showToast('Đã xóa đối tượng và đồng bộ CSDL thành công!');
+
+    showToast('Đã xóa đối tượng thành công!');
+
+    // 2. Background sync delete to Firebase
+    deleteFeatureFromFirestore(featureId)
+      .then((success) => {
+        if (success) {
+          if (syncError && syncError.feature.id === featureId) {
+            setSyncError(null);
+          }
+        } else if (targetFeat) {
+          setSyncError({
+            type: 'delete',
+            feature: targetFeat,
+            message: 'Chưa thể xóa đối tượng khỏi CSDL Firebase.',
+          });
+          showToast('Lưu ý: Chưa thể đồng bộ xóa lên Firebase.');
+        }
+      })
+      .catch(() => {
+        if (targetFeat) {
+          setSyncError({
+            type: 'delete',
+            feature: targetFeat,
+            message: 'Lỗi kết nối khi xóa khỏi CSDL Firebase.',
+          });
+        }
+      });
   };
 
-  const handleApproveDraft = (featureId: string) => {
-    setMapFeatures((prev) => {
-      const updatedList = prev.map((f) => (f.id === featureId ? { ...f, status: 'xac_dinh' as const } : f));
-      const targetFeat = updatedList.find((f) => f.id === featureId);
-      if (targetFeat) {
-        saveSingleFeatureToFirestore(targetFeat).catch((err) =>
-          console.warn('Lỗi đồng bộ phê duyệt lên Firestore:', err)
-        );
+  const handleRetrySync = async () => {
+    if (!syncError) return;
+    showToast('Đang thử đồng bộ lại với Firebase...');
+    if (syncError.type === 'save') {
+      const success = await saveSingleFeatureToFirestore(syncError.feature);
+      if (success) {
+        setSyncError(null);
+        showToast('Thử lại thành công! CSDL Firebase đã được cập nhật.');
+      } else {
+        showToast('Thử lại thất bại. Vui lòng kiểm tra lại kết nối mạng!');
       }
+    } else if (syncError.type === 'delete') {
+      const success = await deleteFeatureFromFirestore(syncError.feature.id);
+      if (success) {
+        setSyncError(null);
+        showToast('Thử lại xóa trên Firebase thành công!');
+      } else {
+        showToast('Thử lại xóa trên Firebase thất bại!');
+      }
+    }
+  };
+
+  const handleReloadFailedSync = async () => {
+    if (!syncError) return;
+    showToast('Đang khôi phục dữ liệu gốc từ CSDL Firebase...');
+    try {
+      const freshFeature = await fetchSingleFeatureFromFirestore(syncError.feature.id);
+      if (freshFeature) {
+        setMapFeatures((prev) => {
+          const idx = prev.findIndex(
+            (f) => String(f.id) === String(syncError.feature.id) || getItemUniqueKey(f) === getItemUniqueKey(freshFeature)
+          );
+          let updatedList: GeoJsonFeatureItem[];
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = freshFeature;
+            updatedList = copy;
+          } else {
+            updatedList = [...prev, freshFeature];
+          }
+          try {
+            localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
+          } catch (e) {}
+          return updatedList;
+        });
+        setSelectedFeature(freshFeature);
+        originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(freshFeature));
+        showToast('Đã khôi phục dữ liệu đối tượng từ Firebase thành công!');
+      } else {
+        if (syncError.type === 'save') {
+          setMapFeatures((prev) => {
+            const updatedList = prev.filter((f) => String(f.id) !== String(syncError.feature.id));
+            try {
+              localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
+            } catch (e) {}
+            return updatedList;
+          });
+          if (selectedFeature && String(selectedFeature.id) === String(syncError.feature.id)) {
+            setSelectedFeature(null);
+          }
+          showToast('Đối tượng chưa tồn tại trên Firebase, đã hủy bản nháp.');
+        } else if (syncError.type === 'delete') {
+          showToast('Xác nhận đối tượng không còn trên Firebase.');
+        }
+      }
+      setSyncError(null);
+    } catch (e) {
+      showToast('Lỗi kết nối khi khôi phục từ Firebase.');
+    }
+  };
+
+  // --- Copy, Cut, Paste Handlers ---
+  const handleCopy = () => {
+    if (!selectedFeature) return;
+    setClipboard({ feature: selectedFeature, mode: 'copy' });
+    setPendingPasteFeature(null);
+    showToast(`Đã sao chép đối tượng: "${selectedFeature.name || 'GIS'}"`);
+  };
+
+  const handleCut = () => {
+    if (!selectedFeature) return;
+    setClipboard({ feature: selectedFeature, mode: 'cut' });
+    setPendingPasteFeature(null);
+    showToast(`Đã cắt đối tượng: "${selectedFeature.name || 'GIS'}"`);
+  };
+
+  const handlePaste = () => {
+    if (!clipboard) {
+      showToast('Chưa sao chép hoặc cắt đối tượng nào!');
+      return;
+    }
+    const targetLoc = cursorLocation || userLocation;
+    if (!targetLoc) {
+      showToast('Vui lòng kích chọn một vị trí trên bản đồ để dán!');
+      return;
+    }
+
+    const center = computeFeatureCenter(clipboard.feature);
+    const deltaLng = targetLoc.lng - center[0];
+    const deltaLat = targetLoc.lat - center[1];
+
+    const shiftedCoords = shiftFeatureCoordinates(clipboard.feature, deltaLng, deltaLat);
+
+    const newId = `feat_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+    // Generate small, sequential integer OBJECTID (e.g., 1, 2, 3... 153)
+    let maxObjId = 0;
+    mapFeatures.forEach((f) => {
+      const objId = extractObjectId(f.properties) || extractObjectId(f);
+      if (typeof objId === 'number' && !isNaN(objId) && objId > maxObjId && objId < 10000000) {
+        maxObjId = objId;
+      }
+    });
+    const newObjectId = maxObjId > 0 ? maxObjId + 1 : 1;
+
+    const newProps: Record<string, any> = { ...(clipboard.feature.properties || {}) };
+
+    ['OBJECTID', 'objectid', 'ObjectID', 'objectId', 'FID', 'fid'].forEach((k) => {
+      if (k in newProps) newProps[k] = newObjectId;
+    });
+    if (!('OBJECTID' in newProps) && !('objectid' in newProps)) {
+      newProps['OBJECTID'] = newObjectId;
+    }
+
+    ['id', 'ID', 'Id'].forEach((k) => {
+      if (k in newProps) newProps[k] = newId;
+    });
+
+    let newName = clipboard.feature.name || 'Đối tượng';
+    if (clipboard.mode === 'copy') {
+      if (!newName.includes('(Bản sao)')) newName = `${newName} (Bản sao)`;
+      if (newProps['Ten'] && !String(newProps['Ten']).includes('(Bản sao)')) {
+        newProps['Ten'] = `${newProps['Ten']} (Bản sao)`;
+      } else if (newProps['ten'] && !String(newProps['ten']).includes('(Bản sao)')) {
+        newProps['ten'] = `${newProps['ten']} (Bản sao)`;
+      }
+    }
+
+    const featureType = clipboard.feature.type || (clipboard.feature as any).geometry?.type || 'Point';
+
+    const candidate: GeoJsonFeatureItem = {
+      ...clipboard.feature,
+      id: newId,
+      name: newName,
+      type: featureType,
+      coordinates: shiftedCoords,
+      geometry: {
+        type: featureType,
+        coordinates: shiftedCoords,
+      },
+      properties: newProps,
+    };
+
+    setPendingPasteFeature(candidate);
+  };
+
+  const handleConfirmPaste = () => {
+    if (!pendingPasteFeature || !clipboard) return;
+
+    const modeName = clipboard.mode === 'cut' ? 'di chuyển' : 'dán bản sao';
+    const featureToSave = { ...pendingPasteFeature };
+
+    if (clipboard.mode === 'cut') {
+      const originalId = clipboard.feature.id;
+      setMapFeatures((prev) => prev.filter((f) => f.id !== originalId));
+      deleteFeatureFromFirestore(originalId).catch((err) =>
+        console.warn('Lỗi xóa đối tượng cũ khi cut:', err)
+      );
+    }
+
+    // 1. Immediate local update
+    setMapFeatures((prev) => {
+      const nextList = deduplicateFeaturesList([...prev, featureToSave]);
+      try {
+        localStorage.setItem('gis_local_map_features', JSON.stringify(nextList));
+      } catch (e) {}
+      return nextList;
+    });
+
+    setSelectedFeature(featureToSave);
+    setPendingPasteFeature(null);
+    setClipboard(null);
+
+    showToast(`Đã ${modeName} đối tượng "${featureToSave.name}" thành công!`);
+
+    // 2. Background sync
+    saveSingleFeatureToFirestore(featureToSave)
+      .then((success) => {
+        if (success) {
+          if (syncError && syncError.feature.id === featureToSave.id) {
+            setSyncError(null);
+          }
+        } else {
+          setSyncError({
+            type: 'save',
+            feature: featureToSave,
+            message: `Chưa thể đồng bộ đối tượng ${modeName} lên CSDL Firebase.`,
+          });
+        }
+      })
+      .catch(() => {
+        setSyncError({
+          type: 'save',
+          feature: featureToSave,
+          message: `Lỗi kết nối Firebase khi ${modeName}.`,
+        });
+      });
+  };
+
+  const handleCancelPaste = () => {
+    setPendingPasteFeature(null);
+  };
+
+  // Auto update ghost paste position when user clicks a new map point
+  useEffect(() => {
+    if (!pendingPasteFeature || !clipboard || !cursorLocation) return;
+    const center = computeFeatureCenter(clipboard.feature);
+    const deltaLng = cursorLocation.lng - center[0];
+    const deltaLat = cursorLocation.lat - center[1];
+    const shiftedCoords = shiftFeatureCoordinates(clipboard.feature, deltaLng, deltaLat);
+    const featureType = clipboard.feature.type || (clipboard.feature as any).geometry?.type || 'Point';
+
+    setPendingPasteFeature((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        type: featureType,
+        coordinates: shiftedCoords,
+        geometry: {
+          type: featureType,
+          coordinates: shiftedCoords,
+        },
+      };
+    });
+  }, [cursorLocation]);
+
+  // Keyboard shortcut listener for Ctrl+C, Ctrl+X, Ctrl+V in pointer mode
+  useEffect(() => {
+    if (interactionMode !== 'pointer') return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        if (selectedFeature) {
+          e.preventDefault();
+          handleCopy();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
+        if (selectedFeature) {
+          e.preventDefault();
+          handleCut();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        if (clipboard && (cursorLocation || userLocation)) {
+          e.preventDefault();
+          handlePaste();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [interactionMode, selectedFeature, clipboard, cursorLocation, userLocation]);
+
+  const handleApproveDraft = (featureId: string) => {
+    const targetFeat = mapFeatures.find((f) => f.id === featureId);
+    if (!targetFeat) return;
+    const updatedFeat: GeoJsonFeatureItem = { ...targetFeat, status: 'xac_dinh' as const };
+
+    // 1. Immediate local update
+    setMapFeatures((prev) => {
+      const updatedList = prev.map((f) => (f.id === featureId ? updatedFeat : f));
+      try {
+        localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
+      } catch (e) {}
       return updatedList;
     });
-    showToast('Đã phê duyệt bản ghi và đồng bộ CSDL thành công!');
+
+    showToast('Đã phê duyệt bản ghi!');
+
+    // 2. Background sync
+    saveSingleFeatureToFirestore(updatedFeat)
+      .then((success) => {
+        if (success) {
+          if (syncError && syncError.feature.id === featureId) {
+            setSyncError(null);
+          }
+        } else {
+          setSyncError({
+            type: 'save',
+            feature: updatedFeat,
+            message: 'Chưa thể đồng bộ phê duyệt lên CSDL Firebase.',
+          });
+        }
+      })
+      .catch(() => {
+        setSyncError({
+          type: 'save',
+          feature: updatedFeat,
+          message: 'Lỗi kết nối Firebase khi phê duyệt.',
+        });
+      });
   };
 
   const handleRejectDraft = (featureId: string) => {
@@ -642,24 +1164,21 @@ export default function App() {
         onToggleLeftSidebar={toggleLeftSidebar}
         isRightSidebarOpen={isRightSidebarOpen}
         onToggleRightSidebar={toggleRightSidebar}
+        isSearchPaneOpen={isSearchPaneOpen}
+        onToggleSearchPane={toggleSearchPane}
         onOpenFieldAliasModal={() => setIsFieldAliasModalOpen(true)}
         isMobile={isMobile}
-      />
-
-      {/* Mobile-Optimized Search Bar below Title Bar */}
-      <SearchFilterBar
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
       />
 
       {/* Main App Body */}
       <main className="flex flex-1 overflow-hidden relative">
         {/* Mobile Backdrop when sidebars are open as overlays on small screens */}
-        {(isLeftSidebarOpen || (isRightSidebarOpen && effectiveRole === 'admin')) && (
+        {(isLeftSidebarOpen || isSearchPaneOpen || (isRightSidebarOpen && effectiveRole === 'admin')) && (
           <div
             className="md:hidden fixed inset-0 bg-black/40 z-[1900] backdrop-blur-xs transition-opacity"
             onClick={() => {
               setIsLeftSidebarOpen(false);
+              setIsSearchPaneOpen(false);
               setIsRightSidebarOpen(false);
             }}
           />
@@ -683,9 +1202,27 @@ export default function App() {
           </div>
         )}
 
+        {/* Left Sidebar: Spatial & Attribute Search Pane */}
+        {isSearchPaneOpen && (
+          <div className="absolute md:relative inset-y-0 left-0 z-[2000] md:z-10 bg-slate-900 h-full shadow-2xl md:shadow-none transition-all">
+            <SearchPane
+              isOpen={isSearchPaneOpen}
+              onClose={() => {
+                setIsSearchPaneOpen(false);
+                setTimeout(() => mapInstance?.invalidateSize(), 200);
+              }}
+              layers={layers}
+              features={mapFeatures}
+              selectedFeatureId={selectedFeature?.id}
+              onSingleClickFeature={handleJumpToFeature}
+              onDoubleClickFeature={handleJumpToFeature}
+            />
+          </div>
+        )}
+
         {/* Center: Leaflet Map & Overlays */}
         <section className="flex-1 relative bg-slate-200 overflow-hidden flex flex-col">
-          {/* Phase 3 Map Editor Floating Toolbar */}
+          {/* Map Editor Floating Toolbar */}
           <MapEditorToolbar
             currentRole={effectiveRole}
             interactionMode={interactionMode}
@@ -695,7 +1232,10 @@ export default function App() {
                 return;
               }
               setInteractionMode(mode);
-              if (mode === 'hand') setSelectedFeature(null);
+              if (mode === 'hand') {
+                setSelectedFeature(null);
+                setPendingPasteFeature(null);
+              }
             }}
             selectedFeature={selectedFeature}
             isUnsaved={isUnsaved}
@@ -705,6 +1245,17 @@ export default function App() {
               }
             }}
             onDiscardSelection={handleDiscardSelection}
+            onDeleteSelected={() => {
+              if (selectedFeature) handleDeleteFeature(selectedFeature.id);
+            }}
+            hasClipboard={!!clipboard}
+            hasTargetLocation={!!(cursorLocation || userLocation)}
+            pendingPasteFeature={pendingPasteFeature}
+            onCopy={handleCopy}
+            onCut={handleCut}
+            onPaste={handlePaste}
+            onConfirmPaste={handleConfirmPaste}
+            onCancelPaste={handleCancelPaste}
           />
 
           {/* Leaflet Map */}
@@ -716,6 +1267,7 @@ export default function App() {
             interactionMode={interactionMode}
             selectedFeatureId={selectedFeature?.id || null}
             activeDrawMode={activeDrawMode}
+            pendingPasteFeature={pendingPasteFeature}
             onMapReady={(map) => setMapInstance(map)}
             onCursorMove={setCursorLocation}
             onFeatureSelect={handleFeatureSelect}
@@ -749,6 +1301,7 @@ export default function App() {
               handleDeleteFeature(id);
               setSelectedFeature(null);
             }}
+            onReload={handleReloadFeature}
             onClose={() => setSelectedFeature(null)}
           />
         )}
@@ -802,6 +1355,7 @@ export default function App() {
           }}
         />
       )}
+
 
       {/* GeoJSON Import Modal Component */}
       <GeoJsonImportModal
@@ -863,6 +1417,46 @@ export default function App() {
                 <span>Lưu thay đổi</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Floating Sync Error Alert Banner (Optimistic UI Background Sync Failure) */}
+      {syncError && (
+        <div className="fixed top-16 right-4 z-[9999] bg-slate-900/95 text-white border border-amber-500/80 shadow-2xl rounded-2xl p-4 max-w-sm flex flex-col gap-2.5 animate-in fade-in slide-in-from-top-2 backdrop-blur-md">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-amber-400">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 animate-pulse" />
+              <span>Cần đồng bộ với Firebase</span>
+            </div>
+            <button
+              onClick={() => setSyncError(null)}
+              className="text-slate-400 hover:text-white p-0.5 rounded transition cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          
+          <p className="text-[12px] text-slate-300 leading-snug">
+            Thao tác <strong className="text-amber-200">{syncError.type === 'save' ? 'Lưu' : 'Xóa'}</strong> đối tượng <b className="text-white">{syncError.feature.name || syncError.feature.id}</b> đã hoàn thành nhưng gặp sự cố kết nối Firebase.
+          </p>
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              onClick={handleReloadFailedSync}
+              className="px-2.5 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="Khôi phục lại dữ liệu gốc từ Firebase (Reload)"
+            >
+              <RotateCw className="w-3.5 h-3.5 text-blue-400" />
+              <span>Khôi phục</span>
+            </button>
+            <button
+              onClick={handleRetrySync}
+              className="px-2.5 py-1.5 text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-md shadow-amber-900/40"
+              title="Cố gắng thử cập nhật lại dữ liệu lên Firebase (Retry)"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Thử lại</span>
+            </button>
           </div>
         </div>
       )}

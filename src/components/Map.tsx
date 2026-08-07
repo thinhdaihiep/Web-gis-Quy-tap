@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import proj4 from 'proj4';
 import '@geoman-io/leaflet-geoman-free';
@@ -12,7 +12,15 @@ import {
   DrawToolMode,
   MapInteractionMode,
 } from '../types';
-import { getFieldAlias } from '../fieldAlias';
+import { getFieldAlias, sortPropertyRows } from '../fieldAlias';
+import {
+  calculateLineDistance,
+  calculatePolygonArea,
+  formatDistance,
+  formatArea,
+  extractPolygonLatLngs,
+} from '../utils/geoMeasure';
+import { Ruler, DraftingCompass, Target, X } from 'lucide-react';
 
 proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
 proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
@@ -25,9 +33,10 @@ interface MapProps {
   interactionMode?: MapInteractionMode;
   selectedFeatureId?: string | null;
   activeDrawMode?: DrawToolMode;
+  pendingPasteFeature?: GeoJsonFeatureItem | null;
   onMapReady?: (map: L.Map) => void;
   onCursorMove?: (pos: { lat: number; lng: number } | null) => void;
-  onFeatureSelect?: (feature: GeoJsonFeatureItem) => void;
+  onFeatureSelect?: (feature: GeoJsonFeatureItem | null) => void;
   onFeatureGeometryUpdate?: (featureId: string, newCoordinates: any) => void;
   onFeatureCreate?: (newFeaturePartial: Partial<GeoJsonFeatureItem>) => void;
   onDrawingPointsChange?: (count: number) => void;
@@ -81,7 +90,7 @@ function renderPopupProperties(
   const entries = Object.entries(props);
   let hasToaDo = false;
 
-  const rows: string[] = [];
+  const validItems: { key: string; alias: string; value: string }[] = [];
 
   entries.forEach(([k, v]) => {
     const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -89,6 +98,8 @@ function renderPopupProperties(
     if (
       cleanKey === 'hientrang' ||
       cleanKey === 'trangthaimoi' ||
+      cleanKey === 'chihuy' ||
+      cleanKey === 'ketqua' ||
       cleanKey === 'objectid' ||
       cleanKey === 'id' ||
       cleanKey === 'fid' ||
@@ -101,13 +112,20 @@ function renderPopupProperties(
     if (!alias) {
       return;
     }
-
     if (alias === 'Tọa độ') hasToaDo = true;
     const valStr = v !== null && v !== undefined && String(v).trim() !== '' ? String(v) : '---';
-    rows.push(`<tr style="border-bottom: 1px solid #f1f5f9;">
-      <td style="padding: 3px 8px 3px 0; color: #475569; font-weight: 600; white-space: nowrap; vertical-align: top;">${alias}:</td>
-      <td style="padding: 3px 0; color: #0f172a; font-weight: 700; text-align: right; word-break: break-word;">${valStr}</td>
-    </tr>`);
+    validItems.push({ key: k, alias, value: valStr });
+  });
+
+  const sortedItems = sortPropertyRows(
+    validItems.map((item) => ({ rawKey: item.key, aliasLabel: item.alias, value: item.value }))
+  );
+
+  const rows: string[] = sortedItems.map((item) => {
+    return `<tr style="border-bottom: 1px solid #f1f5f9;">
+      <td style="padding: 3px 8px 3px 0; color: #475569; font-weight: 600; white-space: nowrap; vertical-align: top;">${item.aliasLabel}:</td>
+      <td style="padding: 3px 0; color: #0f172a; font-weight: 700; text-align: right; word-break: break-word;">${item.value}</td>
+    </tr>`;
   });
 
   if (!hasToaDo && lat !== undefined && lng !== undefined) {
@@ -198,6 +216,7 @@ export const MapComponent: React.FC<MapProps> = ({
   interactionMode = 'hand',
   selectedFeatureId = null,
   activeDrawMode = null,
+  pendingPasteFeature = null,
   onMapReady,
   onCursorMove,
   onFeatureSelect,
@@ -212,6 +231,155 @@ export const MapComponent: React.FC<MapProps> = ({
   const featureLayersRef = useRef<L.LayerGroup | null>(null);
   const tempDrawLayerRef = useRef<L.LayerGroup | null>(null);
   const clickMarkerRef = useRef<L.CircleMarker | null>(null);
+
+  // Measure Tool State & Refs
+  const measurePointsRef = useRef<L.LatLng[]>([]);
+  const measureLayerRef = useRef<L.LayerGroup | null>(null);
+  const [measureResult, setMeasureResult] = useState<{
+    mode: 'distance' | 'area_custom' | 'area_feature';
+    valueString: string;
+    subValueString?: string;
+    featureName?: string;
+  } | null>(null);
+
+  const handleClearMeasurement = () => {
+    measurePointsRef.current = [];
+    if (measureLayerRef.current) {
+      measureLayerRef.current.clearLayers();
+    }
+    setMeasureResult(null);
+  };
+
+  const handleMeasureMapClick = (latlng: L.LatLng) => {
+    const mode = interactionModeRef.current;
+    const layer = measureLayerRef.current;
+    if (!layer) return;
+
+    if (mode === 'measure_distance') {
+      measurePointsRef.current.push(latlng);
+      const pts = measurePointsRef.current;
+      layer.clearLayers();
+
+      L.polyline(pts, {
+        color: '#4f46e5',
+        weight: 3.5,
+        dashArray: '6, 6',
+        opacity: 0.9,
+      }).addTo(layer);
+
+      pts.forEach((pt, idx) => {
+        L.circleMarker(pt, {
+          radius: idx === pts.length - 1 ? 6 : 4,
+          fillColor: '#ffffff',
+          color: '#4f46e5',
+          fillOpacity: 1,
+          weight: 2,
+        }).addTo(layer);
+      });
+
+      const totalMeters = calculateLineDistance(pts);
+      setMeasureResult({
+        mode: 'distance',
+        valueString: formatDistance(totalMeters),
+        subValueString: `${pts.length} điểm mốc`,
+      });
+    } else if (mode === 'measure_area_custom') {
+      measurePointsRef.current.push(latlng);
+      const pts = measurePointsRef.current;
+      layer.clearLayers();
+
+      if (pts.length >= 2) {
+        L.polyline(pts, {
+          color: '#059669',
+          weight: 2.5,
+          dashArray: '6, 6',
+          opacity: 0.9,
+        }).addTo(layer);
+      }
+
+      if (pts.length >= 3) {
+        L.polygon(pts, {
+          color: '#059669',
+          fillColor: '#10b981',
+          fillOpacity: 0.25,
+          weight: 2.5,
+          dashArray: '6, 6',
+        }).addTo(layer);
+
+        const areaSqMeters = calculatePolygonArea(pts);
+        const perimeter = calculateLineDistance([...pts, pts[0]]);
+
+        setMeasureResult({
+          mode: 'area_custom',
+          valueString: formatArea(areaSqMeters),
+          subValueString: `Chu vi: ${formatDistance(perimeter)} (${pts.length} đỉnh)`,
+        });
+      } else {
+        setMeasureResult({
+          mode: 'area_custom',
+          valueString: `Cần thêm điểm (${pts.length}/3)`,
+          subValueString: `Click thêm ${3 - pts.length} điểm để khép kín`,
+        });
+      }
+
+      pts.forEach((pt, idx) => {
+        L.circleMarker(pt, {
+          radius: idx === pts.length - 1 ? 6 : 4,
+          fillColor: '#ffffff',
+          color: '#059669',
+          fillOpacity: 1,
+          weight: 2,
+        }).addTo(layer);
+      });
+    }
+  };
+
+  const handleMeasureFeaturePolygon = (feat: GeoJsonFeatureItem) => {
+    const layer = measureLayerRef.current;
+    if (!layer) return;
+
+    layer.clearLayers();
+
+    const latlngs = extractPolygonLatLngs(feat.coordinates);
+    if (!latlngs || latlngs.length < 3) {
+      setMeasureResult({
+        mode: 'area_feature',
+        valueString: 'Không thể tính diện tích',
+        subValueString: 'Tọa độ đối tượng không hợp lệ',
+        featureName: getFeatureName(feat).name,
+      });
+      return;
+    }
+
+    L.polygon(latlngs, {
+      color: '#9333ea',
+      fillColor: '#c084fc',
+      fillOpacity: 0.35,
+      weight: 3,
+      dashArray: '6, 6',
+    }).addTo(layer);
+
+    latlngs.forEach((pt) => {
+      L.circleMarker(pt, {
+        radius: 4,
+        fillColor: '#ffffff',
+        color: '#9333ea',
+        fillOpacity: 1,
+        weight: 2,
+      }).addTo(layer);
+    });
+
+    const areaSqMeters = calculatePolygonArea(latlngs);
+    const perimeter = calculateLineDistance([...latlngs, latlngs[0]]);
+    const featInfo = getFeatureName(feat);
+
+    setMeasureResult({
+      mode: 'area_feature',
+      valueString: formatArea(areaSqMeters),
+      subValueString: `Chu vi: ${formatDistance(perimeter)}`,
+      featureName: featInfo.name,
+    });
+  };
 
   const onCursorMoveRef = useRef(onCursorMove);
   const activeDrawModeRef = useRef(activeDrawMode);
@@ -339,6 +507,7 @@ export const MapComponent: React.FC<MapProps> = ({
 
       featureLayersRef.current = L.layerGroup().addTo(map);
       tempDrawLayerRef.current = L.layerGroup().addTo(map);
+      measureLayerRef.current = L.layerGroup().addTo(map);
 
       mapInstanceRef.current = map;
 
@@ -364,6 +533,15 @@ export const MapComponent: React.FC<MapProps> = ({
 
         if (onCursorMoveRef.current) {
           onCursorMoveRef.current({ lat, lng });
+        }
+
+        // If in measure distance or custom area mode, process measurement click
+        if (
+          interactionModeRef.current === 'measure_distance' ||
+          interactionModeRef.current === 'measure_area_custom'
+        ) {
+          handleMeasureMapClick(e.latlng);
+          return;
         }
 
         if (featureClickedRef.current) {
@@ -435,6 +613,31 @@ export const MapComponent: React.FC<MapProps> = ({
     });
   }, [baseMap]);
 
+  // Reset measurement when interactionMode changes & control doubleClickZoom
+  useEffect(() => {
+    handleClearMeasurement();
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (
+      interactionMode === 'measure_distance' ||
+      interactionMode === 'measure_area_custom'
+    ) {
+      map.doubleClickZoom.disable();
+    } else {
+      map.doubleClickZoom.enable();
+    }
+  }, [interactionMode]);
+
+  // Auto-measure feature area if feature selected while in measure_area_feature mode
+  useEffect(() => {
+    if (interactionMode === 'measure_area_feature' && selectedFeatureId) {
+      const feat = features.find((f) => f.id === selectedFeatureId);
+      if (feat && (feat.type === 'Polygon' || feat.type === 'MultiPolygon')) {
+        handleMeasureFeaturePolygon(feat);
+      }
+    }
+  }, [interactionMode, selectedFeatureId, features]);
+
   // Update Map Cursor based on draw mode & interaction mode
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -444,6 +647,9 @@ export const MapComponent: React.FC<MapProps> = ({
     if (interactionMode === 'hand') {
       container.style.cursor = 'grab';
     } else if (
+      interactionMode === 'measure_distance' ||
+      interactionMode === 'measure_area_custom' ||
+      interactionMode === 'measure_area_feature' ||
       activeDrawMode === 'point' ||
       activeDrawMode === 'line' ||
       activeDrawMode === 'polygon'
@@ -456,6 +662,54 @@ export const MapComponent: React.FC<MapProps> = ({
       }
     }
   }, [activeDrawMode, interactionMode]);
+
+  // Render Ghost Paste Preview Feature on tempDrawLayerRef
+  useEffect(() => {
+    const tempLayerGroup = tempDrawLayerRef.current;
+    if (!tempLayerGroup) return;
+
+    tempLayerGroup.clearLayers();
+
+    if (!pendingPasteFeature) return;
+
+    const coords = pendingPasteFeature.coordinates || (pendingPasteFeature as any).geometry?.coordinates;
+    const gType = pendingPasteFeature.type || (pendingPasteFeature as any).geometry?.type;
+    if (!coords) return;
+
+    const leafletCoords = toLeafletCoords(coords);
+    if (!leafletCoords || leafletCoords.length === 0) return;
+
+    let ghostLayer: L.Layer | null = null;
+
+    if (gType === 'Point') {
+      ghostLayer = L.circleMarker(leafletCoords as [number, number], {
+        radius: 9,
+        fillColor: '#3b82f6',
+        fillOpacity: 0.85,
+        color: '#ffffff',
+        weight: 3,
+      });
+    } else if (gType === 'LineString' || gType === 'MultiLineString') {
+      ghostLayer = L.polyline(leafletCoords, {
+        color: '#2563eb',
+        weight: 4,
+        dashArray: '8, 8',
+        opacity: 0.9,
+      });
+    } else if (gType === 'Polygon' || gType === 'MultiPolygon') {
+      ghostLayer = L.polygon(leafletCoords, {
+        color: '#2563eb',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.45,
+        weight: 3,
+        dashArray: '8, 8',
+      });
+    }
+
+    if (ghostLayer) {
+      ghostLayer.addTo(tempLayerGroup);
+    }
+  }, [pendingPasteFeature]);
 
   // Render Spatial Features & Attach Editing Handlers
   useEffect(() => {
@@ -831,7 +1085,13 @@ export const MapComponent: React.FC<MapProps> = ({
             if (onCursorMoveRef.current) {
               onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
             }
-            if (interactionMode === 'hand') {
+
+            if (interactionModeRef.current === 'measure_area_feature') {
+              handleMeasureFeaturePolygon(feat);
+              if (onFeatureSelectRef.current) {
+                onFeatureSelectRef.current(feat);
+              }
+            } else if (interactionMode === 'hand') {
               polygon.openPopup(e.latlng || center);
             } else if (onFeatureSelectRef.current) {
               onFeatureSelectRef.current(feat);
@@ -952,20 +1212,7 @@ export const MapComponent: React.FC<MapProps> = ({
       }
     });
 
-    const isInitial = !hasFittedInitialRef.current && allBounds.length > 0;
-    const isNewImport =
-      features.length > prevFeaturesCountRef.current && prevFeaturesCountRef.current > 0;
-
-    if ((isInitial || isNewImport) && allBounds.length > 0 && map) {
-      try {
-        const bounds = L.latLngBounds(allBounds);
-        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
-        hasFittedInitialRef.current = true;
-      } catch (e) {
-        // Ignore zoom errors
-      }
-    }
-
+    hasFittedInitialRef.current = true;
     prevFeaturesCountRef.current = features.length;
 
     if (map) {
@@ -981,8 +1228,60 @@ export const MapComponent: React.FC<MapProps> = ({
   }, [layers, features, aliasVersion, interactionMode, selectedFeatureId]);
 
   return (
-    <div className={`relative w-full h-full flex-1 ${interactionMode === 'pointer' ? 'mode-pointer' : interactionMode === 'hand' ? 'mode-hand' : ''}`}>
+    <div
+      className={`relative w-full h-full flex-1 ${
+        interactionMode === 'pointer'
+          ? 'mode-pointer'
+          : interactionMode === 'hand'
+          ? 'mode-hand'
+          : ''
+      }`}
+    >
       <div ref={mapContainerRef} className="w-full h-full min-h-[500px]" />
+
+      {/* Floating Measurement Result Widget */}
+      {measureResult && (
+        <div className="absolute bottom-6 right-6 z-[800] bg-white/95 backdrop-blur-md px-3.5 py-2.5 rounded-2xl shadow-2xl border border-slate-200 flex items-center gap-3 text-slate-800 animate-in fade-in slide-in-from-bottom-2 duration-200 pointer-events-auto">
+          <div
+            className={`p-2 rounded-xl text-white ${
+              measureResult.mode === 'distance'
+                ? 'bg-indigo-600'
+                : measureResult.mode === 'area_custom'
+                ? 'bg-emerald-600'
+                : 'bg-purple-600'
+            }`}
+          >
+            {measureResult.mode === 'distance' && <Ruler className="w-4 h-4" />}
+            {measureResult.mode === 'area_custom' && <DraftingCompass className="w-4 h-4" />}
+            {measureResult.mode === 'area_feature' && <Target className="w-4 h-4" />}
+          </div>
+
+          <div className="flex flex-col pr-1">
+            {measureResult.featureName && (
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate max-w-[220px]">
+                {measureResult.featureName}
+              </span>
+            )}
+            <span className="text-sm font-bold text-slate-900 leading-snug">
+              {measureResult.valueString}
+            </span>
+            {measureResult.subValueString && (
+              <span className="text-[11px] font-medium text-slate-600 leading-snug">
+                {measureResult.subValueString}
+              </span>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={handleClearMeasurement}
+            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+            title="Xóa kết quả đo"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

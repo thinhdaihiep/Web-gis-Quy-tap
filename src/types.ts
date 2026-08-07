@@ -54,7 +54,12 @@ export const DEFAULT_LAYERS: LayerConfig[] = [
   },
 ];
 
-export type MapInteractionMode = 'hand' | 'pointer';
+export type MapInteractionMode =
+  | 'hand'
+  | 'pointer'
+  | 'measure_distance'
+  | 'measure_area_custom'
+  | 'measure_area_feature';
 export type DrawToolMode = 'select' | 'point' | 'line' | 'polygon' | null;
 
 export interface GeoJsonFeatureItem {

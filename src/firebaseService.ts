@@ -53,6 +53,44 @@ function getFromLocalStorage(): GeoJsonFeatureItem[] {
 }
 
 /**
+ * Fetch latest version of a single feature directly from Firestore by ID.
+ */
+export async function fetchSingleFeatureFromFirestore(featureId: string): Promise<GeoJsonFeatureItem | null> {
+  if (!featureId) return null;
+  try {
+    const docRef = doc(db, COLLECTION_NAME, String(featureId));
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      let coords = data.coordinates;
+      if (typeof coords === 'string') {
+        try {
+          coords = JSON.parse(coords);
+        } catch (e) {
+          coords = [];
+        }
+      }
+      return {
+        id: data.id || docSnap.id,
+        layerId: data.layerId || 'layer1_tim_kiem',
+        name: data.name || '',
+        type: data.type || 'Point',
+        coordinates: coords,
+        properties: data.properties || {},
+        status: data.status || 'xac_dinh',
+        code: data.code,
+        createdBy: data.createdBy,
+        editorNotes: data.editorNotes,
+        updatedAt: data.updatedAt,
+      };
+    }
+  } catch (err) {
+    console.warn('Lỗi khi tải đối tượng từ Firestore:', err);
+  }
+  return null;
+}
+
+/**
  * Save or update a single feature in Firestore without altering layer chunks.
  */
 export async function saveSingleFeatureToFirestore(
@@ -65,12 +103,27 @@ export async function saveSingleFeatureToFirestore(
 
   try {
     const docRef = doc(db, COLLECTION_NAME, String(feature.id));
-    const cleaned = {
-      ...feature,
-      coordinates: optimizeCoordinates(feature.coordinates),
-      updatedAt: feature.updatedAt || new Date().toISOString().split('T')[0],
+
+    const rawCoords = feature.coordinates || (feature as any).geometry?.coordinates || [];
+    const optimizedCoords = optimizeCoordinates(rawCoords);
+    const coordsJsonStr = typeof optimizedCoords === 'string' ? optimizedCoords : JSON.stringify(optimizedCoords);
+
+    const cleanedDoc: Record<string, any> = {
+      id: String(feature.id),
+      layerId: feature.layerId || 'layer1_tim_kiem',
+      name: feature.name || '',
+      type: feature.type || (feature as any).geometry?.type || 'Point',
+      coordinates: coordsJsonStr,
+      properties: feature.properties || {},
+      status: feature.status || 'xac_dinh',
+      updatedAt: feature.updatedAt || new Date().toISOString(),
     };
-    await setDoc(docRef, cleaned, { merge: true });
+
+    if (feature.code) cleanedDoc.code = feature.code;
+    if (feature.createdBy) cleanedDoc.createdBy = feature.createdBy;
+    if (feature.editorNotes) cleanedDoc.editorNotes = feature.editorNotes;
+
+    await setDoc(docRef, cleanedDoc, { merge: true });
     return true;
   } catch (err) {
     console.warn('Lỗi khi lưu đối tượng đơn lẻ vào Firestore:', err);
@@ -269,12 +322,6 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
     try {
       localStorage.setItem('gis_local_map_features', JSON.stringify(allList));
     } catch (e) {}
-
-    // Auto-repair Firestore chunks if local cache had full dataset but Firestore chunks were partially lost
-    if (allList.length > firestoreChunkItemsCount + 50) {
-      console.log(`[Auto-Healing] Restoring missing chunks in Firestore (${firestoreChunkItemsCount} in DB vs ${allList.length} total)...`);
-      saveImportedFeaturesToFirestore(allList).catch((e) => console.warn('Lỗi tự động khắc phục CSDL:', e));
-    }
 
     return allList;
   } catch (err) {

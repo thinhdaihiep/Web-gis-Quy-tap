@@ -153,17 +153,15 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
           props = { ...rawProps };
         }
 
-        // Map PhanLoai to readable status
-        const phanLoaiMap: Record<number | string, string> = {
-          1: 'Đã quy tập xong',
-          2: 'Đã quy tập nhưng chưa xong',
-          3: 'Chưa tổ chức tìm kiếm',
-          4: 'Đã tìm kiếm nhưng chưa có kết quả',
-          5: 'Tìm kiếm, quy tập không rõ thông tin',
-        };
-        if (props.PhanLoai && phanLoaiMap[props.PhanLoai]) {
-          props.TrangThaiMoi = phanLoaiMap[props.PhanLoai];
-        }
+        delete props['TrangThaiMoi'];
+        delete props['trang_thai_moi'];
+        delete props['trangthaimoi'];
+        delete props['ChiHuy'];
+        delete props['chihuy'];
+        delete props['chi_huy'];
+        delete props['KetQua'];
+        delete props['ketqua'];
+        delete props['ket_qua'];
 
         const featureName =
           props.Ten ||

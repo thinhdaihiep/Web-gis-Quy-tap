@@ -19,7 +19,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="absolute top-16 right-4 z-[1000] w-80 sm:w-96 bg-slate-900/95 backdrop-blur-md text-slate-100 border border-slate-800 rounded-xl shadow-2xl overflow-hidden transition-all">
+    <div className="absolute top-16 right-4 z-[2000] w-80 sm:w-96 bg-slate-900/95 backdrop-blur-md text-slate-100 border border-slate-800 rounded-xl shadow-2xl overflow-hidden transition-all">
       {/* Header */}
       <div className="bg-slate-800/80 px-4 py-3 border-b border-slate-700/80 flex items-center justify-between">
         <div className="flex items-center space-x-2">

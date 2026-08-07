@@ -68,7 +68,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
 
       {/* Draft List */}
       <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-        {displayItems.map((item) => {
+        {displayItems.map((item, idx) => {
           const isReal = 'layerId' in item;
           const featureName = item.name || 'Đối tượng mới';
           const author = item.createdBy || 'Biên tập viên';
@@ -76,7 +76,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
 
           return (
             <div
-              key={item.id}
+              key={`${item.id}_${idx}`}
               className="p-3 hover:bg-slate-50 transition-colors border-l-4 border-amber-400"
             >
               <div className="flex justify-between items-start mb-1">

@@ -18,6 +18,7 @@ export const FieldAliasModal: React.FC<FieldAliasModalProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [newKey, setNewKey] = useState<string>('');
   const [newAlias, setNewAlias] = useState<string>('');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -53,9 +54,15 @@ export const FieldAliasModal: React.FC<FieldAliasModalProps> = ({
     updateDraft(nextMap);
   };
 
-  const handleSave = () => {
-    saveCustomAliasMap(draftMap);
-    if (onAliasesUpdated) onAliasesUpdated();
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await saveCustomAliasMap(draftMap);
+      if (onAliasesUpdated) onAliasesUpdated();
+      onClose();
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleDiscard = () => {
@@ -64,20 +71,6 @@ export const FieldAliasModal: React.FC<FieldAliasModalProps> = ({
     setRules(getAllAliasRules(originalMap));
     if (onAliasesUpdated) onAliasesUpdated();
     onClose();
-  };
-
-  const handleEditAlias = (key: string, newAliasVal: string) => {
-    const nextMap = { ...draftMap, [key]: newAliasVal };
-    updateDraft(nextMap);
-  };
-
-  const handleEditKey = (oldKey: string, newKeyVal: string, aliasVal: string) => {
-    const nextMap = { ...draftMap };
-    nextMap[oldKey] = '__DELETED__';
-    if (newKeyVal) {
-      nextMap[newKeyVal] = aliasVal;
-    }
-    updateDraft(nextMap);
   };
 
   const filteredRules = rules.filter(
@@ -179,25 +172,13 @@ export const FieldAliasModal: React.FC<FieldAliasModalProps> = ({
                 ) : (
                   filteredRules.map((rule, idx) => (
                     <tr key={`rule_row_${idx}_${rule.key}`} className="hover:bg-blue-50/50 transition">
-                      <td className="p-1.5 font-mono text-blue-700 font-bold text-[11px]">
-                        <input
-                          type="text"
-                          value={rule.key}
-                          onChange={(e) => handleEditKey(rule.key, e.target.value, rule.alias)}
-                          className="w-full px-2 py-1 text-xs font-mono font-bold text-blue-700 bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          title="Sửa tên trường dữ liệu gốc"
-                        />
+                      <td className="p-2.5 font-mono text-blue-700 font-bold text-xs select-text">
+                        {rule.key}
                       </td>
-                      <td className="p-1.5 text-slate-900 font-bold">
-                        <input
-                          type="text"
-                          value={rule.alias}
-                          onChange={(e) => handleEditAlias(rule.key, e.target.value)}
-                          className="w-full px-2 py-1 text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          title="Sửa tên hiển thị tiếng Việt"
-                        />
+                      <td className="p-2.5 text-slate-900 font-bold text-xs select-text">
+                        {rule.alias}
                       </td>
-                      <td className="p-1.5 text-center">
+                      <td className="p-2.5 text-center">
                         <button
                           type="button"
                           onClick={() => handleDeleteRule(rule.key)}

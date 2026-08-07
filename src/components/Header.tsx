@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Clock, FileSpreadsheet } from 'lucide-react';
+import { Layers, Clock, FileSpreadsheet, Search } from 'lucide-react';
 import { UserRole } from '../types';
 
 interface HeaderProps {
@@ -9,6 +9,8 @@ interface HeaderProps {
   onToggleLeftSidebar: () => void;
   isRightSidebarOpen: boolean;
   onToggleRightSidebar: () => void;
+  isSearchPaneOpen: boolean;
+  onToggleSearchPane: () => void;
   onOpenFieldAliasModal?: () => void;
   isMobile?: boolean;
 }
@@ -20,11 +22,13 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleLeftSidebar,
   isRightSidebarOpen,
   onToggleRightSidebar,
+  isSearchPaneOpen,
+  onToggleSearchPane,
   onOpenFieldAliasModal,
   isMobile = false,
 }) => {
   return (
-    <header className="h-14 bg-[#1e293b] text-white flex items-center justify-between px-2.5 sm:px-4 border-b border-slate-700 shrink-0 z-20 shadow-sm gap-1.5 sm:gap-3">
+    <header className="h-14 bg-[#1e293b] text-white flex items-center justify-between px-2.5 sm:px-4 border-b border-slate-700 shrink-0 z-[3000] shadow-sm gap-1.5 sm:gap-3">
       {/* Brand Title & Pane Toggles */}
       <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
         <div className="w-7 h-7 sm:w-8 sm:h-8 bg-red-600 rounded flex items-center justify-center font-bold text-base sm:text-lg text-white shadow-sm shrink-0">
@@ -43,26 +47,37 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={onToggleLeftSidebar}
-            className={`px-2 py-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
+            className={`p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer ${
               isLeftSidebarOpen
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700'
             }`}
-            title={isLeftSidebarOpen ? 'Ẩn bảng Quản lý lớp dữ liệu' : 'Hiện bảng Quản lý lớp dữ liệu'}
+            title="Quản lý lớp dữ liệu"
           >
-            <Layers className="w-3.5 h-3.5 shrink-0" />
-            <span className="hidden md:inline text-[11px] font-bold">Lớp dữ liệu</span>
+            <Layers className="w-4 h-4 shrink-0" />
+          </button>
+
+          {/* Search Pane toggle button (Kính lúp) */}
+          <button
+            onClick={onToggleSearchPane}
+            className={`p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer ${
+              isSearchPaneOpen
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700'
+            }`}
+            title="Tìm kiếm không gian & thuộc tính"
+          >
+            <Search className="w-4 h-4 shrink-0" />
           </button>
 
           {/* Field Alias Dictionary button (Admin & Desktop only) */}
           {!isMobile && currentRole === 'admin' && onOpenFieldAliasModal && (
             <button
               onClick={onOpenFieldAliasModal}
-              className="px-2 py-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
-              title="Mở Bảng Ánh Xạ Tên Trường Thuộc Tính"
+              className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
+              title="Ánh xạ trường thuộc tính"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-              <span className="hidden lg:inline text-[11px] font-bold">Ánh xạ trường</span>
+              <FileSpreadsheet className="w-4 h-4 text-blue-400 shrink-0" />
             </button>
           )}
 
@@ -70,15 +85,14 @@ export const Header: React.FC<HeaderProps> = ({
           {!isMobile && currentRole === 'admin' && (
             <button
               onClick={onToggleRightSidebar}
-              className={`px-2 py-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
+              className={`p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer ${
                 isRightSidebarOpen
                   ? 'bg-amber-600 text-white shadow-xs'
                   : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700'
               }`}
-              title={isRightSidebarOpen ? 'Ẩn bảng Chờ phê duyệt' : 'Hiện bảng Chờ phê duyệt'}
+              title="Chờ phê duyệt"
             >
-              <Clock className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden md:inline text-[11px] font-bold">Phê duyệt</span>
+              <Clock className="w-4 h-4 shrink-0" />
               <span className="bg-red-500 text-white text-[9px] font-bold px-1 rounded-full">3</span>
             </button>
           )}

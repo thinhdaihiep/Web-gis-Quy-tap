@@ -129,9 +129,62 @@ export const DEFAULT_FIELD_ALIASES: Record<string, string> = {
   ghichu: 'Ghi chú',
   GhiChu: 'Ghi chú',
   ghi_chu: 'Ghi chú',
+  mota: 'Mô tả',
+  MoTa: 'Mô tả',
+  mo_ta: 'Mô tả',
   thoigian: 'Thời gian',
   ThoiGian: 'Thời gian',
   thoi_gian: 'Thời gian',
+
+  // Thông tin Trận đánh & Chiến dịch
+  benta: 'Bên ta',
+  BenTa: 'Bên ta',
+  ben_ta: 'Bên ta',
+  BENTA: 'Bên ta',
+  benta_lucluong: 'Lực lượng Bên ta',
+  lucluongbenta: 'Lực lượng Bên ta',
+  LucLuongBenTa: 'Lực lượng Bên ta',
+  chihuybenta: 'Chỉ huy Bên ta',
+  ChiHuyBenTa: 'Chỉ huy Bên ta',
+  bendich: 'Bên địch',
+  BenDich: 'Bên địch',
+  ben_dich: 'Bên địch',
+  BENDICH: 'Bên địch',
+  bendich_lucluong: 'Lực lượng Bên địch',
+  lucluongbendich: 'Lực lượng Bên địch',
+  LucLuongBenDich: 'Lực lượng Bên địch',
+  chihuybendich: 'Chỉ huy Bên địch',
+  ChiHuyBenDich: 'Chỉ huy Bên địch',
+  chihuy: 'Chỉ huy',
+  ChiHuy: 'Chỉ huy',
+  chi_huy: 'Chỉ huy',
+  ketqua: 'Kết quả',
+  KetQua: 'Kết quả',
+  ket_qua: 'Kết quả',
+  thiethai: 'Thiệt hại',
+  ThietHai: 'Thiệt hại',
+  thiet_hai: 'Thiệt hại',
+  lucluong: 'Lực lượng',
+  LucLuong: 'Lực lượng',
+  luc_luong: 'Lực lượng',
+  trandanh: 'Trận đánh',
+  TranDanh: 'Trận đánh',
+  tran_danh: 'Trận đánh',
+  chiendich: 'Chiến dịch',
+  ChienDich: 'Chiến dịch',
+  chien_dich: 'Chiến dịch',
+  dienbien: 'Diễn biến',
+  DienBien: 'Diễn biến',
+  dien_bien: 'Diễn biến',
+  ynghia: 'Ý nghĩa lịch sử',
+  YNghia: 'Ý nghĩa lịch sử',
+  y_nghia: 'Ý nghĩa lịch sử',
+  nhiemvu: 'Nhiệm vụ',
+  NhiemVu: 'Nhiệm vụ',
+  nhiem_vu: 'Nhiệm vụ',
+  muctieu: 'Mục tiêu',
+  MucTieu: 'Mục tiêu',
+  muc_tieu: 'Mục tiêu',
 };
 
 import { saveFieldAliasDictionaryToFirestore } from './firebaseService';
@@ -156,16 +209,14 @@ export function getCustomAliasMap(): Record<string, string> {
 /**
  * Save user-defined field alias map to LocalStorage and sync to Firestore
  */
-export function saveCustomAliasMap(map: Record<string, string>): void {
+export async function saveCustomAliasMap(map: Record<string, string>): Promise<boolean> {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch (e) {
     console.error('Lỗi lưu danh sách ánh xạ tên trường:', e);
   }
-  // Sync to Firestore for multi-device & all accounts
-  saveFieldAliasDictionaryToFirestore(map).catch((err) =>
-    console.warn('Lỗi đồng bộ bảng ánh xạ lên Firestore:', err)
-  );
+  // Sync directly to Firestore
+  return await saveFieldAliasDictionaryToFirestore(map);
 }
 
 /**
@@ -304,6 +355,21 @@ export function getItemUniqueKey(feat: any): string {
   return `${layerId}_id_${String(feat.id || '').toLowerCase()}`;
 }
 
+export function sanitizeFeatureProperties<T extends { properties?: any }>(feat: T): T {
+  if (!feat || !feat.properties) return feat;
+  const props = { ...feat.properties };
+  delete props['TrangThaiMoi'];
+  delete props['trang_thai_moi'];
+  delete props['trangthaimoi'];
+  delete props['ChiHuy'];
+  delete props['chihuy'];
+  delete props['chi_huy'];
+  delete props['KetQua'];
+  delete props['ketqua'];
+  delete props['ket_qua'];
+  return { ...feat, properties: props };
+}
+
 /**
  * Utility to deduplicate a list of GeoJsonFeatureItems by layerId + OBJECTID or id.
  * Prefers keeping the feature with the newer updatedAt date (or last in list if equal).
@@ -311,27 +377,117 @@ export function getItemUniqueKey(feat: any): string {
 export function deduplicateFeaturesList<T extends { id?: string | number; layerId?: string; updatedAt?: string; properties?: any; code?: string }>(
   features: T[]
 ): T[] {
-  if (!features || features.length <= 1) return features || [];
+  if (!features || features.length === 0) return [];
 
   const map = new Map<string, T>();
 
-  features.forEach((feat) => {
+  features.forEach((rawFeat) => {
+    const feat = sanitizeFeatureProperties(rawFeat);
     const key = getItemUniqueKey(feat);
 
     if (!map.has(key)) {
       map.set(key, feat);
     } else {
       const existing = map.get(key)!;
-      const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-      const featTime = feat.updatedAt ? new Date(feat.updatedAt).getTime() : 0;
+      const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() || 0 : 0;
+      const featTime = feat.updatedAt ? new Date(feat.updatedAt).getTime() || 0 : 0;
 
-      // Keep newer item (or if equal timestamp, keep feat)
-      if (featTime >= existingTime) {
+      // Keep newer item (or if equal timestamp or invalid timestamp, keep feat as it comes later)
+      if (isNaN(featTime) || isNaN(existingTime) || featTime >= existingTime) {
         map.set(key, feat);
       }
     }
   });
 
   return Array.from(map.values());
+}
+
+/**
+ * Calculate numerical priority score for field key or alias.
+ * Lower numbers appear higher in the attribute table.
+ * Calculate numerical priority score for field key or alias.
+ * Lower numbers appear higher in the attribute table.
+ * Groups fields by logical importance requested by user:
+ * 1. Quan trọng: ID, Tên, Phân loại, Hiện trạng (10 - 30)
+ * 2. Chuyên biệt: Các trường đặc hiệu từng lớp (Bên ta, Bên địch, Quy tập, Công trình, Tìm thấy, Chưa thấy...) (40 - 65)
+ * 3. Thời gian, Địa điểm, Địa danh, Vị trí, Tọa độ (80 - 95)
+ * 4. Thông tin khác: Thuộc tính tùy biến mở rộng khác (150)
+ * 5. Thông tin bổ trợ: Đơn vị, Nguồn tư liệu, Thời gian cập nhật, Ghi chú, Mô tả (200 - 230)
+ */
+export function getFieldPriorityScore(rawKey: string, aliasLabel: string): number {
+  const k = (rawKey || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const a = (aliasLabel || '').toLowerCase();
+
+  // Mức 1: Quan trọng (Tên, ID, Phân loại, Hiện trạng)
+  if (k === 'objectid' || k === 'objectid1' || k === 'code' || k === 'maso' || a.includes('mã số') || a.includes('mã đối tượng')) return 10;
+  if (k === 'ten' || k === 'name' || k === 'tendiadiem' || k === 'tenkhuvuc' || a.includes('tên')) return 20;
+  if (k === 'phanloai' || k === 'type' || k === 'hientrang' || a.includes('phân loại') || a.includes('hiện trạng')) return 30;
+
+  // Mức 2: Chuyên biệt (mang tính đặc hiệu của từng lớp)
+  // Lớp Các trận đánh, chiến dịch
+  if (k === 'benta' || a.includes('bên ta')) return 40;
+  if (k === 'bendich' || a.includes('bên địch')) return 41;
+  if (k === 'lucluong' || a.includes('lực lượng')) return 42;
+  if (k === 'nhiemvu' || a.includes('nhiệm vụ')) return 43;
+  if (k === 'dienbien' || a.includes('diễn biến')) return 44;
+  if (k === 'ynghia' || a.includes('ý nghĩa')) return 45;
+  if (k === 'muctieu' || a.includes('mục tiêu')) return 46;
+  if (k === 'trandanh' || a.includes('trận đánh')) return 47;
+  if (k === 'chiendich' || a.includes('chiến dịch')) return 48;
+
+  // Lớp Liệt sĩ / Tìm kiếm quy tập
+  if (k === 'hoten' || a.includes('họ và tên') || a.includes('họ tên')) return 50;
+  if (k === 'namsinh' || a.includes('năm sinh')) return 51;
+  if (k === 'hysinh' || a.includes('hy sinh')) return 52;
+  if (k === 'quequan' || a.includes('quê quán')) return 53;
+  if (k === 'quytap' || a.includes('quy tập')) return 54;
+  if (k === 'congtrinh' || a.includes('công trình')) return 55;
+  if (k === 'timduoc' || k === 'timthay' || k === 'daquytap' || a.includes('tìm được') || a.includes('tìm thấy') || a.includes('đã quy tập')) return 56;
+  if (k === 'chuathay' || k === 'chuatimthay' || a.includes('chưa thấy') || a.includes('chưa tìm thấy')) return 57;
+  if (k === 'soluong' || a.includes('số lượng')) return 58;
+  if (k === 'thiethai' || a.includes('thiệt hại')) return 59;
+
+  // Mức 3: Thời gian, địa điểm, địa danh, vị trí, tọa độ
+  if (k === 'thoigian' || a.includes('thời gian')) return 80;
+  if (k === 'diadiem' || k === 'diachi' || a.includes('địa điểm') || a.includes('địa chỉ')) return 81;
+  if (k === 'tinh' || k === 'tinhtp' || a.includes('tỉnh')) return 82;
+  if (k === 'huyen' || k === 'quanhuyen' || a.includes('huyện') || a.includes('quận')) return 83;
+  if (k === 'xa' || k === 'xaphuong' || a.includes('xã') || a.includes('phường')) return 84;
+  if (k === 'diadanh2c' || a.includes('địa danh 2')) return 85;
+  if (k === 'diadanh3c' || a.includes('địa danh 3')) return 86;
+  if (k === 'vitri' || k === 'location' || a.includes('vị trí')) return 87;
+  if (k === 'toado' || k === 'coordinates' || a.includes('tọa độ')) return 88;
+
+  // Mức 5: Thông tin bổ trợ (Đơn vị, Nguồn tư liệu, Ngày cập nhật, Ghi chú, Mô tả)
+  if (k === 'donvi' || a.includes('đơn vị')) return 200;
+  if (k === 'nguon' || k === 'nguontulieu' || a.includes('nguồn')) return 205;
+  if (k === 'capnhat' || k === 'ngaycapnhat' || k === 'updatedat' || a.includes('cập nhật')) return 210;
+  if (k === 'ghichu' || k === 'mota' || k === 'description' || a.includes('ghi chú') || a.includes('mô tả')) return 220;
+  if (k === 'status' || k === 'createdby' || k === 'editornotes') return 230;
+
+  // Mức 4: Thông tin khác
+  return 150;
+}
+
+/**
+ * Sort array of property row items according to field priority score logic.
+ */
+export function sortPropertyRows<T extends { rawKey?: string; key?: string; aliasLabel?: string }>(rows: T[]): T[] {
+  if (!rows || rows.length <= 1) return rows;
+  return [...rows].sort((a, b) => {
+    const keyA = a.rawKey || a.key || '';
+    const keyB = b.rawKey || b.key || '';
+    const aliasA = a.aliasLabel || getFieldAlias(keyA) || keyA;
+    const aliasB = b.aliasLabel || getFieldAlias(keyB) || keyB;
+
+    const scoreA = getFieldPriorityScore(keyA, aliasA);
+    const scoreB = getFieldPriorityScore(keyB, aliasB);
+
+    if (scoreA !== scoreB) {
+      return scoreA - scoreB;
+    }
+    // Tie breaker: alphabetical order of alias label
+    return aliasA.localeCompare(aliasB, 'vi');
+  });
 }
 

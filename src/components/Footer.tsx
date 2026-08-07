@@ -28,7 +28,7 @@ export const Footer: React.FC<FooterProps> = ({
   };
 
   return (
-    <footer className="h-7 bg-slate-900 text-slate-200 border-t border-slate-800 flex items-center justify-between px-4 text-[11px] shrink-0 z-20 font-medium">
+    <footer className="h-7 bg-slate-900 text-slate-200 border-t border-slate-800 flex items-center justify-between px-4 text-[11px] shrink-0 z-[3000] font-medium">
       {/* Left side: Coordinates */}
       <div className="flex items-center gap-4">
         {/* Cursor Coordinates */}
