@@ -333,8 +333,8 @@ export function extractObjectId(feature: any): string | null {
     props.objectId ??
     props.OBJECT_ID ??
     props.Object_Id ??
-    props.code ??
-    feature.code;
+    props.FID ??
+    props.fid;
 
   if (val !== undefined && val !== null && String(val).trim() !== '') {
     return String(val).trim();
@@ -463,7 +463,7 @@ export function getFieldPriorityScore(rawKey: string, aliasLabel: string): numbe
   if (k === 'nguon' || k === 'nguontulieu' || a.includes('nguồn')) return 205;
   if (k === 'capnhat' || k === 'ngaycapnhat' || k === 'updatedat' || a.includes('cập nhật')) return 210;
   if (k === 'ghichu' || k === 'mota' || k === 'description' || a.includes('ghi chú') || a.includes('mô tả')) return 220;
-  if (k === 'status' || k === 'createdby' || k === 'editornotes') return 230;
+
 
   // Mức 4: Thông tin khác
   return 150;

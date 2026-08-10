@@ -141,7 +141,7 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="w-80 sm:w-96 bg-slate-900 text-slate-100 border-r border-slate-700/80 h-full flex flex-col backdrop-blur-md">
+    <div className="w-80 bg-slate-900 text-slate-100 border-r border-slate-700/80 h-full flex flex-col backdrop-blur-md">
       {/* Pane Header */}
       <div className="h-12 px-4 border-b border-slate-800 flex items-center justify-between bg-slate-900 shrink-0">
         <div className="flex items-center gap-2">

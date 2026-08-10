@@ -4,7 +4,6 @@ import { Header } from './components/Header';
 import { SearchPane } from './components/SearchPane';
 import { MapComponent } from './components/Map';
 import { LeftSidebar } from './components/LeftSidebar';
-import { RightSidebar } from './components/RightSidebar';
 import { MapOverlay } from './components/MapOverlay';
 import { MapEditorToolbar } from './components/MapEditorToolbar';
 import { FeatureEditModal } from './components/FeatureEditModal';
@@ -12,8 +11,10 @@ import { AttributePane } from './components/AttributePane';
 import { Footer } from './components/Footer';
 import { GeoJsonImportModal } from './components/GeoJsonImportModal';
 import { FieldAliasModal } from './components/FieldAliasModal';
+import { UserManagementModal } from './components/UserManagementModal';
+import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
-import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode } from './types';
+import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode } from './types';
 import {
   saveImportedFeaturesToFirestore,
   saveSingleFeatureToFirestore,
@@ -24,6 +25,8 @@ import {
   saveLayerConfigsToFirestore,
   deleteFeatureFromFirestore,
   isDemoFeatureId,
+  signOutUser,
+  getStoredUser
 } from './firebaseService';
 import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
 import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw } from 'lucide-react';
@@ -99,10 +102,15 @@ function isInvalidOrTargetToDeleteFeature(f: any): boolean {
 }
 
 export default function App() {
-  const [currentRole, setCurrentRole] = useState<UserRole>('admin');
+  const [user, setUser] = useState<AppUser | null>(null);
   const [isMobile, setIsMobile] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
+
+  useEffect(() => {
+    const storedUser = getStoredUser();
+    setUser(storedUser);
+  }, []);
 
   useEffect(() => {
     const handleResize = () => {
@@ -112,7 +120,7 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const effectiveRole: UserRole = isMobile ? 'guest' : currentRole;
+  const effectiveRole: UserRole = isMobile ? 'guest' : (user ? user.role : 'guest');
 
   const [baseMap, setBaseMap] = useState<BaseMapType>('street');
   const [layers, setLayers] = useState<LayerConfig[]>(DEFAULT_LAYERS);
@@ -120,6 +128,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
   const [isFieldAliasModalOpen, setIsFieldAliasModalOpen] = useState<boolean>(false);
+  const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState<boolean>(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<{
@@ -131,6 +141,13 @@ export default function App() {
   // Map Editing (Phase 3) state
   const [interactionMode, setInteractionMode] = useState<MapInteractionMode>('hand');
   const [selectedFeature, setSelectedFeature] = useState<GeoJsonFeatureItem | null>(null);
+
+  // Revert pointer mode to hand if user becomes guest or on mobile
+  useEffect(() => {
+    if (effectiveRole === 'guest' && interactionMode === 'pointer') {
+      setInteractionMode('hand');
+    }
+  }, [effectiveRole, interactionMode]);
   const [activeDrawMode, setActiveDrawMode] = useState<DrawToolMode>('select');
   const [editingFeature, setEditingFeature] = useState<Partial<GeoJsonFeatureItem> | null>(null);
   const [isFeatureEditModalOpen, setIsFeatureEditModalOpen] = useState<boolean>(false);
@@ -178,7 +195,7 @@ export default function App() {
 
   // Pane Visibility States (Responsive & Mobile-optimized - left sidebar visible by default on desktop)
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState<boolean>(false);
-  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState<boolean>(false);
+
   const [isSearchPaneOpen, setIsSearchPaneOpen] = useState<boolean>(false);
 
   const toggleLeftSidebar = () => {
@@ -192,10 +209,6 @@ export default function App() {
     setTimeout(() => mapInstance?.invalidateSize(), 200);
   };
 
-  const toggleRightSidebar = () => {
-    setIsRightSidebarOpen((prev) => !prev);
-    setTimeout(() => mapInstance?.invalidateSize(), 200);
-  };
 
   const toggleSearchPane = () => {
     setIsSearchPaneOpen((prev) => {
@@ -450,7 +463,16 @@ export default function App() {
     lat: number;
     lng: number;
   } | null>(null);
+  const [targetMarkerLocation, setTargetMarkerLocation] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
   const locationLayerGroupRef = useRef<L.LayerGroup | null>(null);
+
+  const handleGoToCoordinate = (lat: number, lng: number) => {
+    setTargetMarkerLocation({ lat, lng });
+    setCursorLocation({ lat, lng });
+  };
 
   const handleToggleLayerVisibility = (layerId: string) => {
     setLayers((prevLayers) =>
@@ -596,10 +618,28 @@ export default function App() {
   };
 
   // Phase 3 Map Editing Handlers
-  const handleModeChange = (mode: DrawToolMode) => {
-    setActiveDrawMode(mode);
-    drawingVerticesRef.current = [];
+  const handleModeChange = (mode: DrawToolMode | MapInteractionMode) => {
+    if (mode === 'pointer' && effectiveRole === 'guest') {
+      alert("Bạn cần đăng nhập bằng tài khoản biên tập viên hoặc quản trị viên để sử dụng chức năng chỉnh sửa.");
+      if (!user) setIsLoginModalOpen(true);
+      return;
+    } else if (mode && mode !== 'select' && mode !== 'hand' && !mode.toString().startsWith('measure_') && effectiveRole === 'guest') {
+      alert("Bạn cần quyền biên tập viên hoặc quản trị viên để sử dụng tính năng này.");
+      if (!user) setIsLoginModalOpen(true);
+      return;
+    }
+
+    if (mode === 'hand' || mode === 'pointer' || mode?.toString().startsWith('measure_')) {
+      setInteractionMode(mode as MapInteractionMode);
+      setActiveDrawMode(null);
+      setDrawingPointsCount(0);
+      drawingVerticesRef.current = [];
+      return;
+    }
+
+    setActiveDrawMode(mode as DrawToolMode);
     setDrawingPointsCount(0);
+    drawingVerticesRef.current = [];
   };
 
   const handleFinishDrawing = () => {
@@ -651,12 +691,40 @@ export default function App() {
   };
 
   const handleFeatureSelect = (feat: GeoJsonFeatureItem | null) => {
+    if (pendingNextFeature) {
+      // Ignore selecting other features until user responds to the pending unsaved changes confirmation badge
+      return;
+    }
     if (selectedFeature && isUnsaved) {
       if (feat && feat.id === selectedFeature.id) return;
       setPendingNextFeature({ feat });
       return;
     }
     applyFeatureSelect(feat);
+  };
+
+  const handleConfirmPendingSave = () => {
+    if (pendingNextFeature) {
+      const next = pendingNextFeature.feat;
+      if (selectedFeature) {
+        handleSaveFeature(selectedFeature);
+      }
+      applyFeatureSelect(next);
+      setPendingNextFeature(null);
+    }
+  };
+
+  const handleConfirmPendingDiscard = () => {
+    if (pendingNextFeature) {
+      const next = pendingNextFeature.feat;
+      handleDiscardSelection();
+      applyFeatureSelect(next);
+      setPendingNextFeature(null);
+    }
+  };
+
+  const handleCancelPendingNext = () => {
+    setPendingNextFeature(null);
   };
 
   const handleFeatureGeometryUpdate = (featureId: string, newCoordinates: any) => {
@@ -673,10 +741,9 @@ export default function App() {
     );
   };
 
-  const handleSaveFeature = (featureToSave: GeoJsonFeatureItem, targetStatus: 'xac_dinh' | 'cho_phe_duyet') => {
+  const handleSaveFeature = (featureToSave: GeoJsonFeatureItem) => {
     const updatedFeat: GeoJsonFeatureItem = {
       ...featureToSave,
-      status: targetStatus,
       updatedAt: new Date().toISOString(),
     };
 
@@ -703,11 +770,7 @@ export default function App() {
     setSelectedFeature(updatedFeat);
 
     // 2. Immediate feedback
-    if (targetStatus === 'cho_phe_duyet') {
-      showToast('Đã lưu bản nháp và chuyển vào hàng chờ phê duyệt.');
-    } else {
-      showToast('Đã lưu thay đổi thành công!');
-    }
+    showToast('Đã lưu thay đổi thành công!');
 
     // 3. Background sync to Firebase
     saveSingleFeatureToFirestore(updatedFeat)
@@ -738,19 +801,30 @@ export default function App() {
   const handleReloadFeature = async (featureId: string) => {
     if (!featureId) return;
     try {
-      const freshFeature = await fetchSingleFeatureFromFirestore(featureId);
+      let freshFeature = await fetchSingleFeatureFromFirestore(featureId);
+      if (!freshFeature && selectedFeature && String(selectedFeature.id) === String(featureId)) {
+        const localFound = mapFeatures.find(
+          (f) => String(f.id) === String(featureId) || getItemUniqueKey(f) === getItemUniqueKey(selectedFeature)
+        );
+        if (localFound) {
+          freshFeature = localFound;
+        } else if (originalSelectedFeatureRef.current) {
+          freshFeature = originalSelectedFeatureRef.current;
+        }
+      }
+
       if (freshFeature) {
         setMapFeatures((prev) => {
           const idx = prev.findIndex(
-            (f) => String(f.id) === String(featureId) || getItemUniqueKey(f) === getItemUniqueKey(freshFeature)
+            (f) => String(f.id) === String(featureId) || getItemUniqueKey(f) === getItemUniqueKey(freshFeature!)
           );
           let updatedList: GeoJsonFeatureItem[];
           if (idx >= 0) {
             const copy = [...prev];
-            copy[idx] = freshFeature;
+            copy[idx] = freshFeature!;
             updatedList = copy;
           } else {
-            updatedList = [...prev, freshFeature];
+            updatedList = [...prev, freshFeature!];
           }
           try {
             localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
@@ -759,12 +833,12 @@ export default function App() {
         });
         setSelectedFeature(freshFeature);
         originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(freshFeature));
-        showToast('Đã tải lại dữ liệu đối tượng từ CSDL Firebase thành công!');
+        showToast('Đã tải lại dữ liệu đối tượng thành công!');
       } else {
-        showToast('Không tìm thấy bản ghi đối tượng này trên CSDL Firebase.');
+        showToast('Không tìm thấy bản ghi đối tượng này.');
       }
     } catch (err) {
-      showToast('Không thể kết nối CSDL Firebase để tải lại.');
+      showToast('Không thể kết nối CSDL để tải lại.');
     }
   };
 
@@ -923,36 +997,40 @@ export default function App() {
       return;
     }
 
+    const isCut = clipboard.mode === 'cut';
     const center = computeFeatureCenter(clipboard.feature);
     const deltaLng = targetLoc.lng - center[0];
     const deltaLat = targetLoc.lat - center[1];
 
     const shiftedCoords = shiftFeatureCoordinates(clipboard.feature, deltaLng, deltaLat);
 
-    const newId = `feat_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-
-    // Generate small, sequential integer OBJECTID (e.g., 1, 2, 3... 153)
-    let maxObjId = 0;
-    mapFeatures.forEach((f) => {
-      const objId = extractObjectId(f.properties) || extractObjectId(f);
-      if (typeof objId === 'number' && !isNaN(objId) && objId > maxObjId && objId < 10000000) {
-        maxObjId = objId;
-      }
-    });
-    const newObjectId = maxObjId > 0 ? maxObjId + 1 : 1;
-
     const newProps: Record<string, any> = { ...(clipboard.feature.properties || {}) };
+    let newId = clipboard.feature.id;
 
-    ['OBJECTID', 'objectid', 'ObjectID', 'objectId', 'FID', 'fid'].forEach((k) => {
-      if (k in newProps) newProps[k] = newObjectId;
-    });
-    if (!('OBJECTID' in newProps) && !('objectid' in newProps)) {
-      newProps['OBJECTID'] = newObjectId;
+    if (!isCut) {
+      newId = `feat_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+      // Generate small, sequential integer OBJECTID for COPY
+      let maxObjId = 0;
+      mapFeatures.forEach((f) => {
+        const objId = extractObjectId(f.properties) || extractObjectId(f);
+        if (typeof objId === 'number' && !isNaN(objId) && objId > maxObjId && objId < 10000000) {
+          maxObjId = objId;
+        }
+      });
+      const newObjectId = maxObjId > 0 ? maxObjId + 1 : 1;
+
+      ['OBJECTID', 'objectid', 'ObjectID', 'objectId', 'FID', 'fid'].forEach((k) => {
+        if (k in newProps) newProps[k] = newObjectId;
+      });
+      if (!('OBJECTID' in newProps) && !('objectid' in newProps)) {
+        newProps['OBJECTID'] = newObjectId;
+      }
+
+      ['id', 'ID', 'Id'].forEach((k) => {
+        if (k in newProps) newProps[k] = newId;
+      });
     }
-
-    ['id', 'ID', 'Id'].forEach((k) => {
-      if (k in newProps) newProps[k] = newId;
-    });
 
     let newName = clipboard.feature.name || 'Đối tượng';
     if (clipboard.mode === 'copy') {
@@ -977,6 +1055,7 @@ export default function App() {
         coordinates: shiftedCoords,
       },
       properties: newProps,
+      updatedAt: new Date().toISOString(),
     };
 
     setPendingPasteFeature(candidate);
@@ -988,26 +1067,33 @@ export default function App() {
     const modeName = clipboard.mode === 'cut' ? 'di chuyển' : 'dán bản sao';
     const featureToSave = { ...pendingPasteFeature };
 
-    if (clipboard.mode === 'cut') {
-      const originalId = clipboard.feature.id;
-      setMapFeatures((prev) => prev.filter((f) => f.id !== originalId));
-      deleteFeatureFromFirestore(originalId).catch((err) =>
-        console.warn('Lỗi xóa đối tượng cũ khi cut:', err)
-      );
-    }
-
     // 1. Immediate local update
     setMapFeatures((prev) => {
-      const nextList = deduplicateFeaturesList([...prev, featureToSave]);
+      let nextList: GeoJsonFeatureItem[];
+      if (clipboard.mode === 'cut') {
+        // Replace existing feature with updated position
+        const exists = prev.some((f) => f.id === featureToSave.id);
+        if (exists) {
+          nextList = prev.map((f) => (f.id === featureToSave.id ? featureToSave : f));
+        } else {
+          nextList = [...prev, featureToSave];
+        }
+      } else {
+        nextList = [...prev, featureToSave];
+      }
+      const dedupedList = deduplicateFeaturesList(nextList);
       try {
-        localStorage.setItem('gis_local_map_features', JSON.stringify(nextList));
+        localStorage.setItem('gis_local_map_features', JSON.stringify(dedupedList));
       } catch (e) {}
-      return nextList;
+      return dedupedList;
     });
 
     setSelectedFeature(featureToSave);
     setPendingPasteFeature(null);
-    setClipboard(null);
+    if (clipboard.mode === 'cut') {
+      // After cut-pasting (moving), convert clipboard mode to 'copy' with updated coordinates/feature so further pastes work seamlessly
+      setClipboard({ feature: featureToSave, mode: 'copy' });
+    }
 
     showToast(`Đã ${modeName} đối tượng "${featureToSave.name}" thành công!`);
 
@@ -1099,49 +1185,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [interactionMode, selectedFeature, clipboard, cursorLocation, userLocation]);
 
-  const handleApproveDraft = (featureId: string) => {
-    const targetFeat = mapFeatures.find((f) => f.id === featureId);
-    if (!targetFeat) return;
-    const updatedFeat: GeoJsonFeatureItem = { ...targetFeat, status: 'xac_dinh' as const };
-
-    // 1. Immediate local update
-    setMapFeatures((prev) => {
-      const updatedList = prev.map((f) => (f.id === featureId ? updatedFeat : f));
-      try {
-        localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
-      } catch (e) {}
-      return updatedList;
-    });
-
-    showToast('Đã phê duyệt bản ghi!');
-
-    // 2. Background sync
-    saveSingleFeatureToFirestore(updatedFeat)
-      .then((success) => {
-        if (success) {
-          if (syncError && syncError.feature.id === featureId) {
-            setSyncError(null);
-          }
-        } else {
-          setSyncError({
-            type: 'save',
-            feature: updatedFeat,
-            message: 'Chưa thể đồng bộ phê duyệt lên CSDL Firebase.',
-          });
-        }
-      })
-      .catch(() => {
-        setSyncError({
-          type: 'save',
-          feature: updatedFeat,
-          message: 'Lỗi kết nối Firebase khi phê duyệt.',
-        });
-      });
-  };
-
-  const handleRejectDraft = (featureId: string) => {
-    handleDeleteFeature(featureId);
-  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -1159,27 +1202,30 @@ export default function App() {
       {/* Top High Density Header */}
       <Header
         currentRole={effectiveRole}
-        onRoleChange={setCurrentRole}
+        user={user}
+        onLogin={() => setIsLoginModalOpen(true)}
+        onLogout={() => {
+          signOutUser();
+          setUser(null);
+        }}
         isLeftSidebarOpen={isLeftSidebarOpen}
         onToggleLeftSidebar={toggleLeftSidebar}
-        isRightSidebarOpen={isRightSidebarOpen}
-        onToggleRightSidebar={toggleRightSidebar}
         isSearchPaneOpen={isSearchPaneOpen}
         onToggleSearchPane={toggleSearchPane}
         onOpenFieldAliasModal={() => setIsFieldAliasModalOpen(true)}
+        onOpenUserManagementModal={() => setIsUserManagementModalOpen(true)}
         isMobile={isMobile}
       />
 
       {/* Main App Body */}
       <main className="flex flex-1 overflow-hidden relative">
         {/* Mobile Backdrop when sidebars are open as overlays on small screens */}
-        {(isLeftSidebarOpen || isSearchPaneOpen || (isRightSidebarOpen && effectiveRole === 'admin')) && (
+        {(isLeftSidebarOpen || isSearchPaneOpen) && (
           <div
             className="md:hidden fixed inset-0 bg-black/40 z-[1900] backdrop-blur-xs transition-opacity"
             onClick={() => {
               setIsLeftSidebarOpen(false);
               setIsSearchPaneOpen(false);
-              setIsRightSidebarOpen(false);
             }}
           />
         )}
@@ -1231,7 +1277,7 @@ export default function App() {
                 setPendingNextFeature({ feat: null });
                 return;
               }
-              setInteractionMode(mode);
+              handleModeChange(mode);
               if (mode === 'hand') {
                 setSelectedFeature(null);
                 setPendingPasteFeature(null);
@@ -1241,13 +1287,17 @@ export default function App() {
             isUnsaved={isUnsaved}
             onSaveSelection={() => {
               if (selectedFeature) {
-                handleSaveFeature(selectedFeature, selectedFeature.status || 'xac_dinh');
+                handleSaveFeature(selectedFeature);
               }
             }}
             onDiscardSelection={handleDiscardSelection}
             onDeleteSelected={() => {
               if (selectedFeature) handleDeleteFeature(selectedFeature.id);
             }}
+            pendingNextFeature={pendingNextFeature}
+            onConfirmPendingSave={handleConfirmPendingSave}
+            onConfirmPendingDiscard={handleConfirmPendingDiscard}
+            onCancelPendingNext={handleCancelPendingNext}
             hasClipboard={!!clipboard}
             hasTargetLocation={!!(cursorLocation || userLocation)}
             pendingPasteFeature={pendingPasteFeature}
@@ -1268,6 +1318,8 @@ export default function App() {
             selectedFeatureId={selectedFeature?.id || null}
             activeDrawMode={activeDrawMode}
             pendingPasteFeature={pendingPasteFeature}
+            targetMarkerLocation={targetMarkerLocation}
+            currentRole={effectiveRole}
             onMapReady={(map) => setMapInstance(map)}
             onCursorMove={setCursorLocation}
             onFeatureSelect={handleFeatureSelect}
@@ -1294,8 +1346,8 @@ export default function App() {
             feature={selectedFeature}
             layers={layers}
             currentRole={effectiveRole}
-            onSave={(updated, status) => {
-              handleSaveFeature(updated, status);
+            onSave={(updated) => {
+              handleSaveFeature(updated);
             }}
             onDelete={(id) => {
               handleDeleteFeature(id);
@@ -1306,22 +1358,7 @@ export default function App() {
           />
         )}
 
-        {/* Right Sidebar: Approval Queue / Draft List (Admin Only) */}
-        {effectiveRole === 'admin' && isRightSidebarOpen && (
-          <div className="absolute md:relative inset-y-0 right-0 z-[2000] md:z-10 bg-white h-full shadow-2xl md:shadow-none transition-all">
-            <RightSidebar
-              currentRole={effectiveRole}
-              pendingFeatures={mapFeatures.filter((f) => f.status === 'cho_phe_duyet')}
-              onApproveClick={handleApproveDraft}
-              onRejectClick={handleRejectDraft}
-              onViewFeature={handleFeatureSelect}
-              onClose={() => {
-                setIsRightSidebarOpen(false);
-                setTimeout(() => mapInstance?.invalidateSize(), 200);
-              }}
-            />
-          </div>
-        )}
+
       </main>
 
       {/* Bottom Status Bar */}
@@ -1330,6 +1367,7 @@ export default function App() {
         userLocation={userLocation}
         zoomLevel={zoomLevel}
         mapScale={mapScale}
+        onGoToCoordinate={handleGoToCoordinate}
       />
 
       {/* Toast Notification */}
@@ -1373,53 +1411,20 @@ export default function App() {
         onAliasesUpdated={handleAliasesUpdated}
       />
 
-      {/* Unsaved Changes Confirmation Dialog Modal */}
-      {pendingNextFeature && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[9999] flex items-center justify-center p-4">
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 max-w-md w-full text-white shadow-2xl space-y-4">
-            <div className="flex items-center gap-2 text-amber-400 font-bold text-base">
-              <AlertTriangle className="w-5 h-5 shrink-0" />
-              <span>Thay đổi chưa được lưu</span>
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Đối tượng <b className="text-white">{selectedFeature?.name || selectedFeature?.id}</b> có thay đổi hình học chưa được lưu lên CSDL. Bạn muốn xử lý như thế nào?
-            </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                onClick={() => setPendingNextFeature(null)}
-                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold rounded-lg transition cursor-pointer"
-              >
-                Hủy bỏ (Tiếp tục sửa)
-              </button>
-              <button
-                onClick={() => {
-                  const next = pendingNextFeature.feat;
-                  handleDiscardSelection();
-                  applyFeatureSelect(next);
-                  setPendingNextFeature(null);
-                }}
-                className="px-3 py-1.5 bg-red-600/80 hover:bg-red-600 text-white text-xs font-semibold rounded-lg transition cursor-pointer"
-              >
-                Bỏ thay đổi (Discard)
-              </button>
-              <button
-                onClick={() => {
-                  const next = pendingNextFeature.feat;
-                  if (selectedFeature) {
-                    handleSaveFeature(selectedFeature, selectedFeature.status || 'xac_dinh');
-                  }
-                  applyFeatureSelect(next);
-                  setPendingNextFeature(null);
-                }}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition cursor-pointer flex items-center gap-1 shadow-sm"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>Lưu thay đổi</span>
-              </button>
-            </div>
-          </div>
-        </div>
+      {isUserManagementModalOpen && (
+        <UserManagementModal onClose={() => setIsUserManagementModalOpen(false)} />
       )}
+
+      {isLoginModalOpen && (
+        <LoginModal 
+          onClose={() => setIsLoginModalOpen(false)} 
+          onSuccess={() => {
+            const user = getStoredUser();
+            setUser(user);
+          }} 
+        />
+      )}
+
       {/* Floating Sync Error Alert Banner (Optimistic UI Background Sync Failure) */}
       {syncError && (
         <div className="fixed top-16 right-4 z-[9999] bg-slate-900/95 text-white border border-amber-500/80 shadow-2xl rounded-2xl p-4 max-w-sm flex flex-col gap-2.5 animate-in fade-in slide-in-from-top-2 backdrop-blur-md">

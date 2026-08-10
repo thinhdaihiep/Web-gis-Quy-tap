@@ -34,6 +34,8 @@ interface MapProps {
   selectedFeatureId?: string | null;
   activeDrawMode?: DrawToolMode;
   pendingPasteFeature?: GeoJsonFeatureItem | null;
+  targetMarkerLocation?: { lat: number; lng: number } | null;
+  currentRole: 'admin' | 'editor' | 'guest';
   onMapReady?: (map: L.Map) => void;
   onCursorMove?: (pos: { lat: number; lng: number } | null) => void;
   onFeatureSelect?: (feature: GeoJsonFeatureItem | null) => void;
@@ -208,6 +210,93 @@ function leafletLatLngsToGeoJsonLine(latLngs: any): any {
   return latLngs;
 }
 
+function createPointIcon(
+  type: 'search' | 'battle' | 'grave' | 'cemetery',
+  isSelected: boolean
+): L.DivIcon {
+  const size = isSelected ? 30 : 24;
+  if (type === 'search') {
+    return L.divIcon({
+      html: `
+        <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+          <polygon points="12 1.5 21.5 7 21.5 17 12 22.5 2.5 17 2.5 7" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#f59e0b'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+          <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 3l4 4" />
+            <path d="M19 5l-8 8" />
+            <path d="M13 11l-2-2" />
+            <path d="M10 12l-6 6a3 3 0 0 0 0 4.24l.76.76a3 3 0 0 0 4.24 0l6-6" />
+            <path d="M12 10l2 2" />
+          </svg>
+        </svg>
+      `,
+      className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      popupAnchor: [0, -10],
+    });
+  } else if (type === 'battle') {
+    return L.divIcon({
+      html: `
+        <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+          <circle cx="12" cy="12" r="10.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#dc2626'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+          <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5" />
+            <line x1="13" x2="19" y1="19" y2="13" />
+            <line x1="16" x2="20" y1="16" y2="20" />
+            <line x1="19" x2="21" y1="21" y2="19" />
+            <polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5" />
+            <line x1="5" x2="9" y1="14" y2="18" />
+            <line x1="7" x2="4" y1="17" y2="20" />
+            <line x1="3" x2="5" y1="19" y2="21" />
+          </svg>
+        </svg>
+      `,
+      className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      popupAnchor: [0, -10],
+    });
+  } else if (type === 'grave') {
+    return L.divIcon({
+      html: `
+        <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+          <polygon points="12 1.5 22.5 21.5 1.5 21.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#16a34a'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+          <svg x="5" y="7.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 20h20" />
+            <path d="M4 20c0-4.5 3.58-8 8-8s8 3.5 8 8" />
+            <path d="M9 12V6a3 3 0 0 1 6 0v6" />
+            <path d="M12 7.5v3" />
+            <path d="M10.5 9h3" />
+          </svg>
+        </svg>
+      `,
+      className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      popupAnchor: [0, -10],
+    });
+  } else {
+    return L.divIcon({
+      html: `
+        <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+          <rect x="1.5" y="1.5" width="21" height="21" rx="3" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#9333ea'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+          <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9333ea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 21h18" />
+            <path d="M5 21v-2h14v2" />
+            <path d="M7 19v-2h10v2" />
+            <path d="M9 17l1.5-12h3L15 17" />
+            <polygon points="12 2 12.8 3.8 14.8 3.8 13.2 5 13.8 6.8 12 5.6 10.2 6.8 10.8 5 9.2 3.8 11.2 3.8" fill="#9333ea" stroke="none" />
+          </svg>
+        </svg>
+      `,
+      className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      popupAnchor: [0, -10],
+    });
+  }
+}
+
 export const MapComponent: React.FC<MapProps> = ({
   baseMap,
   layers,
@@ -217,6 +306,8 @@ export const MapComponent: React.FC<MapProps> = ({
   selectedFeatureId = null,
   activeDrawMode = null,
   pendingPasteFeature = null,
+  targetMarkerLocation = null,
+  currentRole,
   onMapReady,
   onCursorMove,
   onFeatureSelect,
@@ -231,6 +322,28 @@ export const MapComponent: React.FC<MapProps> = ({
   const featureLayersRef = useRef<L.LayerGroup | null>(null);
   const tempDrawLayerRef = useRef<L.LayerGroup | null>(null);
   const clickMarkerRef = useRef<L.CircleMarker | null>(null);
+
+  // Feature Layer Cache Ref for fast selection updates
+  const featureLayerMapRef = useRef<
+    Map<
+      string,
+      {
+        layer: L.Layer;
+        updateStyle: (isSelected: boolean, mode: MapInteractionMode) => void;
+      }
+    >
+  >(new Map());
+  const prevSelectedFeatureIdRef = useRef<string | null>(null);
+  const prevInteractionModeRef = useRef<MapInteractionMode>(interactionMode || 'hand');
+
+  // Selection & interaction mode popup handler
+  useEffect(() => {
+    const mode: MapInteractionMode = (interactionMode || 'hand') as MapInteractionMode;
+
+    if (mode !== 'hand' && mapInstanceRef.current) {
+      mapInstanceRef.current.closePopup();
+    }
+  }, [selectedFeatureId, interactionMode]);
 
   // Measure Tool State & Refs
   const measurePointsRef = useRef<L.LatLng[]>([]);
@@ -549,38 +662,25 @@ export const MapComponent: React.FC<MapProps> = ({
           return;
         }
 
-          if (e && e.originalEvent && e.originalEvent.target) {
-            const target = e.originalEvent.target as HTMLElement;
-            if (
-              target.classList &&
-              typeof target.classList.contains === 'function' &&
-              (target.classList.contains('marker-icon') ||
-                target.classList.contains('leaflet-pm-draggable') ||
-                target.classList.contains('leaflet-marker-icon') ||
-                target.classList.contains('leaflet-interactive'))
-            ) {
-              return;
-            }
-          }
+        if (onFeatureSelectRef.current) {
+          onFeatureSelectRef.current(null);
+        }
 
-          if (onFeatureSelectRef.current) {
-            onFeatureSelectRef.current(null);
+        if (!clickMarkerRef.current) {
+          clickMarkerRef.current = L.circleMarker(e.latlng, {
+            radius: 6,
+            fillColor: '#ef4444',
+            fillOpacity: 1,
+            color: '#ffffff',
+            weight: 2,
+            interactive: false,
+          }).addTo(map);
+        } else {
+          if (!map.hasLayer(clickMarkerRef.current)) {
+            clickMarkerRef.current.addTo(map);
           }
-
-          if (!clickMarkerRef.current) {
-            clickMarkerRef.current = L.circleMarker(e.latlng, {
-              radius: 6,
-              fillColor: '#ef4444',
-              fillOpacity: 1,
-              color: '#ffffff',
-              weight: 2,
-            }).addTo(map);
-          } else {
-            if (!map.hasLayer(clickMarkerRef.current)) {
-              clickMarkerRef.current.addTo(map);
-            }
-            clickMarkerRef.current.setLatLng(e.latlng);
-          }
+          clickMarkerRef.current.setLatLng(e.latlng);
+        }
       });
 
       if (onMapReady) {
@@ -663,6 +763,36 @@ export const MapComponent: React.FC<MapProps> = ({
     }
   }, [activeDrawMode, interactionMode]);
 
+  // Handle external target location jump (from Footer coordinate input)
+  useEffect(() => {
+    if (!targetMarkerLocation) return;
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const latlng = L.latLng(targetMarkerLocation.lat, targetMarkerLocation.lng);
+
+    map.flyTo(latlng, Math.max(map.getZoom(), 16), { duration: 1.2 });
+
+    if (!clickMarkerRef.current) {
+      clickMarkerRef.current = L.circleMarker(latlng, {
+        radius: 6,
+        fillColor: '#ef4444',
+        fillOpacity: 1,
+        color: '#ffffff',
+        weight: 2,
+      }).addTo(map);
+    } else {
+      if (!map.hasLayer(clickMarkerRef.current)) {
+        clickMarkerRef.current.addTo(map);
+      }
+      clickMarkerRef.current.setLatLng(latlng);
+    }
+
+    if (onCursorMoveRef.current) {
+      onCursorMoveRef.current({ lat: targetMarkerLocation.lat, lng: targetMarkerLocation.lng });
+    }
+  }, [targetMarkerLocation]);
+
   // Render Ghost Paste Preview Feature on tempDrawLayerRef
   useEffect(() => {
     const tempLayerGroup = tempDrawLayerRef.current;
@@ -729,24 +859,74 @@ export const MapComponent: React.FC<MapProps> = ({
     isGeomanEditingRef.current = false;
     lastSelectedFeatureIdRef.current = selectedFeatureId || null;
 
-    // Safely disable Geoman on all existing feature layers before clearing
-    featureLayersRef.current.eachLayer((l: any) => {
-      if (l && l.pm) {
-        try {
-          if (
-            typeof l.pm.disable === 'function' &&
-            typeof l.pm.enabled === 'function' &&
-            l.pm.enabled()
-          ) {
-            l.pm.disable();
-          }
-        } catch (e) {
-          console.warn('Error disabling Geoman on layer:', e);
+    // Disable Geoman on previous layers safely while still attached to map
+    featureLayerMapRef.current.forEach(({ layer }) => {
+      if (layer) {
+        if ((layer as any).pm) {
+          try {
+            if (typeof (layer as any).pm.disable === 'function') {
+              (layer as any).pm.disable();
+            }
+          } catch (e) {}
         }
+        try {
+          if (map.hasLayer(layer)) {
+            map.removeLayer(layer);
+          }
+        } catch (e) {}
       }
     });
 
-    featureLayersRef.current.clearLayers();
+    // Safely collect orphan Geoman vertex markers, handles, and temp layers first to avoid mutating map._layers mid-loop
+    const orphanLayers: L.Layer[] = [];
+    map.eachLayer((l: any) => {
+      if (!l || l instanceof L.TileLayer) return;
+      if (
+        l._pmTempLayer ||
+        l.pmMarker ||
+        l._vertexMarker ||
+        l.options?.isGeoman ||
+        l.options?.isFinishMarker ||
+        l.options?.isMiddleMarker ||
+        (l.options &&
+          l.options.className &&
+          typeof l.options.className === 'string' &&
+          (l.options.className.includes('leaflet-pm') ||
+            l.options.className.includes('vertex-marker') ||
+            l.options.className.includes('marker-icon')))
+      ) {
+        orphanLayers.push(l);
+      }
+    });
+
+    orphanLayers.forEach((l) => {
+      try {
+        if (map.hasLayer(l)) {
+          map.removeLayer(l);
+        }
+      } catch (e) {}
+    });
+
+    // Disable global map Geoman modes
+    try {
+      if ((map as any).pm) {
+        if (typeof (map as any).pm.disableGlobalEditMode === 'function') {
+          (map as any).pm.disableGlobalEditMode();
+        }
+        if (typeof (map as any).pm.disableDraw === 'function') {
+          (map as any).pm.disableDraw();
+        }
+      }
+    } catch (e) {}
+
+    if (tempDrawLayerRef.current) {
+      tempDrawLayerRef.current.clearLayers();
+    }
+
+    if (featureLayersRef.current) {
+      featureLayersRef.current.clearLayers();
+    }
+    featureLayerMapRef.current.clear();
 
     // Build visible layer set safely
     const visibleLayerIds = new Set(layers.filter((l) => l.visible).map((l) => l.id));
@@ -765,6 +945,54 @@ export const MapComponent: React.FC<MapProps> = ({
     });
 
     const allBounds: L.LatLng[] = [];
+
+    const attachTooltipClickHandler = (layer: L.Layer, feat: GeoJsonFeatureItem) => {
+      const tooltip = layer.getTooltip();
+      if (!tooltip) return;
+
+      const handleTooltipClick = (e: any) => {
+        featureClickedRef.current = true;
+        setTimeout(() => {
+          featureClickedRef.current = false;
+        }, 0);
+        if (e && e.originalEvent) {
+          L.DomEvent.stopPropagation(e.originalEvent);
+        } else if (e) {
+          L.DomEvent.stopPropagation(e);
+        }
+
+        const latlng = e.latlng || (typeof (layer as any).getLatLng === 'function' ? (layer as any).getLatLng() : (layer as any).getBounds ? (layer as any).getBounds().getCenter() : undefined);
+        if (interactionModeRef.current === 'hand' && typeof (layer as any).openPopup === 'function') {
+          (layer as any).openPopup(latlng);
+        } else if (typeof (layer as any).closePopup === 'function') {
+          (layer as any).closePopup();
+          setTimeout(() => (layer as any).closePopup(), 0);
+        }
+
+        const center = typeof (layer as any).getLatLng === 'function' ? (layer as any).getLatLng() : (layer as any).getBounds ? (layer as any).getBounds().getCenter() : undefined;
+        if (center && onCursorMoveRef.current) {
+          onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
+        }
+
+        if (interactionModeRef.current === 'measure_area_feature') {
+          handleMeasureFeaturePolygon(feat);
+        }
+
+        if (onFeatureSelectRef.current) {
+          onFeatureSelectRef.current(feat);
+        }
+      };
+
+      tooltip.on('click', handleTooltipClick);
+
+      tooltip.on('add', () => {
+        const el = tooltip.getElement();
+        if (el) {
+          L.DomEvent.off(el, 'click', handleTooltipClick);
+          L.DomEvent.on(el, 'click', handleTooltipClick);
+        }
+      });
+    };
 
     activeFeatures.forEach((feat) => {
       const parentLayer = visibleLayerMap.get(feat.layerId) || layers[0];
@@ -847,96 +1075,22 @@ export const MapComponent: React.FC<MapProps> = ({
 
           let pointMarker: L.Marker | L.CircleMarker;
 
-          // Draggable point when selected in pointer mode
-          const isDraggable = interactionMode === 'pointer' && isSelected;
+          const pointType = isSearchAreaLayer
+            ? 'search'
+            : isBattleLayer
+            ? 'battle'
+            : isGraveLayer
+            ? 'grave'
+            : isCemeteryLayer
+            ? 'cemetery'
+            : null;
 
-          if (isSearchAreaLayer) {
-            const size = isSelected ? 30 : 24;
-            const searchIcon = L.divIcon({
-              html: `
-                <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
-                  <polygon points="12 1.5 21.5 7 21.5 17 12 22.5 2.5 17 2.5 7" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#f59e0b'}" stroke-width="${isSelected ? '3' : '2.2'}" />
-                  <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M17 3l4 4" />
-                    <path d="M19 5l-8 8" />
-                    <path d="M13 11l-2-2" />
-                    <path d="M10 12l-6 6a3 3 0 0 0 0 4.24l.76.76a3 3 0 0 0 4.24 0l6-6" />
-                    <path d="M12 10l2 2" />
-                  </svg>
-                </svg>
-              `,
-              className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-              iconSize: [size, size],
-              iconAnchor: [size / 2, size / 2],
-              popupAnchor: [0, -10],
+          if (pointType) {
+            pointMarker = L.marker(markerLatLng, {
+              icon: createPointIcon(pointType, isSelected),
+              draggable: interactionMode === 'pointer' && isSelected,
             });
-            pointMarker = L.marker(markerLatLng, { icon: searchIcon, draggable: isDraggable });
-          } else if (isBattleLayer) {
-            const size = isSelected ? 30 : 24;
-            const battleIcon = L.divIcon({
-              html: `
-                <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
-                  <circle cx="12" cy="12" r="10.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#dc2626'}" stroke-width="${isSelected ? '3' : '2.2'}" />
-                  <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5" />
-                    <line x1="13" x2="19" y1="19" y2="13" />
-                    <line x1="16" x2="20" y1="16" y2="20" />
-                    <line x1="19" x2="21" y1="21" y2="19" />
-                    <polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5" />
-                    <line x1="5" x2="9" y1="14" y2="18" />
-                    <line x1="7" x2="4" y1="17" y2="20" />
-                    <line x1="3" x2="5" y1="19" y2="21" />
-                  </svg>
-                </svg>
-              `,
-              className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-              iconSize: [size, size],
-              iconAnchor: [size / 2, size / 2],
-              popupAnchor: [0, -10],
-            });
-            pointMarker = L.marker(markerLatLng, { icon: battleIcon, draggable: isDraggable });
-          } else if (isGraveLayer) {
-            const size = isSelected ? 30 : 24;
-            const graveIcon = L.divIcon({
-              html: `
-                <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
-                  <polygon points="12 1.5 22.5 21.5 1.5 21.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#16a34a'}" stroke-width="${isSelected ? '3' : '2.2'}" />
-                  <svg x="5" y="7.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M2 20h20" />
-                    <path d="M4 20c0-4.5 3.58-8 8-8s8 3.5 8 8" />
-                    <path d="M9 12V6a3 3 0 0 1 6 0v6" />
-                    <path d="M12 7.5v3" />
-                    <path d="M10.5 9h3" />
-                  </svg>
-                </svg>
-              `,
-              className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-              iconSize: [size, size],
-              iconAnchor: [size / 2, size / 2],
-              popupAnchor: [0, -10],
-            });
-            pointMarker = L.marker(markerLatLng, { icon: graveIcon, draggable: isDraggable });
-          } else if (isCemeteryLayer) {
-            const size = isSelected ? 30 : 24;
-            const cemeteryIcon = L.divIcon({
-              html: `
-                <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
-                  <rect x="1.5" y="1.5" width="21" height="21" rx="3" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#9333ea'}" stroke-width="${isSelected ? '3' : '2.2'}" />
-                  <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9333ea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M3 21h18" />
-                    <path d="M5 21v-2h14v2" />
-                    <path d="M7 19v-2h10v2" />
-                    <path d="M9 17l1.5-12h3L15 17" />
-                    <polygon points="12 2 12.8 3.8 14.8 3.8 13.2 5 13.8 6.8 12 5.6 10.2 6.8 10.8 5 9.2 3.8 11.2 3.8" fill="#9333ea" stroke="none" />
-                  </svg>
-                </svg>
-              `,
-              className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-              iconSize: [size, size],
-              iconAnchor: [size / 2, size / 2],
-              popupAnchor: [0, -10],
-            });
-            pointMarker = L.marker(markerLatLng, { icon: cemeteryIcon, draggable: isDraggable });
+            if (isSelected) pointMarker.setZIndexOffset(1000);
           } else {
             pointMarker = L.circleMarker(markerLatLng, {
               className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
@@ -947,6 +1101,34 @@ export const MapComponent: React.FC<MapProps> = ({
               weight: isSelected ? 3 : 2,
             });
           }
+
+          const updatePointStyle = (selected: boolean, mode: MapInteractionMode) => {
+            if (pointType) {
+              (pointMarker as L.Marker).setIcon(createPointIcon(pointType, selected));
+              if (mode === 'pointer' && selected) {
+                (pointMarker as L.Marker).dragging?.enable();
+                (pointMarker as L.Marker).setZIndexOffset(1000);
+              } else {
+                (pointMarker as L.Marker).dragging?.disable();
+                (pointMarker as L.Marker).setZIndexOffset(0);
+              }
+            } else if (pointMarker instanceof L.CircleMarker) {
+              pointMarker.setStyle({
+                radius: selected ? 10 : 8,
+                fillColor: selected ? '#2563eb' : featureColor,
+                weight: selected ? 3 : 2,
+              });
+              if (mode === 'pointer' && selected && (pointMarker as any).pm) {
+                (pointMarker as any).pm.enable({ draggable: true });
+              } else if ((pointMarker as any).pm) {
+                try {
+                  if (typeof (pointMarker as any).pm.disable === 'function') {
+                    (pointMarker as any).pm.disable();
+                  }
+                } catch (e) {}
+              }
+            }
+          };
 
           const popupHtml = `
             <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
@@ -966,12 +1148,7 @@ export const MapComponent: React.FC<MapProps> = ({
             </div>
           `;
 
-          // Hand mode vs Pointer mode popup binding & click handlers
-          if (interactionMode === 'hand') {
-            pointMarker.bindPopup(popupHtml);
-          } else if (pointMarker.getPopup()) {
-            pointMarker.unbindPopup();
-          }
+          pointMarker.bindPopup(popupHtml);
 
           if (shouldShowLabel && titleName) {
             pointMarker.bindTooltip(titleName, {
@@ -979,10 +1156,11 @@ export const MapComponent: React.FC<MapProps> = ({
               direction: 'bottom',
               offset: [0, 10],
               className: 'battle-map-label',
+              interactive: true,
             });
+            attachTooltipClickHandler(pointMarker, feat);
           }
 
-          // Drag end handler
           pointMarker.on('dragend', (e: any) => {
             isGeomanEditingRef.current = true;
             const newLatLng = e.target.getLatLng();
@@ -997,19 +1175,37 @@ export const MapComponent: React.FC<MapProps> = ({
 
           pointMarker.on('click', (e: any) => {
             featureClickedRef.current = true;
-            if (e && e.originalEvent) {
-              L.DomEvent.stopPropagation(e.originalEvent);
-            } else if (e) {
-              L.DomEvent.stopPropagation(e);
+            setTimeout(() => {
+              featureClickedRef.current = false;
+            }, 0);
+            if (e && e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
+            else if (e) L.DomEvent.stopPropagation(e);
+
+            if (interactionModeRef.current === 'pointer') {
+              if (prevSelectedFeatureIdRef.current && prevSelectedFeatureIdRef.current !== feat.id) {
+                featureLayerMapRef.current.get(prevSelectedFeatureIdRef.current)?.updateStyle(false, interactionModeRef.current);
+              }
+              updatePointStyle(true, interactionModeRef.current);
+              prevSelectedFeatureIdRef.current = feat.id;
             }
+
             if (onCursorMoveRef.current) {
               onCursorMoveRef.current({ lat: markerLatLng.lat, lng: markerLatLng.lng });
             }
-            if (interactionMode === 'hand') {
+            if (interactionModeRef.current === 'hand') {
               pointMarker.openPopup(e.latlng || markerLatLng);
-            } else if (onFeatureSelectRef.current) {
-              onFeatureSelectRef.current(feat);
+            } else {
+              pointMarker.closePopup();
+              setTimeout(() => pointMarker.closePopup(), 0);
+              if (onFeatureSelectRef.current) {
+                onFeatureSelectRef.current(feat);
+              }
             }
+          });
+
+          featureLayerMapRef.current.set(feat.id, {
+            layer: pointMarker,
+            updateStyle: updatePointStyle,
           });
 
           featureLayersRef.current?.addLayer(pointMarker);
@@ -1042,6 +1238,47 @@ export const MapComponent: React.FC<MapProps> = ({
             weight: isSelected ? 3.5 : 2.5,
           });
 
+          const updatePolygonStyle = (selected: boolean, mode: MapInteractionMode) => {
+            polygon.setStyle({
+              color: selected ? '#2563eb' : featureColor,
+              fillColor: selected ? '#3b82f6' : featureColor,
+              fillOpacity: selected ? 0.6 : 0.45,
+              weight: selected ? 3.5 : 2.5,
+            });
+
+            if (mode === 'pointer' && selected && (polygon as any).pm) {
+              (polygon as any).pm.enable({
+                allowSelfIntersection: false,
+                preventMarkerNested: true,
+                snappable: true,
+                draggable: false,
+              });
+
+              const handleGeomanEdit = () => {
+                isGeomanEditingRef.current = true;
+                const updatedLatLngs = polygon.getLatLngs();
+                const newGeoCoords = leafletLatLngsToGeoJsonPolygon(updatedLatLngs);
+                if (onFeatureGeometryUpdateRef.current) {
+                  onFeatureGeometryUpdateRef.current(feat.id, newGeoCoords);
+                }
+              };
+
+              polygon.off('pm:edit', handleGeomanEdit);
+              polygon.off('pm:markerdragend', handleGeomanEdit);
+              polygon.off('pm:vertexchange', handleGeomanEdit);
+
+              polygon.on('pm:edit', handleGeomanEdit);
+              polygon.on('pm:markerdragend', handleGeomanEdit);
+              polygon.on('pm:vertexchange', handleGeomanEdit);
+            } else if ((polygon as any).pm) {
+              try {
+                if (typeof (polygon as any).pm.disable === 'function') {
+                  (polygon as any).pm.disable();
+                }
+              } catch (e) {}
+            }
+          };
+
           const popupHtml = `
             <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
               <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
@@ -1060,70 +1297,66 @@ export const MapComponent: React.FC<MapProps> = ({
             </div>
           `;
 
-          if (interactionMode === 'hand') {
-            polygon.bindPopup(popupHtml);
-          } else if (polygon.getPopup()) {
-            polygon.unbindPopup();
-          }
+          polygon.bindPopup(popupHtml);
 
           if (shouldShowLabel && titleName) {
             polygon.bindTooltip(titleName, {
               permanent: true,
               direction: 'center',
               className: 'battle-map-label',
+              interactive: true,
             });
+            attachTooltipClickHandler(polygon, feat);
           }
 
           polygon.on('click', (e: any) => {
             featureClickedRef.current = true;
-            if (e && e.originalEvent) {
-              L.DomEvent.stopPropagation(e.originalEvent);
-            } else if (e) {
-              L.DomEvent.stopPropagation(e);
+            setTimeout(() => {
+              featureClickedRef.current = false;
+            }, 0);
+            if (e && e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
+            else if (e) L.DomEvent.stopPropagation(e);
+
+            if (interactionModeRef.current === 'pointer') {
+              if (prevSelectedFeatureIdRef.current && prevSelectedFeatureIdRef.current !== feat.id) {
+                featureLayerMapRef.current.get(prevSelectedFeatureIdRef.current)?.updateStyle(false, interactionModeRef.current);
+              }
+              updatePolygonStyle(true, interactionModeRef.current);
+              prevSelectedFeatureIdRef.current = feat.id;
             }
+
             const center = polygon.getBounds().getCenter();
             if (onCursorMoveRef.current) {
               onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
             }
 
             if (interactionModeRef.current === 'measure_area_feature') {
+              polygon.closePopup();
+              setTimeout(() => polygon.closePopup(), 0);
               handleMeasureFeaturePolygon(feat);
               if (onFeatureSelectRef.current) {
                 onFeatureSelectRef.current(feat);
               }
-            } else if (interactionMode === 'hand') {
+            } else if (interactionModeRef.current === 'hand') {
               polygon.openPopup(e.latlng || center);
-            } else if (onFeatureSelectRef.current) {
-              onFeatureSelectRef.current(feat);
+            } else {
+              polygon.closePopup();
+              setTimeout(() => polygon.closePopup(), 0);
+              if (onFeatureSelectRef.current) {
+                onFeatureSelectRef.current(feat);
+              }
             }
+          });
+
+          featureLayerMapRef.current.set(feat.id, {
+            layer: polygon,
+            updateStyle: updatePolygonStyle,
           });
 
           featureLayersRef.current?.addLayer(polygon);
 
-          // Enable Geoman Vertex Editing if selected in Pointer mode
-          if (interactionMode === 'pointer' && isSelected && (polygon as any).pm) {
-            (polygon as any).pm.enable({
-              allowSelfIntersection: false,
-              preventMarkerNested: true,
-              snappable: true,
-              draggable: false,
-            });
-
-            const handleGeomanEdit = () => {
-              isGeomanEditingRef.current = true;
-              const updatedLatLngs = polygon.getLatLngs();
-              const newGeoCoords = leafletLatLngsToGeoJsonPolygon(updatedLatLngs);
-              if (onFeatureGeometryUpdateRef.current) {
-                onFeatureGeometryUpdateRef.current(feat.id, newGeoCoords);
-              }
-            };
-
-            polygon.on('pm:edit', handleGeomanEdit);
-            polygon.on('pm:markerdragend', handleGeomanEdit);
-            polygon.on('pm:vertexchange', handleGeomanEdit);
-          } else if ((polygon as any).pm && typeof (polygon as any).pm.enabled === 'function' && (polygon as any).pm.enabled()) {
-            (polygon as any).pm.disable();
-          }
+          // Apply initial style
+          updatePolygonStyle(isSelected, (interactionMode || 'hand') as MapInteractionMode);
         } else if (feat.type === 'LineString' && Array.isArray(feat.coordinates)) {
           const leafletCoords = toLeafletCoords(feat.coordinates);
 
@@ -1140,6 +1373,45 @@ export const MapComponent: React.FC<MapProps> = ({
             weight: isSelected ? 4.5 : 3,
           });
 
+          const updatePolylineStyle = (selected: boolean, mode: MapInteractionMode) => {
+            polyline.setStyle({
+              color: selected ? '#2563eb' : featureColor,
+              weight: selected ? 4.5 : 3,
+            });
+
+            if (mode === 'pointer' && selected && (polyline as any).pm) {
+              (polyline as any).pm.enable({
+                preventMarkerNested: true,
+                draggable: false,
+              });
+
+              const handleGeomanEdit = () => {
+                isGeomanEditingRef.current = true;
+                const updatedLatLngs = polyline.getLatLngs();
+                const newGeoCoords = leafletLatLngsToGeoJsonLine(updatedLatLngs);
+                if (onFeatureGeometryUpdateRef.current) {
+                  onFeatureGeometryUpdateRef.current(feat.id, newGeoCoords);
+                }
+              };
+
+              polyline.off('pm:edit', handleGeomanEdit);
+              polyline.off('pm:dragend', handleGeomanEdit);
+              polyline.off('pm:markerdragend', handleGeomanEdit);
+              polyline.off('pm:vertexchange', handleGeomanEdit);
+
+              polyline.on('pm:edit', handleGeomanEdit);
+              polyline.on('pm:dragend', handleGeomanEdit);
+              polyline.on('pm:markerdragend', handleGeomanEdit);
+              polyline.on('pm:vertexchange', handleGeomanEdit);
+            } else if ((polyline as any).pm) {
+              try {
+                if (typeof (polyline as any).pm.disable === 'function') {
+                  (polyline as any).pm.disable();
+                }
+              } catch (e) {}
+            }
+          };
+
           const popupHtml = `
             <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
               <strong style="font-size: 13px; color: #1e3a8a;">${titleName}</strong><br/>
@@ -1149,63 +1421,59 @@ export const MapComponent: React.FC<MapProps> = ({
             </div>
           `;
 
-          if (interactionMode === 'hand') {
-            polyline.bindPopup(popupHtml);
-          } else if (polyline.getPopup()) {
-            polyline.unbindPopup();
-          }
+          polyline.bindPopup(popupHtml);
 
           if (shouldShowLabel && titleName) {
             polyline.bindTooltip(titleName, {
               permanent: true,
               direction: 'center',
               className: 'battle-map-label',
+              interactive: true,
             });
+            attachTooltipClickHandler(polyline, feat);
           }
 
           polyline.on('click', (e: any) => {
             featureClickedRef.current = true;
-            if (e && e.originalEvent) {
-              L.DomEvent.stopPropagation(e.originalEvent);
-            } else if (e) {
-              L.DomEvent.stopPropagation(e);
+            setTimeout(() => {
+              featureClickedRef.current = false;
+            }, 0);
+            if (e && e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
+            else if (e) L.DomEvent.stopPropagation(e);
+
+            if (interactionModeRef.current === 'pointer') {
+              if (prevSelectedFeatureIdRef.current && prevSelectedFeatureIdRef.current !== feat.id) {
+                featureLayerMapRef.current.get(prevSelectedFeatureIdRef.current)?.updateStyle(false, interactionModeRef.current);
+              }
+              updatePolylineStyle(true, interactionModeRef.current);
+              prevSelectedFeatureIdRef.current = feat.id;
             }
+
             const bounds = polyline.getBounds();
             const center = bounds.getCenter();
             if (onCursorMoveRef.current) {
               onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
             }
-            if (interactionMode === 'hand') {
+            if (interactionModeRef.current === 'hand') {
               polyline.openPopup(e.latlng || center);
-            } else if (onFeatureSelectRef.current) {
-              onFeatureSelectRef.current(feat);
+            } else {
+              polyline.closePopup();
+              setTimeout(() => polyline.closePopup(), 0);
+              if (onFeatureSelectRef.current) {
+                onFeatureSelectRef.current(feat);
+              }
             }
+          });
+
+          featureLayerMapRef.current.set(feat.id, {
+            layer: polyline,
+            updateStyle: updatePolylineStyle,
           });
 
           featureLayersRef.current?.addLayer(polyline);
 
-          if (interactionMode === 'pointer' && isSelected && (polyline as any).pm) {
-            (polyline as any).pm.enable({
-              preventMarkerNested: true,
-              draggable: false,
-            });
-
-            const handleGeomanEdit = () => {
-              isGeomanEditingRef.current = true;
-              const updatedLatLngs = polyline.getLatLngs();
-              const newGeoCoords = leafletLatLngsToGeoJsonLine(updatedLatLngs);
-              if (onFeatureGeometryUpdateRef.current) {
-                onFeatureGeometryUpdateRef.current(feat.id, newGeoCoords);
-              }
-            };
-
-            polyline.on('pm:edit', handleGeomanEdit);
-            polyline.on('pm:dragend', handleGeomanEdit);
-            polyline.on('pm:markerdragend', handleGeomanEdit);
-            polyline.on('pm:vertexchange', handleGeomanEdit);
-          } else if ((polyline as any).pm && typeof (polyline as any).pm.enabled === 'function' && (polyline as any).pm.enabled()) {
-            (polyline as any).pm.disable();
-          }
+          // Apply initial style
+          updatePolylineStyle(isSelected, (interactionMode || 'hand') as MapInteractionMode);
         }
       } catch (err) {
         console.warn('Error rendering GeoJSON feature on Leaflet:', err, feat);
@@ -1214,6 +1482,8 @@ export const MapComponent: React.FC<MapProps> = ({
 
     hasFittedInitialRef.current = true;
     prevFeaturesCountRef.current = features.length;
+    prevSelectedFeatureIdRef.current = selectedFeatureId || null;
+    prevInteractionModeRef.current = interactionMode;
 
     if (map) {
       const container = map.getContainer();
@@ -1225,7 +1495,7 @@ export const MapComponent: React.FC<MapProps> = ({
         }
       }
     }
-  }, [layers, features, aliasVersion, interactionMode, selectedFeatureId]);
+  }, [layers, features, aliasVersion, selectedFeatureId, interactionMode]);
 
   return (
     <div

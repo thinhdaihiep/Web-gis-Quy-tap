@@ -1,11 +1,14 @@
 export type UserRole = 'admin' | 'editor' | 'guest';
 
-export interface UserProfile {
+export interface AppUser {
   uid: string;
-  email: string | null;
+  username: string;
+  email?: string | null;
   displayName: string | null;
+  photoURL?: string | null;
   role: UserRole;
 }
+
 
 export type BaseMapType = 'street' | 'esri_topo' | 'satellite';
 
@@ -70,10 +73,7 @@ export interface GeoJsonFeatureItem {
   type: 'Point' | 'Polygon' | 'MultiPolygon' | 'LineString';
   coordinates: any; // GeoJSON geometry coordinates
   properties: Record<string, any>;
-  status?: 'xac_dinh' | 'chua_xac_dinh' | 'cho_phe_duyet';
   updatedAt?: string;
-  createdBy?: string;
-  editorNotes?: string;
 }
 
 export type DuplicateStrategy = 'overwrite' | 'skip' | 'append';

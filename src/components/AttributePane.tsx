@@ -15,7 +15,7 @@ interface AttributePaneProps {
   feature: GeoJsonFeatureItem | null;
   layers: LayerConfig[];
   currentRole: UserRole;
-  onSave: (feature: GeoJsonFeatureItem, status: 'xac_dinh' | 'cho_phe_duyet') => void;
+  onSave: (feature: GeoJsonFeatureItem) => void;
   onDelete?: (featureId: string) => void;
   onReload?: (featureId: string) => Promise<void>;
   onClose: () => void;
@@ -184,7 +184,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
     );
   };
 
-  const handleSubmit = (targetStatus: 'xac_dinh' | 'cho_phe_duyet') => {
+  const handleSubmit = () => {
     if (!name.trim()) {
       alert('Vui lòng nhập Tên đối tượng');
       return;
@@ -205,11 +205,10 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       layerId: selectedLayerId,
       name: name.trim(),
       properties,
-      status: targetStatus,
       updatedAt: new Date().toISOString(),
     };
 
-    onSave(updatedFeature, targetStatus);
+    onSave(updatedFeature);
   };
 
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
@@ -380,13 +379,13 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
                       <span className="truncate" title={displayKey}>{displayKey}</span>
                     </td>
                     <td className="py-1.5 px-2">
-                      {locked ? (
+                      {locked || currentRole === 'guest' ? (
                         <input
                           type="text"
                           disabled
                           value={row.value}
                           className="w-full px-2 py-1 rounded border border-slate-200 text-xs font-mono font-semibold text-slate-600 bg-slate-100 cursor-not-allowed opacity-90 select-all"
-                          title="Trường mã số (OBJECTID) bị khóa, không thể chỉnh sửa"
+                          title={locked ? "Trường mã số (OBJECTID) bị khóa, không thể chỉnh sửa" : "Bạn không có quyền chỉnh sửa"}
                         />
                       ) : row.value.length > 60 ? (
                         <textarea
@@ -422,22 +421,13 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
             title="Hủy các thay đổi chưa lưu"
           >
             <X className="w-3.5 h-3.5" />
-            <span>Hủy</span>
+            <span>Đóng</span>
           </button>
 
-          {currentRole === 'editor' ? (
+          {currentRole !== 'guest' && (
             <button
               type="button"
-              onClick={() => handleSubmit('cho_phe_duyet')}
-              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center gap-1 cursor-pointer"
-            >
-              <Clock className="w-3.5 h-3.5" />
-              <span>Gửi duyệt</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => handleSubmit('xac_dinh')}
+              onClick={handleSubmit}
               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center gap-1 cursor-pointer"
             >
               <CheckCircle2 className="w-3.5 h-3.5" />

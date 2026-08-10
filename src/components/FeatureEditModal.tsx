@@ -16,7 +16,7 @@ interface FeatureEditModalProps {
   feature: Partial<GeoJsonFeatureItem> | null;
   layers: LayerConfig[];
   currentRole: UserRole;
-  onSave: (feature: GeoJsonFeatureItem, status: 'xac_dinh' | 'cho_phe_duyet') => void;
+  onSave: (feature: GeoJsonFeatureItem) => void;
   onDelete?: (featureId: string) => void;
   onClose: () => void;
 }
@@ -135,7 +135,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
     );
   };
 
-  const handleSubmit = (targetStatus: 'xac_dinh' | 'cho_phe_duyet') => {
+  const handleSubmit = () => {
     if (!name.trim()) {
       alert('Vui lòng nhập Tên đối tượng');
       return;
@@ -164,13 +164,10 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       type: feature.type || 'Point',
       coordinates: feature.coordinates || [108.3, 14.5],
       properties,
-      status: targetStatus,
       updatedAt: new Date().toISOString(),
-      createdBy: feature.createdBy || (currentRole === 'admin' ? 'Quản trị viên' : 'Biên tập viên'),
-      editorNotes: editorNotes.trim(),
     };
 
-    onSave(updatedFeature, targetStatus);
+    onSave(updatedFeature);
     onClose();
   };
 
@@ -399,19 +396,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
             </button>
           </div>
 
-          {/* Note for Approver */}
-          <div>
-            <label className="block text-slate-600 font-semibold mb-1 text-[11px]">
-              Ghi chú gửi Quản trị viên (nếu cần phê duyệt)
-            </label>
-            <input
-              type="text"
-              value={editorNotes}
-              onChange={(e) => setEditorNotes(e.target.value)}
-              placeholder="Ghi chú quá trình cập nhật..."
-              className="w-full px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 text-xs"
-            />
-          </div>
+
         </div>
 
         {/* Modal Footer Actions */}
@@ -442,38 +427,14 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
               Hủy
             </button>
 
-            {currentRole === 'editor' && (
-              <button
-                type="button"
-                onClick={() => handleSubmit('cho_phe_duyet')}
-                className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs cursor-pointer transition shadow-sm flex items-center gap-1.5"
-              >
-                <Clock className="w-3.5 h-3.5" />
-                <span>Gửi phê duyệt</span>
-              </button>
-            )}
-
-            {currentRole === 'admin' && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => handleSubmit('cho_phe_duyet')}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg text-xs cursor-pointer transition flex items-center gap-1"
-                >
-                  <Clock className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Lưu nháp</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSubmit('xac_dinh')}
-                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs cursor-pointer transition shadow-sm flex items-center gap-1.5"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Phê duyệt & Lưu Bảng Thuộc Tính</span>
-                </button>
-              </>
-            )}
+            <button
+              type="button"
+              onClick={handleSubmit}
+              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs cursor-pointer transition shadow-sm flex items-center gap-1.5"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Lưu thay đổi</span>
+            </button>
           </div>
         </div>
       </div>

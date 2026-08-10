@@ -60,7 +60,8 @@
   text-overflow: ellipsis !important;
   line-height: 1.3 !important;
   text-align: center !important;
-  pointer-events: none !important;
+  pointer-events: auto !important;
+  cursor: pointer !important;
   opacity: 0 !important;
   visibility: hidden !important;
   transition: opacity 0.15s ease-in-out !important;
@@ -75,10 +76,15 @@
   visibility: visible !important;
 }
 
-/* Ensure Leaflet Popups are rendered ON TOP of map controls but BELOW sidebars and panels */
+/* Ensure Leaflet Popups are rendered ON TOP of all map objects, markers, and labels */
 .leaflet-popup-pane,
 .leaflet-popup {
-  z-index: 600 !important;
+  z-index: 1500 !important;
+}
+
+.leaflet-tooltip-pane,
+.leaflet-tooltip {
+  z-index: 650 !important;
 }
 
 /* Ensure Map Controls and Overlay Tool Buttons have lower z-index priority than Popups */

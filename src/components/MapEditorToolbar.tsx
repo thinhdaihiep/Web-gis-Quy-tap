@@ -13,6 +13,7 @@ import {
   Ruler,
   DraftingCompass,
   Target,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface MapEditorToolbarProps {
@@ -24,6 +25,11 @@ interface MapEditorToolbarProps {
   onSaveSelection?: () => void;
   onDiscardSelection?: () => void;
   onDeleteSelected?: () => void;
+  // Pending Unsaved Changes Confirmation Props
+  pendingNextFeature?: { feat: GeoJsonFeatureItem | null } | null;
+  onConfirmPendingSave?: () => void;
+  onConfirmPendingDiscard?: () => void;
+  onCancelPendingNext?: () => void;
   // Clipboard & Ghost Paste Props
   hasClipboard?: boolean;
   hasTargetLocation?: boolean;
@@ -44,6 +50,10 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
   onSaveSelection,
   onDiscardSelection,
   onDeleteSelected,
+  pendingNextFeature = null,
+  onConfirmPendingSave,
+  onConfirmPendingDiscard,
+  onCancelPendingNext,
   hasClipboard = false,
   hasTargetLocation = false,
   pendingPasteFeature = null,
@@ -80,7 +90,7 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
           <Hand className="w-4 h-4" />
         </button>
 
-        {/* Mode 2: Kiểu Con Trỏ (Pointer - Edit Mode) - Admin / Editor only */}
+        {/* Mode 2: Kiểu Con Trỏ (Pointer - Edit Mode) - Chỉ hiện khi đã đăng nhập (Editor/Admin) */}
         {currentRole !== 'guest' && (
           <button
             type="button"
@@ -242,7 +252,7 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
         )}
 
         {/* Save & Discard Actions when selected feature has unsaved edits */}
-        {selectedFeature && isUnsaved && (
+        {selectedFeature && isUnsaved && !pendingNextFeature && (
           <>
             <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
@@ -296,6 +306,48 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
               }}
               className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition cursor-pointer flex items-center justify-center"
               title="Hủy"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Pending Unsaved Changes Confirmation Floating Badge */}
+      {pendingNextFeature && (
+        <div className="bg-slate-900/90 text-white backdrop-blur-md px-2.5 py-1.5 rounded-2xl shadow-xl border border-amber-500/80 flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 ml-0.5" />
+          <span className="text-xs text-slate-200 font-medium whitespace-nowrap">Lưu sửa đổi?</span>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                if (onConfirmPendingSave) onConfirmPendingSave();
+              }}
+              className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1 shadow-xs"
+              title="Lưu thay đổi và tiếp tục"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Có</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (onConfirmPendingDiscard) onConfirmPendingDiscard();
+              }}
+              className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1 shadow-xs"
+              title="Bỏ thay đổi"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Không</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (onCancelPendingNext) onCancelPendingNext();
+              }}
+              className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition cursor-pointer"
+              title="Hủy bỏ (Quay lại sửa)"
             >
               <X className="w-3.5 h-3.5" />
             </button>

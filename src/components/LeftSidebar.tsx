@@ -295,7 +295,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   };
 
   return (
-    <aside className="w-64 bg-white border-r border-slate-200 flex flex-col shrink-0 h-full text-slate-800 z-10 shadow-sm">
+    <aside className="w-80 bg-white border-r border-slate-200 flex flex-col shrink-0 h-full text-slate-800 z-10 shadow-sm">
       {/* Sidebar Title */}
       <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
         <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2">

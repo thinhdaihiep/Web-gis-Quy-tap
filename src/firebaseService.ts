@@ -1,11 +1,67 @@
-import { doc, setDoc, getDoc, getDocs, collection, writeBatch, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, collection, writeBatch, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from './firebase';
-import { GeoJsonFeatureItem, LayerConfig } from './types';
+import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole } from './types';
 import { deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
 
 const COLLECTION_NAME = 'map_features';
 const CHUNKS_COLLECTION = 'layer_chunks';
 const APP_SETTINGS_COLLECTION = 'app_settings';
+
+// Auth Functions
+
+export const signInWithCredentials = async (username: string, password: string): Promise<AppUser | null> => {
+  try {
+    // Default admin account
+    if (username === 'admin' && password === '123') {
+      const adminUser: AppUser = {
+        uid: 'admin_static',
+        username: 'admin',
+        displayName: 'Quản trị viên',
+        role: 'admin',
+      };
+      localStorage.setItem('gis_user_session', JSON.stringify(adminUser));
+      return adminUser;
+    }
+
+    const q = query(collection(db, 'users'), where('username', '==', username), where('password', '==', password));
+    const snapshot = await getDocs(q);
+    
+    if (!snapshot.empty) {
+      const docSnap = snapshot.docs[0];
+      const data = docSnap.data();
+      const user: AppUser = {
+        uid: docSnap.id,
+        username: data.username,
+        displayName: data.displayName || data.username,
+        role: data.role || 'guest',
+      };
+      localStorage.setItem('gis_user_session', JSON.stringify(user));
+      return user;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Lỗi đăng nhập:', error);
+    return null;
+  }
+};
+
+export const signOutUser = (): void => {
+  localStorage.removeItem('gis_user_session');
+};
+
+export const getStoredUser = (): AppUser | null => {
+  try {
+    const stored = localStorage.getItem('gis_user_session');
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (e) {
+    console.error(e);
+  }
+  return null;
+};
+
 
 /**
  * Reduce coordinate floating point precision to 6 decimals (~0.1m accuracy)
@@ -57,7 +113,10 @@ function getFromLocalStorage(): GeoJsonFeatureItem[] {
  */
 export async function fetchSingleFeatureFromFirestore(featureId: string): Promise<GeoJsonFeatureItem | null> {
   if (!featureId) return null;
+  const targetIdStr = String(featureId).toLowerCase();
+
   try {
+    // 1. Try direct lookup in individual documents in map_features collection
     const docRef = doc(db, COLLECTION_NAME, String(featureId));
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
@@ -77,12 +136,22 @@ export async function fetchSingleFeatureFromFirestore(featureId: string): Promis
         type: data.type || 'Point',
         coordinates: coords,
         properties: data.properties || {},
-        status: data.status || 'xac_dinh',
         code: data.code,
-        createdBy: data.createdBy,
-        editorNotes: data.editorNotes,
         updatedAt: data.updatedAt,
       };
+    }
+
+    // 2. Fallback: Search across all shared features (layer_chunks & local cache merged)
+    const allShared = await loadSharedFeaturesFromFirestore();
+    const foundInShared = allShared.find(
+      (f) =>
+        String(f.id).toLowerCase() === targetIdStr ||
+        (f.code && String(f.code).toLowerCase() === targetIdStr) ||
+        getItemUniqueKey(f).toLowerCase() === targetIdStr
+    );
+
+    if (foundInShared) {
+      return foundInShared;
     }
   } catch (err) {
     console.warn('Lỗi khi tải đối tượng từ Firestore:', err);
@@ -115,13 +184,10 @@ export async function saveSingleFeatureToFirestore(
       type: feature.type || (feature as any).geometry?.type || 'Point',
       coordinates: coordsJsonStr,
       properties: feature.properties || {},
-      status: feature.status || 'xac_dinh',
       updatedAt: feature.updatedAt || new Date().toISOString(),
     };
 
     if (feature.code) cleanedDoc.code = feature.code;
-    if (feature.createdBy) cleanedDoc.createdBy = feature.createdBy;
-    if (feature.editorNotes) cleanedDoc.editorNotes = feature.editorNotes;
 
     await setDoc(docRef, cleanedDoc, { merge: true });
     return true;
@@ -306,7 +372,6 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
           type: data.type,
           coordinates: coords,
           properties: data.properties || {},
-          status: data.status,
           updatedAt: data.updatedAt,
         };
 
