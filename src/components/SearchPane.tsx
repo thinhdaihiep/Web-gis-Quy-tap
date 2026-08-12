@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Search, X, MapPin, Target, Landmark, ShieldAlert, Crosshair, ChevronRight } from 'lucide-react';
 import { LayerConfig, GeoJsonFeatureItem } from '../types';
-import { getFieldAlias } from '../fieldAlias';
+import { getFieldAlias, getItemUniqueKey } from '../fieldAlias';
 
 interface SearchPaneProps {
   isOpen: boolean;
@@ -257,7 +257,7 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
             const displayName = getFeatureDisplayName(feat);
             const badge = getLayerBadge(feat.layerId);
             const Icon = badge.icon;
-            const isSelected = String(selectedFeatureId) === String(feat.id);
+            const isSelected = String(selectedFeatureId) === String(feat.id) || selectedFeatureId === getItemUniqueKey(feat);
 
             // Extract a few summary details from properties
             const props = feat.properties || {};

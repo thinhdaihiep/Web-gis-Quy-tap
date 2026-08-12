@@ -9,7 +9,7 @@ import {
   Lock,
   RotateCw,
 } from 'lucide-react';
-import { getFieldAlias, sortPropertyRows } from '../fieldAlias';
+import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
 
 interface AttributePaneProps {
   feature: GeoJsonFeatureItem | null;
@@ -145,6 +145,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
 
       Object.entries(existingProps).forEach(([k, v]) => {
         if (handledKeys.has(k)) return;
+        if (isFieldHidden(k)) return;
 
         const alias = getFieldAlias(k);
 

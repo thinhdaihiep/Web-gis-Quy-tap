@@ -12,7 +12,16 @@ import {
   DrawToolMode,
   MapInteractionMode,
 } from '../types';
-import { getFieldAlias, sortPropertyRows } from '../fieldAlias';
+import { getFieldAlias, sortPropertyRows, isFieldHidden, getItemUniqueKey } from '../fieldAlias';
+
+function isFeatureMatch(feat: GeoJsonFeatureItem, selectedId: string | number | null | undefined): boolean {
+  if (!selectedId || !feat) return false;
+  const s = String(selectedId).toLowerCase();
+  const featIdStr = String(feat.id || '').toLowerCase();
+  const featKeyStr = getItemUniqueKey(feat).toLowerCase();
+
+  return featKeyStr === s || (featIdStr !== '' && featIdStr === s);
+}
 import {
   calculateLineDistance,
   calculatePolygonArea,
@@ -105,7 +114,8 @@ function renderPopupProperties(
       cleanKey === 'objectid' ||
       cleanKey === 'id' ||
       cleanKey === 'fid' ||
-      k === hiddenKey
+      k === hiddenKey ||
+      isFieldHidden(k)
     ) {
       return;
     }
@@ -211,15 +221,16 @@ function leafletLatLngsToGeoJsonLine(latLngs: any): any {
 }
 
 function createPointIcon(
-  type: 'search' | 'battle' | 'grave' | 'cemetery',
-  isSelected: boolean
+  type: 'search' | 'battle' | 'grave' | 'cemetery' | 'default',
+  isSelected: boolean,
+  color: string = '#10b981'
 ): L.DivIcon {
-  const size = isSelected ? 30 : 24;
+  const size = isSelected ? 26 : 24;
   if (type === 'search') {
     return L.divIcon({
       html: `
         <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
-          <polygon points="12 1.5 21.5 7 21.5 17 12 22.5 2.5 17 2.5 7" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#f59e0b'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+          <polygon points="12 1.5 21.5 7 21.5 17 12 22.5 2.5 17 2.5 7" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#f59e0b'}" stroke-width="${isSelected ? '1.5' : '1.8'}" />
           <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 3l4 4" />
             <path d="M19 5l-8 8" />
@@ -238,7 +249,7 @@ function createPointIcon(
     return L.divIcon({
       html: `
         <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
-          <circle cx="12" cy="12" r="10.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#dc2626'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+          <circle cx="12" cy="12" r="10.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#dc2626'}" stroke-width="${isSelected ? '1.5' : '1.8'}" />
           <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5" />
             <line x1="13" x2="19" y1="19" y2="13" />
@@ -260,7 +271,7 @@ function createPointIcon(
     return L.divIcon({
       html: `
         <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
-          <polygon points="12 1.5 22.5 21.5 1.5 21.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#16a34a'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+          <polygon points="12 1.5 22.5 21.5 1.5 21.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#16a34a'}" stroke-width="${isSelected ? '1.5' : '1.8'}" />
           <svg x="5" y="7.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M2 20h20" />
             <path d="M4 20c0-4.5 3.58-8 8-8s8 3.5 8 8" />
@@ -275,11 +286,11 @@ function createPointIcon(
       iconAnchor: [size / 2, size / 2],
       popupAnchor: [0, -10],
     });
-  } else {
+  } else if (type === 'cemetery') {
     return L.divIcon({
       html: `
         <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
-          <rect x="1.5" y="1.5" width="21" height="21" rx="3" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#9333ea'}" stroke-width="${isSelected ? '3' : '2.2'}" />
+          <rect x="1.5" y="1.5" width="21" height="21" rx="3" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#9333ea'}" stroke-width="${isSelected ? '1.5' : '1.8'}" />
           <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9333ea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 21h18" />
             <path d="M5 21v-2h14v2" />
@@ -293,6 +304,21 @@ function createPointIcon(
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
       popupAnchor: [0, -10],
+    });
+  } else {
+    const dotSize = isSelected ? 22 : 20;
+    const strokeWidth = 1.5;
+    const strokeColor = isSelected ? '#2563eb' : '#ffffff';
+    return L.divIcon({
+      html: `
+        <svg viewBox="0 0 24 24" width="${dotSize}" height="${dotSize}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+          <circle cx="12" cy="12" r="9.5" fill="${color}" stroke="${strokeColor}" stroke-width="${strokeWidth}" />
+        </svg>
+      `,
+      className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
+      iconSize: [dotSize, dotSize],
+      iconAnchor: [dotSize / 2, dotSize / 2],
+      popupAnchor: [0, -8],
     });
   }
 }
@@ -328,6 +354,7 @@ export const MapComponent: React.FC<MapProps> = ({
     Map<
       string,
       {
+        feature: GeoJsonFeatureItem;
         layer: L.Layer;
         updateStyle: (isSelected: boolean, mode: MapInteractionMode) => void;
       }
@@ -336,13 +363,55 @@ export const MapComponent: React.FC<MapProps> = ({
   const prevSelectedFeatureIdRef = useRef<string | null>(null);
   const prevInteractionModeRef = useRef<MapInteractionMode>(interactionMode || 'hand');
 
-  // Selection & interaction mode popup handler
+  // Fast selection & interaction mode update effect (0ms re-render cost for selection changes)
   useEffect(() => {
-    const mode: MapInteractionMode = (interactionMode || 'hand') as MapInteractionMode;
+    const currId = selectedFeatureId || null;
+    const mode = (interactionMode || 'hand') as MapInteractionMode;
 
     if (mode !== 'hand' && mapInstanceRef.current) {
       mapInstanceRef.current.closePopup();
     }
+
+    // Update ALL entries in featureLayerMapRef using isFeatureMatch to ensure correct feature is highlighted
+    featureLayerMapRef.current.forEach((entry) => {
+      const isSelected = currId ? isFeatureMatch(entry.feature, currId) : false;
+      entry.updateStyle(isSelected, mode);
+    });
+
+    // Clean orphan vertex markers if deselected or leaving pointer mode
+    if ((!currId || mode !== 'pointer') && mapInstanceRef.current) {
+      const map = mapInstanceRef.current;
+      const orphanLayers: L.Layer[] = [];
+      map.eachLayer((l: any) => {
+        if (!l || l instanceof L.TileLayer) return;
+        if (
+          l._pmTempLayer ||
+          l.pmMarker ||
+          l._vertexMarker ||
+          l.options?.isGeoman ||
+          l.options?.isFinishMarker ||
+          l.options?.isMiddleMarker ||
+          (l.options &&
+            l.options.className &&
+            typeof l.options.className === 'string' &&
+            (l.options.className.includes('leaflet-pm') ||
+              l.options.className.includes('vertex-marker') ||
+              l.options.className.includes('marker-icon')))
+        ) {
+          orphanLayers.push(l);
+        }
+      });
+      orphanLayers.forEach((l) => {
+        try {
+          if (map.hasLayer(l)) {
+            map.removeLayer(l);
+          }
+        } catch (e) {}
+      });
+    }
+
+    prevSelectedFeatureIdRef.current = currId;
+    prevInteractionModeRef.current = mode;
   }, [selectedFeatureId, interactionMode]);
 
   // Measure Tool State & Refs
@@ -731,7 +800,7 @@ export const MapComponent: React.FC<MapProps> = ({
   // Auto-measure feature area if feature selected while in measure_area_feature mode
   useEffect(() => {
     if (interactionMode === 'measure_area_feature' && selectedFeatureId) {
-      const feat = features.find((f) => f.id === selectedFeatureId);
+      const feat = features.find((f) => isFeatureMatch(f, selectedFeatureId));
       if (feat && (feat.type === 'Polygon' || feat.type === 'MultiPolygon')) {
         handleMeasureFeaturePolygon(feat);
       }
@@ -946,7 +1015,7 @@ export const MapComponent: React.FC<MapProps> = ({
 
     const allBounds: L.LatLng[] = [];
 
-    const attachTooltipClickHandler = (layer: L.Layer, feat: GeoJsonFeatureItem) => {
+    const attachTooltipClickHandler = (layer: L.Layer, featItem: GeoJsonFeatureItem) => {
       const tooltip = layer.getTooltip();
       if (!tooltip) return;
 
@@ -974,12 +1043,18 @@ export const MapComponent: React.FC<MapProps> = ({
           onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
         }
 
+        const fk = getItemUniqueKey(featItem);
+        featureLayerMapRef.current.forEach((entry, k) => {
+          entry.updateStyle(k === fk, interactionModeRef.current);
+        });
+        prevSelectedFeatureIdRef.current = fk;
+
         if (interactionModeRef.current === 'measure_area_feature') {
-          handleMeasureFeaturePolygon(feat);
+          handleMeasureFeaturePolygon(featItem);
         }
 
         if (onFeatureSelectRef.current) {
-          onFeatureSelectRef.current(feat);
+          onFeatureSelectRef.current(featItem);
         }
       };
 
@@ -997,7 +1072,7 @@ export const MapComponent: React.FC<MapProps> = ({
     activeFeatures.forEach((feat) => {
       const parentLayer = visibleLayerMap.get(feat.layerId) || layers[0];
 
-      let featureColor = parentLayer?.color || '#2563eb';
+      let featureColor = parentLayer?.color || '#10b981';
       const rawPhanLoai = feat.properties?.PhanLoai ?? feat.properties?.phanLoai;
       const phanLoaiNum = Number(rawPhanLoai);
 
@@ -1009,7 +1084,7 @@ export const MapComponent: React.FC<MapProps> = ({
         ? PHAN_LOAI_COLORS[phanLoaiNum].label
         : null;
 
-      const isSelected = selectedFeatureId === feat.id;
+      const isSelected = isFeatureMatch(feat, selectedFeatureId);
 
       const isSearchAreaLayer =
         feat.layerId === 'layer4_khu_vuc_quy_tap' ||
@@ -1073,9 +1148,7 @@ export const MapComponent: React.FC<MapProps> = ({
 
           const { name: titleName, hiddenKey } = getFeatureName(feat);
 
-          let pointMarker: L.Marker | L.CircleMarker;
-
-          const pointType = isSearchAreaLayer
+          const pointType: 'search' | 'battle' | 'grave' | 'cemetery' | 'default' = isSearchAreaLayer
             ? 'search'
             : isBattleLayer
             ? 'battle'
@@ -1083,49 +1156,33 @@ export const MapComponent: React.FC<MapProps> = ({
             ? 'grave'
             : isCemeteryLayer
             ? 'cemetery'
-            : null;
+            : 'default';
 
-          if (pointType) {
-            pointMarker = L.marker(markerLatLng, {
-              icon: createPointIcon(pointType, isSelected),
-              draggable: interactionMode === 'pointer' && isSelected,
-            });
-            if (isSelected) pointMarker.setZIndexOffset(1000);
-          } else {
-            pointMarker = L.circleMarker(markerLatLng, {
-              className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-              radius: isSelected ? 10 : 8,
-              fillColor: isSelected ? '#2563eb' : featureColor,
-              fillOpacity: 0.9,
-              color: '#ffffff',
-              weight: isSelected ? 3 : 2,
-            });
-          }
+          const pointMarker = L.marker(markerLatLng, {
+            icon: createPointIcon(pointType, isSelected, featureColor),
+            draggable: (interactionMode === 'pointer' || interactionMode === 'edit') && isSelected,
+            zIndexOffset: isSelected ? 1000 : 0,
+          });
 
           const updatePointStyle = (selected: boolean, mode: MapInteractionMode) => {
-            if (pointType) {
-              (pointMarker as L.Marker).setIcon(createPointIcon(pointType, selected));
-              if (mode === 'pointer' && selected) {
-                (pointMarker as L.Marker).dragging?.enable();
-                (pointMarker as L.Marker).setZIndexOffset(1000);
-              } else {
-                (pointMarker as L.Marker).dragging?.disable();
-                (pointMarker as L.Marker).setZIndexOffset(0);
+            pointMarker.setIcon(createPointIcon(pointType, selected, featureColor));
+            if (mode === 'pointer' && selected) {
+              if (pointMarker.dragging) {
+                pointMarker.dragging.enable();
               }
-            } else if (pointMarker instanceof L.CircleMarker) {
-              pointMarker.setStyle({
-                radius: selected ? 10 : 8,
-                fillColor: selected ? '#2563eb' : featureColor,
-                weight: selected ? 3 : 2,
-              });
-              if (mode === 'pointer' && selected && (pointMarker as any).pm) {
-                (pointMarker as any).pm.enable({ draggable: true });
-              } else if ((pointMarker as any).pm) {
-                try {
-                  if (typeof (pointMarker as any).pm.disable === 'function') {
-                    (pointMarker as any).pm.disable();
-                  }
-                } catch (e) {}
+              pointMarker.setZIndexOffset(1000);
+            } else {
+              if (pointMarker.dragging) {
+                pointMarker.dragging.disable();
+              }
+              pointMarker.setZIndexOffset(0);
+            }
+            const el = pointMarker.getElement();
+            if (el) {
+              if (selected) {
+                L.DomUtil.addClass(el as HTMLElement, 'point-feature-selected');
+              } else {
+                L.DomUtil.removeClass(el as HTMLElement, 'point-feature-selected');
               }
             }
           };
@@ -1181,12 +1238,14 @@ export const MapComponent: React.FC<MapProps> = ({
             if (e && e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
             else if (e) L.DomEvent.stopPropagation(e);
 
-            if (interactionModeRef.current === 'pointer') {
-              if (prevSelectedFeatureIdRef.current && prevSelectedFeatureIdRef.current !== feat.id) {
-                featureLayerMapRef.current.get(prevSelectedFeatureIdRef.current)?.updateStyle(false, interactionModeRef.current);
-              }
-              updatePointStyle(true, interactionModeRef.current);
-              prevSelectedFeatureIdRef.current = feat.id;
+            const fk = getItemUniqueKey(feat);
+            featureLayerMapRef.current.forEach((entry, k) => {
+              entry.updateStyle(k === fk, interactionModeRef.current);
+            });
+            prevSelectedFeatureIdRef.current = fk;
+
+            if (onFeatureSelectRef.current) {
+              onFeatureSelectRef.current(feat);
             }
 
             if (onCursorMoveRef.current) {
@@ -1197,18 +1256,20 @@ export const MapComponent: React.FC<MapProps> = ({
             } else {
               pointMarker.closePopup();
               setTimeout(() => pointMarker.closePopup(), 0);
-              if (onFeatureSelectRef.current) {
-                onFeatureSelectRef.current(feat);
-              }
             }
           });
 
-          featureLayerMapRef.current.set(feat.id, {
+          const featKey = getItemUniqueKey(feat);
+          featureLayerMapRef.current.set(featKey, {
+            feature: feat,
             layer: pointMarker,
             updateStyle: updatePointStyle,
           });
 
           featureLayersRef.current?.addLayer(pointMarker);
+
+          // Apply initial style after adding layer to DOM
+          updatePointStyle(isSelected, (interactionMode || 'hand') as MapInteractionMode);
         } else if (
           (feat.type === 'Polygon' || feat.type === 'MultiPolygon') &&
           Array.isArray(feat.coordinates)
@@ -1234,16 +1295,16 @@ export const MapComponent: React.FC<MapProps> = ({
           const polygon = L.polygon(leafletCoords, {
             color: isSelected ? '#2563eb' : featureColor,
             fillColor: isSelected ? '#3b82f6' : featureColor,
-            fillOpacity: isSelected ? 0.6 : 0.45,
-            weight: isSelected ? 3.5 : 2.5,
+            fillOpacity: isSelected ? 0.5 : 0.4,
+            weight: isSelected ? 2.5 : 1.5,
           });
 
           const updatePolygonStyle = (selected: boolean, mode: MapInteractionMode) => {
             polygon.setStyle({
               color: selected ? '#2563eb' : featureColor,
               fillColor: selected ? '#3b82f6' : featureColor,
-              fillOpacity: selected ? 0.6 : 0.45,
-              weight: selected ? 3.5 : 2.5,
+              fillOpacity: selected ? 0.5 : 0.4,
+              weight: selected ? 2.5 : 1.5,
             });
 
             if (mode === 'pointer' && selected && (polygon as any).pm) {
@@ -1317,12 +1378,14 @@ export const MapComponent: React.FC<MapProps> = ({
             if (e && e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
             else if (e) L.DomEvent.stopPropagation(e);
 
-            if (interactionModeRef.current === 'pointer') {
-              if (prevSelectedFeatureIdRef.current && prevSelectedFeatureIdRef.current !== feat.id) {
-                featureLayerMapRef.current.get(prevSelectedFeatureIdRef.current)?.updateStyle(false, interactionModeRef.current);
-              }
-              updatePolygonStyle(true, interactionModeRef.current);
-              prevSelectedFeatureIdRef.current = feat.id;
+            const fk = getItemUniqueKey(feat);
+            featureLayerMapRef.current.forEach((entry, k) => {
+              entry.updateStyle(k === fk, interactionModeRef.current);
+            });
+            prevSelectedFeatureIdRef.current = fk;
+
+            if (onFeatureSelectRef.current) {
+              onFeatureSelectRef.current(feat);
             }
 
             const center = polygon.getBounds().getCenter();
@@ -1334,21 +1397,17 @@ export const MapComponent: React.FC<MapProps> = ({
               polygon.closePopup();
               setTimeout(() => polygon.closePopup(), 0);
               handleMeasureFeaturePolygon(feat);
-              if (onFeatureSelectRef.current) {
-                onFeatureSelectRef.current(feat);
-              }
             } else if (interactionModeRef.current === 'hand') {
               polygon.openPopup(e.latlng || center);
             } else {
               polygon.closePopup();
               setTimeout(() => polygon.closePopup(), 0);
-              if (onFeatureSelectRef.current) {
-                onFeatureSelectRef.current(feat);
-              }
             }
           });
 
-          featureLayerMapRef.current.set(feat.id, {
+          const featKey = getItemUniqueKey(feat);
+          featureLayerMapRef.current.set(featKey, {
+            feature: feat,
             layer: polygon,
             updateStyle: updatePolygonStyle,
           });
@@ -1370,13 +1429,13 @@ export const MapComponent: React.FC<MapProps> = ({
 
           const polyline = L.polyline(leafletCoords, {
             color: isSelected ? '#2563eb' : featureColor,
-            weight: isSelected ? 4.5 : 3,
+            weight: isSelected ? 3 : 2,
           });
 
           const updatePolylineStyle = (selected: boolean, mode: MapInteractionMode) => {
             polyline.setStyle({
               color: selected ? '#2563eb' : featureColor,
-              weight: selected ? 4.5 : 3,
+              weight: selected ? 3 : 2,
             });
 
             if (mode === 'pointer' && selected && (polyline as any).pm) {
@@ -1441,12 +1500,14 @@ export const MapComponent: React.FC<MapProps> = ({
             if (e && e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
             else if (e) L.DomEvent.stopPropagation(e);
 
-            if (interactionModeRef.current === 'pointer') {
-              if (prevSelectedFeatureIdRef.current && prevSelectedFeatureIdRef.current !== feat.id) {
-                featureLayerMapRef.current.get(prevSelectedFeatureIdRef.current)?.updateStyle(false, interactionModeRef.current);
-              }
-              updatePolylineStyle(true, interactionModeRef.current);
-              prevSelectedFeatureIdRef.current = feat.id;
+            const fk = getItemUniqueKey(feat);
+            featureLayerMapRef.current.forEach((entry, k) => {
+              entry.updateStyle(k === fk, interactionModeRef.current);
+            });
+            prevSelectedFeatureIdRef.current = fk;
+
+            if (onFeatureSelectRef.current) {
+              onFeatureSelectRef.current(feat);
             }
 
             const bounds = polyline.getBounds();
@@ -1459,13 +1520,12 @@ export const MapComponent: React.FC<MapProps> = ({
             } else {
               polyline.closePopup();
               setTimeout(() => polyline.closePopup(), 0);
-              if (onFeatureSelectRef.current) {
-                onFeatureSelectRef.current(feat);
-              }
             }
           });
 
-          featureLayerMapRef.current.set(feat.id, {
+          const featKey = getItemUniqueKey(feat);
+          featureLayerMapRef.current.set(featKey, {
+            feature: feat,
             layer: polyline,
             updateStyle: updatePolylineStyle,
           });
@@ -1495,7 +1555,7 @@ export const MapComponent: React.FC<MapProps> = ({
         }
       }
     }
-  }, [layers, features, aliasVersion, selectedFeatureId, interactionMode]);
+  }, [layers, features, aliasVersion]);
 
   return (
     <div

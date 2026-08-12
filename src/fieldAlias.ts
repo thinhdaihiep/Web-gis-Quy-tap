@@ -7,189 +7,74 @@
 export interface FieldAliasRule {
   key: string;       // Original field key (e.g., "TimDuoc", "ChuaThay")
   alias: string;     // Friendly display alias (e.g., "Đã quy tập", "Chưa tìm thấy")
+  visible: boolean;  // Whether field is visible in Popup and Edit forms
   description?: string;
 }
 
-// Built-in default dictionary rules
+// Built-in default dictionary rules (khai báo chuẩn theo Schema 4 lớp dữ liệu)
 export const DEFAULT_FIELD_ALIASES: Record<string, string> = {
-  // Đã quy tập & Chưa tìm thấy
-  timduoc: 'Đã quy tập',
-  TimDuoc: 'Đã quy tập',
-  tim_duoc: 'Đã quy tập',
-  chuathay: 'Chưa tìm thấy',
-  ChuaThay: 'Chưa tìm thấy',
-  chua_thay: 'Chưa tìm thấy',
-  daquytap: 'Đã quy tập',
-  DaQuyTap: 'Đã quy tập',
-  da_quytap: 'Đã quy tập',
-  quytap: 'Đã quy tập',
-  chuatimthay: 'Chưa tìm thấy',
-  ChuaTimThay: 'Chưa tìm thấy',
-  chua_timthay: 'Chưa tìm thấy',
+  // 1. Mã đối tượng / ID
+  OBJECTID: 'Mã',
 
-  // Tên
-  ten: 'Tên',
+  // 2. Tên đối tượng / Tên mộ
   Ten: 'Tên',
-  TEN: 'Tên',
-  name: 'Tên',
-  Name: 'Tên',
-  NAME: 'Tên',
-  t_ten: 'Tên',
-  t_Ten: 'Tên',
-  tendiadiem: 'Tên địa điểm',
-  TenDiaDiem: 'Tên địa điểm',
-  tenkhuvuc: 'Tên khu vực',
-  TenKhuVuc: 'Tên khu vực',
-  ten_khu_vuc: 'Tên khu vực',
 
-  // Địa điểm / Địa chỉ / Vị trí
-  diadiem: 'Địa điểm',
-  DiaDiem: 'Địa điểm',
-  dia_diem: 'Địa điểm',
-  DIADIEM: 'Địa điểm',
-  diachi: 'Địa chỉ',
-  DiaChi: 'Địa chỉ',
-  dia_chi: 'Địa chỉ',
-  vitri: 'Vị trí',
-  ViTri: 'Vị trí',
-  vi_tri: 'Vị trí',
-  location: 'Địa điểm',
-  Location: 'Địa điểm',
-
-  // Phân loại
-  phanloai: 'Phân loại',
+  // 3. Phân loại & Hiện trạng
   PhanLoai: 'Phân loại',
-  PHANLOAI: 'Phân loại',
-  phan_loai: 'Phân loại',
-  type: 'Phân loại',
+  HienTrang: 'Hiện trạng',
 
-  // Mã số
-  OBJECTID: "Mã số",
-  code: 'Mã số',
-  Code: 'Mã số',
-  CODE: 'Mã số',
-  ma: 'Mã số',
-  Ma: 'Mã số',
-  masu: 'Mã số',
-  MaSo: 'Mã số',
-  ma_so: 'Mã số',
+  // 4. Địa giới Hành chính (Xã, Tỉnh, Huyện, Địa danh 3C)
+  Xa: 'Xã (Phường)',
+  Tinh: 'Tỉnh (TP)',
+  Huyen: 'Huyện (Quận)',
+  DiaDanh3C: 'Hành chính cũ',
 
-  // Xã phường
-  xa: 'Xã phường',
-  Xa: 'Xã phường',
-  xaphuong: 'Xã phường',
-  XaPhuong: 'Xã phường',
-  xa_phuong: 'Xã phường',
-  phuong: 'Xã phường',
-  Phuong: 'Xã phường',
-  phuong_xa: 'Xã phường',
+  // 5. Kết quả Quy tập
+  TimDuoc: 'Đã tìm được',
+  ChuaThay: 'Chưa tìm thấy',
+  QuyTap: 'Kết quả quy tập',
 
-  // Tỉnh thành
-  tinh: 'Tỉnh thành',
-  Tinh: 'Tỉnh thành',
-  tinhtp: 'Tỉnh thành',
-  TinhTP: 'Tỉnh thành',
-  tinh_tp: 'Tỉnh thành',
-  TINH_TP: 'Tỉnh thành',
-  tinh_thanh: 'Tỉnh thành',
-
-  // Huyện quận
-  huyen: 'Huyện quận',
-  Huyen: 'Huyện quận',
-  quanhuyen: 'Huyện quận',
-  QuanHuyen: 'Huyện quận',
-  quan_huyen: 'Huyện quận',
-
-  // Tọa độ
-  toado: 'Tọa độ',
-  ToaDo: 'Tọa độ',
-  TOA_DO: 'Tọa độ',
-  toa_do: 'Tọa độ',
-  coordinates: 'Tọa độ',
-
-  // Thông tin Liệt sĩ / Quân khu
-  hoten: 'Họ và tên',
-  HoTen: 'Họ và tên',
-  ho_ten: 'Họ và tên',
-  quequan: 'Quê quán',
-  QueQuan: 'Quê quán',
-  que_quan: 'Quê quán',
-  donvi: 'Đơn vị',
-  DonVi: 'Đơn vị',
-  don_vi: 'Đơn vị',
-  namsinh: 'Năm sinh',
-  NamSinh: 'Năm sinh',
-  nam_sinh: 'Năm sinh',
-  hysinh: 'Năm hy sinh',
-  HySinh: 'Năm hy sinh',
-  hy_sinh: 'Năm hy sinh',
-  soluong: 'Số lượng',
-  SoLuong: 'Số lượng',
-  so_luong: 'Số lượng',
-  ghichu: 'Ghi chú',
-  GhiChu: 'Ghi chú',
-  ghi_chu: 'Ghi chú',
-  mota: 'Mô tả',
-  MoTa: 'Mô tả',
-  mo_ta: 'Mô tả',
-  thoigian: 'Thời gian',
+  // 6. Thời gian & Cập nhật & Nguồn
   ThoiGian: 'Thời gian',
-  thoi_gian: 'Thời gian',
+  CapNhat: 'TG cập nhật',
+  Nguon: 'Nguồn TT',
 
-  // Thông tin Trận đánh & Chiến dịch
-  benta: 'Bên ta',
+  // 7. Địa điểm / Địa chỉ / Tọa độ / Vị trí
+  DiaDiem: 'Địa điểm',
+  DiaChi: 'Địa chỉ',
+  ToaDo: 'Tọa độ',
+  ViTri: 'Vị trí',
+
+  // 8. Trận đánh lịch sử & Đơn vị & Lực lượng
+  DonVi: 'Đơn vị',
   BenTa: 'Bên ta',
-  ben_ta: 'Bên ta',
-  BENTA: 'Bên ta',
-  benta_lucluong: 'Lực lượng Bên ta',
-  lucluongbenta: 'Lực lượng Bên ta',
-  LucLuongBenTa: 'Lực lượng Bên ta',
-  chihuybenta: 'Chỉ huy Bên ta',
-  ChiHuyBenTa: 'Chỉ huy Bên ta',
-  bendich: 'Bên địch',
   BenDich: 'Bên địch',
-  ben_dich: 'Bên địch',
-  BENDICH: 'Bên địch',
-  bendich_lucluong: 'Lực lượng Bên địch',
-  lucluongbendich: 'Lực lượng Bên địch',
-  LucLuongBenDich: 'Lực lượng Bên địch',
-  chihuybendich: 'Chỉ huy Bên địch',
-  ChiHuyBenDich: 'Chỉ huy Bên địch',
-  chihuy: 'Chỉ huy',
-  ChiHuy: 'Chỉ huy',
-  chi_huy: 'Chỉ huy',
-  ketqua: 'Kết quả',
-  KetQua: 'Kết quả',
-  ket_qua: 'Kết quả',
-  thiethai: 'Thiệt hại',
-  ThietHai: 'Thiệt hại',
-  thiet_hai: 'Thiệt hại',
-  lucluong: 'Lực lượng',
-  LucLuong: 'Lực lượng',
-  luc_luong: 'Lực lượng',
-  trandanh: 'Trận đánh',
-  TranDanh: 'Trận đánh',
-  tran_danh: 'Trận đánh',
-  chiendich: 'Chiến dịch',
-  ChienDich: 'Chiến dịch',
-  chien_dich: 'Chiến dịch',
-  dienbien: 'Diễn biến',
-  DienBien: 'Diễn biến',
-  dien_bien: 'Diễn biến',
-  ynghia: 'Ý nghĩa lịch sử',
-  YNghia: 'Ý nghĩa lịch sử',
-  y_nghia: 'Ý nghĩa lịch sử',
-  nhiemvu: 'Nhiệm vụ',
-  NhiemVu: 'Nhiệm vụ',
-  nhiem_vu: 'Nhiệm vụ',
-  muctieu: 'Mục tiêu',
-  MucTieu: 'Mục tiêu',
-  muc_tieu: 'Mục tiêu',
+  CongTrinh: 'Công trình lịch sử',
+  GhiChu: 'Ghi chú',
+  MoTa: 'Mô tả',
+
+  // 9. Mộ liệt sĩ & Nghĩa trang
+  ThongTin: 'Thông tin',
+  NTID: 'Mã NT',
+  DienThoai: 'Điện thoại',
+  SoMo: 'Số lượng mộ',
+  ThanhLap: 'Năm thành lập',
+  MoCoTen: 'Mộ có tên',
+  MoVoDanh: 'Mộ vô danh',
+  HoTen: 'Họ và tên',
+  QueQuan: 'Quê quán',
+  NamSinh: 'Năm sinh',
+  HySinh: 'Năm hy sinh',
+  NgaySinh: 'Ngày sinh',
+  NgayMat: 'Ngày mất',
+  CapBac: 'Cấp bậc',
+  ChucVu: 'Chức vụ',
 };
 
 import { saveFieldAliasDictionaryToFirestore } from './firebaseService';
 
 const STORAGE_KEY = 'gis_field_alias_dictionary';
+const HIDDEN_STORAGE_KEY = 'gis_hidden_fields_dictionary';
 
 /**
  * Get user-defined field aliases from LocalStorage
@@ -207,16 +92,79 @@ export function getCustomAliasMap(): Record<string, string> {
 }
 
 /**
- * Save user-defined field alias map to LocalStorage and sync to Firestore
+ * Get user-defined hidden fields map from LocalStorage.
+ * Returns Record<string, boolean> where key is normalized field key and value true means hidden.
  */
-export async function saveCustomAliasMap(map: Record<string, string>): Promise<boolean> {
+export function getHiddenFieldsMap(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(HIDDEN_STORAGE_KEY);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error('Lỗi đọc danh sách trường ẩn:', e);
+  }
+  return {};
+}
+
+/**
+ * Save hidden fields map to LocalStorage
+ */
+export function saveHiddenFieldsMap(map: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(HIDDEN_STORAGE_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.error('Lỗi lưu danh sách trường ẩn:', e);
+  }
+}
+
+/**
+ * Check if a given raw property key is configured as hidden.
+ */
+export function isFieldHidden(key: string, customHiddenMap?: Record<string, boolean>): boolean {
+  if (!key) return false;
+  const activeHidden = customHiddenMap || getHiddenFieldsMap();
+
+  if (activeHidden[key] === true) return true;
+
+  const lower = key.toLowerCase();
+  if (activeHidden[lower] === true) return true;
+
+  const cleanKey = lower.replace(/[^a-z0-9]/g, '');
+  if (activeHidden[cleanKey] === true) return true;
+
+  for (const [hKey, isHidden] of Object.entries(activeHidden)) {
+    if (!isHidden) continue;
+    const hLower = hKey.toLowerCase();
+    const hClean = hLower.replace(/[^a-z0-9]/g, '');
+    if (hLower === lower || (hClean && hClean === cleanKey)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Save user-defined field alias map and hidden fields map to LocalStorage and sync to Firestore
+ */
+export async function saveCustomAliasMap(
+  map: Record<string, string>,
+  hiddenMap?: Record<string, boolean>
+): Promise<boolean> {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    if (hiddenMap) {
+      saveHiddenFieldsMap(hiddenMap);
+    }
   } catch (e) {
     console.error('Lỗi lưu danh sách ánh xạ tên trường:', e);
   }
-  // Sync directly to Firestore
-  return await saveFieldAliasDictionaryToFirestore(map);
+  // Sync in background without blocking
+  saveFieldAliasDictionaryToFirestore(map, hiddenMap || getHiddenFieldsMap()).catch((err) => {
+    console.warn('Lỗi đồng bộ Firestore:', err);
+  });
+  return true;
 }
 
 /**
@@ -282,11 +230,15 @@ export function getFieldAlias(key: string, customMap?: Record<string, string>): 
 /**
  * Get merged full list of alias rules for display in mapping table UI
  */
-export function getAllAliasRules(customMap?: Record<string, string>): FieldAliasRule[] {
+export function getAllAliasRules(
+  customMap?: Record<string, string>,
+  customHiddenMap?: Record<string, boolean>
+): FieldAliasRule[] {
   const activeCustom = customMap || getCustomAliasMap();
+  const activeHidden = customHiddenMap || getHiddenFieldsMap();
 
   const rules: FieldAliasRule[] = [];
-  const seenAliases = new Set<string>();
+  const seenKeys = new Set<string>();
 
   // 1. Process defaults first (skipping any deleted by user)
   Object.entries(DEFAULT_FIELD_ALIASES).forEach(([key, alias]) => {
@@ -296,24 +248,32 @@ export function getAllAliasRules(customMap?: Record<string, string>): FieldAlias
     ) {
       return;
     }
-    // If custom map defines a non-deleted alias for this key, custom map entry will handle it
+    let activeAlias = alias;
     if (activeCustom[key] && activeCustom[key] !== '__DELETED__') {
-      return;
+      activeAlias = activeCustom[key];
     }
-    const uniqueId = `${key.toLowerCase()}_${alias}`;
-    if (!seenAliases.has(uniqueId)) {
-      seenAliases.add(uniqueId);
-      rules.push({ key, alias });
+    const uniqueKey = key.toLowerCase();
+    if (!seenKeys.has(uniqueKey)) {
+      seenKeys.add(uniqueKey);
+      rules.push({
+        key,
+        alias: activeAlias,
+        visible: !isFieldHidden(key, activeHidden),
+      });
     }
   });
 
-  // 2. Process custom entries
+  // 2. Process custom entries that were not in default
   Object.entries(activeCustom).forEach(([key, alias]) => {
     if (!alias || alias === '__DELETED__') return;
-    const uniqueId = `${key.toLowerCase()}_${alias}`;
-    if (!seenAliases.has(uniqueId)) {
-      seenAliases.add(uniqueId);
-      rules.push({ key, alias });
+    const uniqueKey = key.toLowerCase();
+    if (!seenKeys.has(uniqueKey)) {
+      seenKeys.add(uniqueKey);
+      rules.push({
+        key,
+        alias,
+        visible: !isFieldHidden(key, activeHidden),
+      });
     }
   });
 

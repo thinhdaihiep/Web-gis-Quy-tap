@@ -181,12 +181,28 @@
 .marker-gis-svg {
   display: block;
   overflow: visible;
-  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
-  transition: transform 0.15s ease-in-out;
+}
+
+.point-feature-selected {
+  z-index: 1000 !important;
 }
 
 .point-feature-selected .marker-gis-svg,
 .marker-gis-svg.is-selected {
-  filter: drop-shadow(0 4px 8px rgba(37,99,235,0.6));
-  transform: scale(1.15);
+  transform: scale(1.05);
+}
+
+.point-feature-selected::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid #2563eb;
+  background-color: rgba(37, 99, 235, 0.1);
+  pointer-events: none;
+  z-index: -1;
 }

@@ -120,7 +120,7 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const effectiveRole: UserRole = isMobile ? 'guest' : (user ? user.role : 'guest');
+  const effectiveRole: UserRole = user ? user.role : 'guest';
 
   const [baseMap, setBaseMap] = useState<BaseMapType>('street');
   const [layers, setLayers] = useState<LayerConfig[]>(DEFAULT_LAYERS);
@@ -290,10 +290,15 @@ export default function App() {
 
         setSplashStatusText('Đang nạp bảng ánh xạ thuộc tính tiếng Việt...');
         // 2. Load shared field alias dictionary from Firestore
-        const dbAliases = await loadFieldAliasDictionaryFromFirestore();
-        if (dbAliases && Object.keys(dbAliases).length > 0) {
+        const dbAliasData = await loadFieldAliasDictionaryFromFirestore();
+        if (dbAliasData) {
           try {
-            localStorage.setItem('gis_field_alias_dictionary', JSON.stringify(dbAliases));
+            if (dbAliasData.aliases && Object.keys(dbAliasData.aliases).length > 0) {
+              localStorage.setItem('gis_field_alias_dictionary', JSON.stringify(dbAliasData.aliases));
+            }
+            if (dbAliasData.hiddenFields) {
+              localStorage.setItem('gis_hidden_fields_dictionary', JSON.stringify(dbAliasData.hiddenFields));
+            }
             setAliasVersion((v) => v + 1);
           } catch (e) {
             console.warn('Lỗi lưu cache field_aliases:', e);
@@ -747,7 +752,14 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
 
-    // 1. Instantly update local state and localStorage cache
+    // 1. Immediately sync refs and selection state so unsaved badge/toolbar updates in 0ms
+    originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(updatedFeat));
+    setSelectedFeature(updatedFeat);
+
+    // 2. Immediate visual toast feedback
+    showToast('Đã lưu thay đổi thành công!');
+
+    // 3. Instantly update React map features state and defer localStorage serialization to background macrotask
     setMapFeatures((prev) => {
       const idx = prev.findIndex(
         (f) => String(f.id) === String(updatedFeat.id) || getItemUniqueKey(f) === getItemUniqueKey(updatedFeat)
@@ -760,19 +772,17 @@ export default function App() {
       } else {
         updatedList = [...prev, updatedFeat];
       }
-      try {
-        localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
-      } catch (e) {}
+
+      setTimeout(() => {
+        try {
+          localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
+        } catch (e) {}
+      }, 0);
+
       return updatedList;
     });
 
-    originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(updatedFeat));
-    setSelectedFeature(updatedFeat);
-
-    // 2. Immediate feedback
-    showToast('Đã lưu thay đổi thành công!');
-
-    // 3. Background sync to Firebase
+    // 4. Background sync to Firebase asynchronously
     saveSingleFeatureToFirestore(updatedFeat)
       .then((success) => {
         if (success) {
@@ -1198,7 +1208,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-900 font-sans text-slate-900">
+    <div className="flex flex-col h-screen h-[100dvh] w-screen w-[100dvw] overflow-hidden bg-slate-900 font-sans text-slate-900">
       {/* Top High Density Header */}
       <Header
         currentRole={effectiveRole}
@@ -1218,11 +1228,11 @@ export default function App() {
       />
 
       {/* Main App Body */}
-      <main className="flex flex-1 overflow-hidden relative">
-        {/* Mobile Backdrop when sidebars are open as overlays on small screens */}
+      <main className="flex flex-1 overflow-hidden relative min-h-0">
+        {/* Mobile & Tablet Backdrop when sidebars are open as overlays on screens smaller than lg */}
         {(isLeftSidebarOpen || isSearchPaneOpen) && (
           <div
-            className="md:hidden fixed inset-0 bg-black/40 z-[1900] backdrop-blur-xs transition-opacity"
+            className="lg:hidden fixed inset-0 bg-black/40 z-[1900] backdrop-blur-xs transition-opacity"
             onClick={() => {
               setIsLeftSidebarOpen(false);
               setIsSearchPaneOpen(false);
@@ -1232,7 +1242,7 @@ export default function App() {
 
         {/* Left Sidebar: Layer Management */}
         {isLeftSidebarOpen && (
-          <div className="absolute md:relative inset-y-0 left-0 z-[2000] md:z-10 bg-white h-full shadow-2xl md:shadow-none transition-all">
+          <div className="absolute lg:relative inset-y-0 left-0 z-[2000] lg:z-10 bg-white h-full shadow-2xl lg:shadow-none transition-all">
             <LeftSidebar
               layers={layers}
               features={mapFeatures}
@@ -1250,7 +1260,7 @@ export default function App() {
 
         {/* Left Sidebar: Spatial & Attribute Search Pane */}
         {isSearchPaneOpen && (
-          <div className="absolute md:relative inset-y-0 left-0 z-[2000] md:z-10 bg-slate-900 h-full shadow-2xl md:shadow-none transition-all">
+          <div className="absolute lg:relative inset-y-0 left-0 z-[2000] lg:z-10 bg-slate-900 h-full shadow-2xl lg:shadow-none transition-all">
             <SearchPane
               isOpen={isSearchPaneOpen}
               onClose={() => {
@@ -1315,7 +1325,7 @@ export default function App() {
             features={mapFeatures}
             aliasVersion={aliasVersion}
             interactionMode={interactionMode}
-            selectedFeatureId={selectedFeature?.id || null}
+            selectedFeatureId={selectedFeature ? getItemUniqueKey(selectedFeature) : null}
             activeDrawMode={activeDrawMode}
             pendingPasteFeature={pendingPasteFeature}
             targetMarkerLocation={targetMarkerLocation}

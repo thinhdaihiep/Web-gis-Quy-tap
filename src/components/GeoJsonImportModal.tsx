@@ -135,20 +135,41 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
         let props: Record<string, any> = {};
         if (filterStrictFields) {
           props = {
-            OBJECTID: rawProps.OBJECTID ?? rawProps.objectID ?? rawId,
+            OBJECTID: rawProps.OBJECTID ?? rawProps.objectID ?? rawProps.objectid ?? rawId,
             Ten: rawProps.Ten ?? rawProps.ten ?? null,
             PhanLoai: rawProps.PhanLoai ?? rawProps.phanLoai ?? null,
-            TimDuoc: rawProps.TimDuoc ?? rawProps.timDuoc ?? null,
-            ChuaThay: rawProps.ChuaThay ?? rawProps.chuaThay ?? null,
+            HienTrang: rawProps.HienTrang ?? rawProps.hienTrang ?? null,
             Xa: rawProps.Xa ?? rawProps.xa ?? null,
             Tinh: rawProps.Tinh ?? rawProps.tinh ?? null,
+            CapNhat: rawProps.CapNhat ?? rawProps.capNhat ?? null,
+            Nguon: rawProps.Nguon ?? rawProps.nguon ?? null,
+            TimDuoc: rawProps.TimDuoc ?? rawProps.timDuoc ?? null,
+            ChuaThay: rawProps.ChuaThay ?? rawProps.chuaThay ?? null,
+            ToaDo: rawProps.ToaDo ?? rawProps.toaDo ?? null,
+            DiaDanh3C: rawProps.DiaDanh3C ?? rawProps.diaDanh3C ?? rawProps.diadanh3c ?? rawProps.DiaDanh_3C ?? rawProps.DIADANH3C ?? rawProps.dia_danh_3c ?? null,
           };
-          if (rawProps.ToaDo) {
-            props.ToaDo = rawProps.ToaDo; // Optional text reference
-          }
-          if (rawProps.HienTrang) {
-            props.HienTrang = rawProps.HienTrang;
-          }
+          
+          // Optional fields for historical battles, graves, and cemeteries if present
+          if (rawProps.ThoiGian) props.ThoiGian = rawProps.ThoiGian;
+          if (rawProps.DiaDiem) props.DiaDiem = rawProps.DiaDiem;
+          if (rawProps.DonVi) props.DonVi = rawProps.DonVi;
+          if (rawProps.BenDich) props.BenDich = rawProps.BenDich;
+          if (rawProps.BenTa) props.BenTa = rawProps.BenTa;
+          if (rawProps.CongTrinh) props.CongTrinh = rawProps.CongTrinh;
+          if (rawProps.QuyTap) props.QuyTap = rawProps.QuyTap;
+          if (rawProps.GhiChu) props.GhiChu = rawProps.GhiChu;
+          if (rawProps.ThongTin) props.ThongTin = rawProps.ThongTin;
+          if (rawProps.NgaySinh ?? rawProps.ngaySinh ?? rawProps.ngay_sinh) props.NgaySinh = rawProps.NgaySinh ?? rawProps.ngaySinh ?? rawProps.ngay_sinh;
+          if (rawProps.NgayMat ?? rawProps.ngayMat ?? rawProps.ngay_mat) props.NgayMat = rawProps.NgayMat ?? rawProps.ngayMat ?? rawProps.ngay_mat;
+          if (rawProps.CapBac ?? rawProps.capBac ?? rawProps.cap_bac) props.CapBac = rawProps.CapBac ?? rawProps.capBac ?? rawProps.cap_bac;
+          if (rawProps.ChucVu ?? rawProps.chucVu ?? rawProps.chuc_vu) props.ChucVu = rawProps.ChucVu ?? rawProps.chucVu ?? rawProps.chuc_vu;
+          if (rawProps.NTID) props.NTID = rawProps.NTID;
+          if (rawProps.DiaChi) props.DiaChi = rawProps.DiaChi;
+          if (rawProps.DienThoai) props.DienThoai = rawProps.DienThoai;
+          if (rawProps.SoMo) props.SoMo = rawProps.SoMo;
+          if (rawProps.ThanhLap) props.ThanhLap = rawProps.ThanhLap;
+          if (rawProps.MoCoTen) props.MoCoTen = rawProps.MoCoTen;
+          if (rawProps.MoVoDanh) props.MoVoDanh = rawProps.MoVoDanh;
         } else {
           props = { ...rawProps };
         }
@@ -345,6 +366,7 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
               HienTrang: 'Đã tìm kiếm nhưng chưa có kết quả',
               Xa: 'Xã Phù Cát',
               Tinh: 'Gia Lai',
+              DiaDanh3C: 'Xã Phù Cát, Huyện Phù Cát, Tỉnh Gia Lai (Cũ)',
               CapNhat: null,
               Nguon: null,
               TimDuoc: 0,
@@ -380,6 +402,7 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
               HienTrang: 'Đã quy tập xong',
               Xa: 'Thị trấn Ea Drăng',
               Tinh: 'Đăk Lăk',
+              DiaDanh3C: 'Thị trấn Ea Drăng, Huyện Ea H\'Leo, Tỉnh Đăk Lăk (Cũ)',
               CapNhat: 1781481600000,
               Nguon: 'Bộ CHQS tỉnh Đăk Lăk',
               TimDuoc: 8,
@@ -617,7 +640,7 @@ export const GeoJsonImportModal: React.FC<GeoJsonImportModalProps> = ({
                   Chuẩn hóa thuộc tính: Chỉ lọc & import các trường quy tập cốt lõi
                 </span>
                 <p className="text-[11px] font-mono text-blue-800 mt-0.5">
-                  [OBJECTID, Ten, PhanLoai, TimDuoc, ChuaThay, Xa, Tinh] (Tọa độ tự động lấy từ GeoJSON Geometry)
+                  [OBJECTID, Ten, PhanLoai, TimDuoc, ChuaThay, Xa, Tinh, DiaDanh3C] (Tọa độ tự động lấy từ GeoJSON Geometry)
                 </p>
               </label>
             </div>

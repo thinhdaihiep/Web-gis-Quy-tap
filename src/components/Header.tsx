@@ -34,7 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="h-14 bg-[#1e293b] text-white flex items-center justify-between px-2.5 sm:px-4 border-b border-slate-700 shrink-0 z-[3000] shadow-sm gap-1.5 sm:gap-3">
       {/* Brand Title & Pane Toggles */}
       <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
-        <div className="w-7 h-7 sm:w-8 sm:h-8 bg-red-600 rounded flex items-center justify-center font-bold text-base sm:text-lg text-white shadow-sm shrink-0">
+        <div className="w-7 h-7 sm:w-8 sm:h-8 bg-red-600 rounded flex items-center justify-center font-bold text-base sm:text-lg text-yellow-400 shadow-sm shrink-0">
           ★
         </div>
         <div className="min-w-0 flex-1">
@@ -73,19 +73,19 @@ export const Header: React.FC<HeaderProps> = ({
             <Search className="w-4 h-4 shrink-0" />
           </button>
 
-          {/* Field Alias Dictionary button (Admin & Desktop only) */}
-          {!isMobile && currentRole === 'admin' && onOpenFieldAliasModal && (
+          {/* Field Alias Dictionary button (Admin) */}
+          {currentRole === 'admin' && onOpenFieldAliasModal && (
             <button
               onClick={onOpenFieldAliasModal}
               className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
-              title="Ánh xạ trường thuộc tính"
+              title="Bảng thuộc tính"
             >
               <FileSpreadsheet className="w-4 h-4 shrink-0" />
             </button>
           )}
 
-          {/* User Management button (Admin & Desktop only) */}
-          {!isMobile && currentRole === 'admin' && onOpenUserManagementModal && (
+          {/* User Management button (Admin) */}
+          {currentRole === 'admin' && onOpenUserManagementModal && (
             <button
               onClick={onOpenUserManagementModal}
               className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
@@ -98,7 +98,7 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-        {!isMobile && user && (
+        {user && (
           <div className="text-right hidden sm:block">
             <p className="text-[10px] uppercase text-slate-400 font-semibold leading-none">
               {user.displayName || user.email}

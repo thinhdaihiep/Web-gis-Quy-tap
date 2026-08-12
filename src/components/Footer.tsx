@@ -123,11 +123,11 @@ export const Footer: React.FC<FooterProps> = ({
           }`}
         >
           <Crosshair className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-          <span className="text-[10px] text-slate-400 uppercase font-semibold hidden xs:inline shrink-0">
+          <span className="text-[10px] text-slate-400 uppercase font-semibold hidden sm:inline shrink-0">
             Tọa độ:
           </span>
 
-          <div className="relative flex items-center">
+          <div className="relative flex items-center min-w-0">
             <input
               ref={inputRef}
               type="text"
@@ -139,8 +139,8 @@ export const Footer: React.FC<FooterProps> = ({
               onFocus={handleFocus}
               onBlur={handleBlur}
               onKeyDown={handleKeyDown}
-              placeholder="Nhập tọa độ WGS84 (VD: 16.047079° N, 108.206230° E hoặc DMS)..."
-              className={`font-mono text-[11px] font-bold bg-transparent outline-none w-[240px] xs:w-[270px] sm:w-[310px] transition-colors ${
+              placeholder="Nhập tọa độ WGS84..."
+              className={`font-mono text-[11px] font-bold bg-transparent outline-none w-[180px] sm:w-[280px] transition-colors ${
                 inputError
                   ? 'text-red-300 placeholder-red-400/60'
                   : 'text-emerald-400 focus:text-white'
@@ -190,8 +190,8 @@ export const Footer: React.FC<FooterProps> = ({
       </div>
 
       {/* Right side: Scale & Copyright */}
-      <div className="flex gap-4 items-center text-[10px] text-slate-400">
-        <span className="hidden md:inline">
+      <div className="flex gap-2 sm:gap-4 items-center text-[10px] text-slate-400 shrink-0">
+        <span className="hidden sm:inline">
           {mapScale ? (
             <>
               Tỷ lệ 1:{mapScale.toLocaleString('vi-VN')}

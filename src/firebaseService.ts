@@ -418,12 +418,14 @@ export async function deleteFeatureFromFirestore(featureId: string): Promise<boo
  * Save field alias dictionary to Firestore
  */
 export async function saveFieldAliasDictionaryToFirestore(
-  aliasMap: Record<string, string>
+  aliasMap: Record<string, string>,
+  hiddenMap?: Record<string, boolean>
 ): Promise<boolean> {
   try {
     const docRef = doc(db, APP_SETTINGS_COLLECTION, 'field_aliases');
     await setDoc(docRef, {
       aliases: aliasMap,
+      hiddenFields: hiddenMap || {},
       updatedAt: new Date().toISOString(),
     });
     return true;
@@ -434,15 +436,21 @@ export async function saveFieldAliasDictionaryToFirestore(
 }
 
 /**
- * Load field alias dictionary from Firestore
+ * Load field alias dictionary and hidden fields map from Firestore
  */
-export async function loadFieldAliasDictionaryFromFirestore(): Promise<Record<string, string> | null> {
+export async function loadFieldAliasDictionaryFromFirestore(): Promise<{
+  aliases: Record<string, string>;
+  hiddenFields: Record<string, boolean>;
+} | null> {
   try {
     const docRef = doc(db, APP_SETTINGS_COLLECTION, 'field_aliases');
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       const data = docSnap.data();
-      return data?.aliases || null;
+      return {
+        aliases: data?.aliases || {},
+        hiddenFields: data?.hiddenFields || {},
+      };
     }
   } catch (err) {
     console.warn('Lỗi khi tải bảng ánh xạ từ Firestore:', err);

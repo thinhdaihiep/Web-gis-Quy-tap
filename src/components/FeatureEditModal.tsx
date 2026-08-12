@@ -9,7 +9,7 @@ import {
   Table,
   Layers,
 } from 'lucide-react';
-import { getFieldAlias, sortPropertyRows } from '../fieldAlias';
+import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
 
 interface FeatureEditModalProps {
   isOpen: boolean;
@@ -97,7 +97,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       
       const rows: AttributeRow[] = [];
       Object.entries(existingProps).forEach(([k, v]) => {
-        if (!knownKeys.includes(k)) {
+        if (!knownKeys.includes(k) && !isFieldHidden(k)) {
           rows.push({
             id: `row-${Math.random().toString(36).substr(2, 9)}`,
             key: k,
@@ -167,8 +167,8 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       updatedAt: new Date().toISOString(),
     };
 
-    onSave(updatedFeature);
     onClose();
+    onSave(updatedFeature);
   };
 
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
@@ -279,52 +279,58 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                 )}
 
                 {/* Row 4: Thời gian / Niên đại */}
-                <tr className="hover:bg-slate-50/80 transition">
-                  <td className="py-2 px-3 border-r border-slate-200 font-bold bg-slate-50 text-slate-700">
-                    Thời gian / Niên đại
-                  </td>
-                  <td className="py-1.5 px-3">
-                    <input
-                      type="text"
-                      value={thoiGian}
-                      onChange={(e) => setThoiGian(e.target.value)}
-                      placeholder="VD: 1968, Tháng 3/1975"
-                      className="w-full px-2 py-1 rounded border border-slate-300 text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                  </td>
-                </tr>
+                {!isFieldHidden('ThoiGian') && (
+                  <tr className="hover:bg-slate-50/80 transition">
+                    <td className="py-2 px-3 border-r border-slate-200 font-bold bg-slate-50 text-slate-700">
+                      Thời gian / Niên đại
+                    </td>
+                    <td className="py-1.5 px-3">
+                      <input
+                        type="text"
+                        value={thoiGian}
+                        onChange={(e) => setThoiGian(e.target.value)}
+                        placeholder="VD: 1968, Tháng 3/1975"
+                        className="w-full px-2 py-1 rounded border border-slate-300 text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </td>
+                  </tr>
+                )}
 
                 {/* Row 5: Đơn vị liên quan */}
-                <tr className="hover:bg-slate-50/80 transition">
-                  <td className="py-2 px-3 border-r border-slate-200 font-bold bg-slate-50 text-slate-700">
-                    Đơn vị liên quan
-                  </td>
-                  <td className="py-1.5 px-3">
-                    <input
-                      type="text"
-                      value={donVi}
-                      onChange={(e) => setDonVi(e.target.value)}
-                      placeholder="VD: Sư đoàn 2, Trung đoàn 1..."
-                      className="w-full px-2 py-1 rounded border border-slate-300 text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                  </td>
-                </tr>
+                {!isFieldHidden('DonVi') && (
+                  <tr className="hover:bg-slate-50/80 transition">
+                    <td className="py-2 px-3 border-r border-slate-200 font-bold bg-slate-50 text-slate-700">
+                      Đơn vị liên quan
+                    </td>
+                    <td className="py-1.5 px-3">
+                      <input
+                        type="text"
+                        value={donVi}
+                        onChange={(e) => setDonVi(e.target.value)}
+                        placeholder="VD: Sư đoàn 2, Trung đoàn 1..."
+                        className="w-full px-2 py-1 rounded border border-slate-300 text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </td>
+                  </tr>
+                )}
 
                 {/* Row 6: Mô tả / Lịch sử */}
-                <tr className="hover:bg-slate-50/80 transition">
-                  <td className="py-2 px-3 border-r border-slate-200 font-bold bg-slate-50 text-slate-700 align-top">
-                    Mô tả chi tiết / Lịch sử
-                  </td>
-                  <td className="py-1.5 px-3">
-                    <textarea
-                      rows={2}
-                      value={ghiChu}
-                      onChange={(e) => setGhiChu(e.target.value)}
-                      placeholder="Nhập ghi chú hoặc mô tả chi tiết..."
-                      className="w-full px-2 py-1 rounded border border-slate-300 text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                    ></textarea>
-                  </td>
-                </tr>
+                {!isFieldHidden('GhiChu') && !isFieldHidden('MoTa') && (
+                  <tr className="hover:bg-slate-50/80 transition">
+                    <td className="py-2 px-3 border-r border-slate-200 font-bold bg-slate-50 text-slate-700 align-top">
+                      Mô tả chi tiết / Lịch sử
+                    </td>
+                    <td className="py-1.5 px-3">
+                      <textarea
+                        rows={2}
+                        value={ghiChu}
+                        onChange={(e) => setGhiChu(e.target.value)}
+                        placeholder="Nhập ghi chú hoặc mô tả chi tiết..."
+                        className="w-full px-2 py-1 rounded border border-slate-300 text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                      ></textarea>
+                    </td>
+                  </tr>
+                )}
 
                 {/* Dynamic Custom Attribute Rows */}
                 {customRows.map((row) => {
