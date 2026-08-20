@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Search, X, MapPin, Target, Landmark, ShieldAlert, Crosshair, ChevronRight } from 'lucide-react';
+import { Search, X, ChevronRight } from 'lucide-react';
 import { LayerConfig, GeoJsonFeatureItem } from '../types';
-import { getFieldAlias, getItemUniqueKey } from '../fieldAlias';
+import { getFieldAlias, isFeatureMatch } from '../fieldAlias';
+import { formatDateForDisplay } from '../utils/dateFormatter';
 
 interface SearchPaneProps {
   isOpen: boolean;
@@ -10,7 +11,7 @@ interface SearchPaneProps {
   features: GeoJsonFeatureItem[];
   selectedFeatureId?: string | null;
   onSingleClickFeature: (feature: GeoJsonFeatureItem) => void;
-  onDoubleClickFeature: (feature: GeoJsonFeatureItem) => void;
+  onDoubleClickFeature?: (feature: GeoJsonFeatureItem) => void;
 }
 
 function getFeatureDisplayName(feat: GeoJsonFeatureItem): string {
@@ -40,42 +41,7 @@ function getFeatureDisplayName(feat: GeoJsonFeatureItem): string {
     return feat.name.trim();
   }
 
-  return feat.name || 'Đối tượng GIS';
-}
-
-function getLayerBadge(layerId?: string) {
-  switch (layerId) {
-    case 'layer1_mo_liet_si':
-      return {
-        label: 'Mộ Liệt sĩ',
-        bg: 'bg-red-500/20 text-red-400 border-red-500/30',
-        icon: Target,
-      };
-    case 'layer2_nghia_trang_ls':
-      return {
-        label: 'Nghĩa trang LS',
-        bg: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-        icon: Landmark,
-      };
-    case 'layer3_tran_danh':
-      return {
-        label: 'Trận đánh',
-        bg: 'bg-pink-500/20 text-pink-400 border-pink-500/30',
-        icon: ShieldAlert,
-      };
-    case 'layer4_khu_vuc_quy_tap':
-      return {
-        label: 'Khu vực quy tập',
-        bg: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-        icon: Crosshair,
-      };
-    default:
-      return {
-        label: 'Dữ liệu GIS',
-        bg: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-        icon: MapPin,
-      };
-  }
+  return feat.name || 'Đối tượng';
 }
 
 export const SearchPane: React.FC<SearchPaneProps> = ({
@@ -85,24 +51,31 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
   features,
   selectedFeatureId,
   onSingleClickFeature,
-  onDoubleClickFeature,
 }) => {
   const [inputText, setInputText] = useState<string>('');
   const [appliedQuery, setAppliedQuery] = useState<string>('');
   const [hasSearched, setHasSearched] = useState<boolean>(false);
   const [selectedLayerFilter, setSelectedLayerFilter] = useState<string>('all');
+  const [isSearching, setIsSearching] = useState<boolean>(false);
 
   const handleExecuteSearch = () => {
     const trimmed = inputText.trim();
     if (!trimmed) return;
-    setAppliedQuery(trimmed);
-    setHasSearched(true);
+
+    setIsSearching(true);
+    // Bật hiệu ứng xoay phản hồi ngắn 200ms và áp dụng truy vấn tìm kiếm
+    setTimeout(() => {
+      setAppliedQuery(trimmed);
+      setHasSearched(true);
+      setIsSearching(false);
+    }, 200);
   };
 
   const handleClearSearch = () => {
     setInputText('');
     setAppliedQuery('');
     setHasSearched(false);
+    setIsSearching(false);
   };
 
   const filteredFeatures = useMemo(() => {
@@ -131,6 +104,8 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
           if (valStr.includes(q)) return true;
           const alias = getFieldAlias(k);
           if (alias && alias.toLowerCase().includes(q)) return true;
+          const formattedDate = formatDateForDisplay(v, k, alias || k).toLowerCase();
+          if (formattedDate && formattedDate.includes(q)) return true;
         }
       }
 
@@ -191,10 +166,15 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
           <button
             type="button"
             onClick={handleExecuteSearch}
-            className="px-3 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg flex items-center justify-center transition cursor-pointer shrink-0 shadow-xs"
+            disabled={isSearching}
+            className="px-3 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:opacity-80 text-white rounded-lg flex items-center justify-center transition cursor-pointer shrink-0 shadow-xs active:scale-95"
             title="Nhấn để tìm kiếm"
           >
-            <Search className="w-4 h-4" />
+            {isSearching ? (
+              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : (
+              <Search className="w-4 h-4" />
+            )}
           </button>
         </div>
 
@@ -255,9 +235,9 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
         ) : (
           filteredFeatures.map((feat, idx) => {
             const displayName = getFeatureDisplayName(feat);
-            const badge = getLayerBadge(feat.layerId);
-            const Icon = badge.icon;
-            const isSelected = String(selectedFeatureId) === String(feat.id) || selectedFeatureId === getItemUniqueKey(feat);
+            const isSelected = isFeatureMatch(feat, selectedFeatureId);
+            const layerObj = layers.find((l) => l.id === feat.layerId);
+            const layerName = layerObj?.name || 'Lớp dữ liệu';
 
             // Extract a few summary details from properties
             const props = feat.properties || {};
@@ -275,34 +255,25 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
               <div
                 key={`${feat.layerId || 'layer'}_${feat.id}_${idx}`}
                 onClick={() => onSingleClickFeature(feat)}
-                onDoubleClick={() => onDoubleClickFeature(feat)}
                 className={`p-2.5 rounded-xl border transition cursor-pointer select-none flex flex-col gap-1.5 ${
                   isSelected
-                    ? 'bg-blue-900/40 border-blue-500/80 shadow-md shadow-blue-950/50 text-white'
+                    ? 'bg-blue-900/50 border-blue-500 text-white shadow-md shadow-blue-950/40'
                     : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700/60 hover:border-slate-600 text-slate-200'
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border flex items-center gap-1 shrink-0 ${badge.bg}`}
-                    >
-                      <Icon className="w-3 h-3" />
-                      <span>{badge.label}</span>
-                    </span>
-                    <h3 className="text-xs font-bold truncate text-slate-100">
-                      {displayName}
-                    </h3>
-                  </div>
-                  <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition ${isSelected ? 'text-blue-400 translate-x-0.5' : 'text-slate-500'}`} />
+                  <h3 className={`text-xs font-bold truncate ${isSelected ? 'text-blue-300' : 'text-slate-100'}`}>
+                    {displayName}
+                  </h3>
+                  <ChevronRight className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-blue-400' : 'text-slate-500'}`} />
                 </div>
 
                 <div className="flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-700/40 pt-1">
-                  <span className="font-mono text-[10px] text-slate-400">
-                    Mã: <b className="text-slate-300">{feat.code || feat.id}</b>
+                  <span className="text-[10px] text-blue-400 font-medium truncate max-w-[130px]">
+                    {layerName}
                   </span>
                   {subInfo && (
-                    <span className="truncate max-w-[180px] text-slate-300 italic">
+                    <span className="truncate max-w-[170px] text-slate-300 italic">
                       {String(subInfo)}
                     </span>
                   )}

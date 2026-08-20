@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { GeoJsonFeatureItem, LayerConfig, PHAN_LOAI_COLORS, UserRole } from '../types';
+import { GeoJsonFeatureItem, LayerConfig, PHAN_LOAI_COLORS, UserRole, AppUser } from '../types';
 import {
   X,
   Clock,
@@ -8,14 +8,17 @@ import {
   Trash2,
   Table,
   Layers,
+  Calendar,
 } from 'lucide-react';
 import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
+import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
 
 interface FeatureEditModalProps {
   isOpen: boolean;
   feature: Partial<GeoJsonFeatureItem> | null;
   layers: LayerConfig[];
   currentRole: UserRole;
+  currentUser?: AppUser | null;
   onSave: (feature: GeoJsonFeatureItem) => void;
   onDelete?: (featureId: string) => void;
   onClose: () => void;
@@ -32,6 +35,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   feature,
   layers,
   currentRole,
+  currentUser,
   onSave,
   onDelete,
   onClose,
@@ -98,10 +102,18 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       const rows: AttributeRow[] = [];
       Object.entries(existingProps).forEach(([k, v]) => {
         if (!knownKeys.includes(k) && !isFieldHidden(k)) {
+          const alias = getFieldAlias(k);
+          const isDate = isDateField(k, alias || k);
+          const displayVal = isDate
+            ? formatDateForDisplay(v, k, alias || k)
+            : v !== null && v !== undefined
+            ? String(v)
+            : '';
+
           rows.push({
             id: `row-${Math.random().toString(36).substr(2, 9)}`,
             key: k,
-            value: v !== null && v !== undefined ? String(v) : '',
+            value: displayVal,
           });
         }
       });
@@ -141,6 +153,8 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       return;
     }
 
+    const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+
     // Build merged properties dictionary
     const properties: Record<string, any> = {
       ...(feature.properties || {}),
@@ -149,11 +163,19 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       ThoiGian: thoiGian.trim(),
       DonVi: donVi.trim(),
       GhiChu: ghiChu.trim(),
+      NguoiSua: currentUpdater,
+      CapNhat: new Date().toISOString(),
     };
 
     customRows.forEach((row) => {
       if (row.key.trim()) {
-        properties[row.key.trim()] = row.value.trim();
+        const k = row.key.trim();
+        const origVal = feature.properties?.[k];
+        if (isDateField(k)) {
+          properties[k] = parseDateInputToStorageValue(row.value.trim(), origVal, k);
+        } else {
+          properties[k] = row.value.trim();
+        }
       }
     });
 
@@ -335,16 +357,20 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                 {/* Dynamic Custom Attribute Rows */}
                 {customRows.map((row) => {
                   const alias = getFieldAlias(row.key);
+                  const isDate = isDateField(row.key, alias || row.key);
                   return (
                     <tr key={row.id} className="hover:bg-slate-50/80 transition group">
                       <td className="py-1.5 px-3 border-r border-slate-200 bg-slate-50">
-                        <input
-                          type="text"
-                          value={row.key}
-                          onChange={(e) => handleUpdateRow(row.id, 'key', e.target.value)}
-                          placeholder="Tên trường..."
-                          className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-blue-500 outline-none"
-                        />
+                        <div className="flex items-center gap-1">
+                          {isDate && <Calendar className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
+                          <input
+                            type="text"
+                            value={row.key}
+                            onChange={(e) => handleUpdateRow(row.id, 'key', e.target.value)}
+                            placeholder="Tên trường..."
+                            className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-blue-500 outline-none"
+                          />
+                        </div>
                         {alias && alias !== row.key && (
                           <span className="text-[10px] text-blue-600 font-semibold block truncate mt-0.5">
                             Ánh xạ: {alias}
@@ -353,13 +379,44 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                       </td>
 
                       <td className="py-1.5 px-3 flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={row.value}
-                          onChange={(e) => handleUpdateRow(row.id, 'value', e.target.value)}
-                          placeholder="Giá trị..."
-                          className="flex-1 px-2 py-1 rounded border border-slate-300 text-xs font-medium text-slate-900 focus:ring-1 focus:ring-blue-500 outline-none"
-                        />
+                        {isDate ? (
+                          <div className="flex-1 flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              value={row.value}
+                              placeholder="DD/MM/YYYY"
+                              onChange={(e) => handleUpdateRow(row.id, 'value', e.target.value)}
+                              className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-medium text-slate-900 focus:ring-1 focus:ring-blue-500 outline-none"
+                            />
+                            <div className="relative shrink-0 flex items-center justify-center">
+                              <input
+                                type="date"
+                                value={toHtmlDateInputValue(row.value, row.key, alias || row.key)}
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    const [y, m, d] = e.target.value.split('-');
+                                    handleUpdateRow(row.id, 'value', `${d}/${m}/${y}`);
+                                  } else {
+                                    handleUpdateRow(row.id, 'value', '');
+                                  }
+                                }}
+                                className="w-7 h-7 opacity-0 absolute inset-0 cursor-pointer z-10"
+                                title="Chọn ngày từ lịch"
+                              />
+                              <div className="w-7 h-7 rounded border border-slate-300 bg-slate-50 hover:bg-blue-50 hover:border-blue-300 text-slate-600 hover:text-blue-600 flex items-center justify-center transition shadow-2xs">
+                                <Calendar className="w-3.5 h-3.5" />
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            value={row.value}
+                            onChange={(e) => handleUpdateRow(row.id, 'value', e.target.value)}
+                            placeholder="Giá trị..."
+                            className="flex-1 px-2 py-1 rounded border border-slate-300 text-xs font-medium text-slate-900 focus:ring-1 focus:ring-blue-500 outline-none"
+                          />
+                        )}
                         <button
                           type="button"
                           onClick={() => handleRemoveRow(row.id)}

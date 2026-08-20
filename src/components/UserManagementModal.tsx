@@ -28,11 +28,19 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ onClos
           uid: docSnap.id,
           username: data.username || data.email || '',
           email: data.email || '',
-          displayName: data.displayName || '',
+          displayName: (data.username === 'admin' && (data.displayName === 'Quản trị viên' || !data.displayName)) ? 'Bản đồ qk5' : (data.displayName || ''),
           photoURL: data.photoURL || '',
           role: data.role || 'guest',
         });
       });
+      if (!userList.some((u) => u.username === 'admin')) {
+        userList.unshift({
+          uid: 'admin_static',
+          username: 'admin',
+          displayName: 'Bản đồ qk5',
+          role: 'admin',
+        });
+      }
       setUsers(userList);
     } catch (err) {
       console.error('Lỗi khi tải danh sách người dùng:', err);

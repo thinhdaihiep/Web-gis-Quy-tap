@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, FileSpreadsheet, Search, LogIn, LogOut, Users } from 'lucide-react';
+import { Layers, Database, Search, LogIn, LogOut, Users } from 'lucide-react';
 import { UserRole, AppUser } from '../types';
 
 interface HeaderProps {
@@ -12,7 +12,7 @@ interface HeaderProps {
   onToggleLeftSidebar: () => void;
   isSearchPaneOpen: boolean;
   onToggleSearchPane: () => void;
-  onOpenFieldAliasModal?: () => void;
+  onOpenDatabaseManagementModal?: () => void;
   onOpenUserManagementModal?: () => void;
   isMobile?: boolean;
 }
@@ -26,7 +26,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleLeftSidebar,
   isSearchPaneOpen,
   onToggleSearchPane,
-  onOpenFieldAliasModal,
+  onOpenDatabaseManagementModal,
   onOpenUserManagementModal,
   isMobile = false,
 }) => {
@@ -73,14 +73,14 @@ export const Header: React.FC<HeaderProps> = ({
             <Search className="w-4 h-4 shrink-0" />
           </button>
 
-          {/* Field Alias Dictionary button (Admin) */}
-          {currentRole === 'admin' && onOpenFieldAliasModal && (
+          {/* Database Management button (Admin) */}
+          {currentRole === 'admin' && onOpenDatabaseManagementModal && (
             <button
-              onClick={onOpenFieldAliasModal}
+              onClick={onOpenDatabaseManagementModal}
               className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
-              title="Bảng thuộc tính"
+              title="Quản lý CSDL"
             >
-              <FileSpreadsheet className="w-4 h-4 shrink-0" />
+              <Database className="w-4 h-4 shrink-0" />
             </button>
           )}
 

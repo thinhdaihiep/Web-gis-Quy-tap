@@ -16,7 +16,7 @@ export const signInWithCredentials = async (username: string, password: string):
       const adminUser: AppUser = {
         uid: 'admin_static',
         username: 'admin',
-        displayName: 'Quản trị viên',
+        displayName: 'Bản đồ qk5',
         role: 'admin',
       };
       localStorage.setItem('gis_user_session', JSON.stringify(adminUser));
@@ -54,7 +54,12 @@ export const getStoredUser = (): AppUser | null => {
   try {
     const stored = localStorage.getItem('gis_user_session');
     if (stored) {
-      return JSON.parse(stored);
+      const parsed: AppUser = JSON.parse(stored);
+      if (parsed.username === 'admin' && (parsed.displayName === 'Quản trị viên' || !parsed.displayName)) {
+        parsed.displayName = 'Bản đồ qk5';
+        localStorage.setItem('gis_user_session', JSON.stringify(parsed));
+      }
+      return parsed;
     }
   } catch (e) {
     console.error(e);

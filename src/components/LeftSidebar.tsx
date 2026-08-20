@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LayerConfig, UserRole, GeoJsonFeatureItem } from '../types';
-import { Layers, Upload, X, Info, ChevronDown, ChevronRight, Folder } from 'lucide-react';
+import { Layers, Plus, X, Info, ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import { SearchAreaShapeBadge, BattleShapeBadge, GraveShapeBadge, CemeteryShapeBadge } from './GisIcons';
 
 interface LeftSidebarProps {
@@ -11,7 +11,6 @@ interface LeftSidebarProps {
   onRenameLayer?: (layerId: string, newName: string) => void;
   onZoomToLayer?: (layerId: string) => void;
   currentRole: UserRole;
-  onImportClick: () => void;
   onClose?: () => void;
 }
 
@@ -21,10 +20,51 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onToggleVisibility,
   onToggleGroupVisibility,
   currentRole,
-  onImportClick,
   onClose,
 }) => {
   const [activeInfoLayerId, setActiveInfoLayerId] = useState<string | null>(null);
+
+  // Optimistic layer visibility map for instantaneous 0ms UI checkbox feedback
+  const [optimisticVisibility, setOptimisticVisibility] = useState<Record<string, boolean>>({});
+
+  React.useEffect(() => {
+    const nextMap: Record<string, boolean> = {};
+    layers.forEach((l) => {
+      nextMap[l.id] = l.visible;
+    });
+    setOptimisticVisibility(nextMap);
+  }, [layers]);
+
+  const handleToggleClick = (layerId: string) => {
+    // 1. Phản hồi tức thì ngay trên checkbox (0ms)
+    setOptimisticVisibility((prev) => ({
+      ...prev,
+      [layerId]: prev[layerId] !== undefined ? !prev[layerId] : false,
+    }));
+
+    // 2. Chuyển tác vụ tính toán và render bản đồ sang background
+    React.startTransition(() => {
+      onToggleVisibility(layerId);
+    });
+  };
+
+  const handleGroupToggleClick = (layerIds: string[], visible: boolean) => {
+    // 1. Phản hồi tức thì nhóm checkbox (0ms)
+    setOptimisticVisibility((prev) => {
+      const next = { ...prev };
+      layerIds.forEach((id) => {
+        next[id] = visible;
+      });
+      return next;
+    });
+
+    // 2. Chuyển xử lý dữ liệu sang background
+    React.startTransition(() => {
+      if (onToggleGroupVisibility) {
+        onToggleGroupVisibility(layerIds, visible);
+      }
+    });
+  };
 
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     business: true,
@@ -106,14 +146,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
     const isInfoActive = activeInfoLayerId === layer.id;
 
+    const isLayerVisible = optimisticVisibility[layer.id] !== undefined ? optimisticVisibility[layer.id] : layer.visible;
+
     return (
       <div key={layer.id} className="space-y-1">
         <div className="flex items-center justify-between px-2 py-1.5 hover:bg-slate-100 rounded transition-colors group text-slate-800">
           <div className="flex items-center min-w-0 flex-1 mr-1">
             <input
               type="checkbox"
-              checked={layer.visible}
-              onChange={() => onToggleVisibility(layer.id)}
+              checked={isLayerVisible}
+              onChange={() => handleToggleClick(layer.id)}
               className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer shrink-0"
             />
             <div className="ml-1.5 mr-1 shrink-0">
@@ -246,8 +288,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     if (groupLayers.length === 0) return null;
     
     const isExpanded = expandedGroups[groupId];
-    const isAllVisible = groupLayers.length > 0 && groupLayers.every(l => l.visible);
-    const isSomeVisible = groupLayers.some(l => l.visible);
+    const isAllVisible = groupLayers.length > 0 && groupLayers.every(l => (optimisticVisibility[l.id] ?? l.visible));
+    const isSomeVisible = groupLayers.some(l => (optimisticVisibility[l.id] ?? l.visible));
 
     return (
       <div className="mb-2">
@@ -274,11 +316,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               ref={el => {
                 if (el) el.indeterminate = isSomeVisible && !isAllVisible;
               }}
-              onChange={(e) => {
-                if (onToggleGroupVisibility) {
-                  onToggleGroupVisibility(groupLayers.map(l => l.id), e.target.checked);
-                }
-              }}
+              onChange={(e) => handleGroupToggleClick(groupLayers.map(l => l.id), e.target.checked)}
               className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
               title="Bật/tắt toàn bộ thư mục"
             />
@@ -354,16 +392,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </div>
         </div>
 
-        {/* GeoJSON Import Button Area */}
+        {/* Add Data Layer Button Area */}
         {currentRole === 'admin' && (
           <div>
             <button
-              onClick={onImportClick}
-              className="w-full py-2 px-3 rounded text-xs font-bold uppercase tracking-wider shadow-sm flex items-center justify-center space-x-1.5 transition-all bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-[0.99]"
-              title="Import tập tin GeoJSON lên hệ thống Firestore"
+              onClick={() => alert('Tính năng Thêm lớp dữ liệu đang được phát triển.')}
+              className="w-full py-2 px-3 rounded text-xs font-bold uppercase tracking-wider shadow-sm flex items-center justify-center space-x-1.5 transition-all bg-slate-700 hover:bg-slate-800 text-white cursor-pointer active:scale-[0.99]"
+              title="Thêm lớp dữ liệu"
             >
-              <Upload className="w-3.5 h-3.5" />
-              <span>+ Import Dữ liệu GeoJSON</span>
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Thêm lớp dữ liệu</span>
             </button>
           </div>
         )}

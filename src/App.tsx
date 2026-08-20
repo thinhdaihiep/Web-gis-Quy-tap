@@ -9,8 +9,7 @@ import { MapEditorToolbar } from './components/MapEditorToolbar';
 import { FeatureEditModal } from './components/FeatureEditModal';
 import { AttributePane } from './components/AttributePane';
 import { Footer } from './components/Footer';
-import { GeoJsonImportModal } from './components/GeoJsonImportModal';
-import { FieldAliasModal } from './components/FieldAliasModal';
+import { DatabaseManagementModal } from './components/DatabaseManagementModal';
 import { UserManagementModal } from './components/UserManagementModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
@@ -28,7 +27,7 @@ import {
   signOutUser,
   getStoredUser
 } from './firebaseService';
-import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
+import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
 import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw } from 'lucide-react';
 
 function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: any } {
@@ -126,8 +125,8 @@ export default function App() {
   const [layers, setLayers] = useState<LayerConfig[]>(DEFAULT_LAYERS);
   const [mapFeatures, setMapFeatures] = useState<GeoJsonFeatureItem[]>(INITIAL_MAP_FEATURES);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
-  const [isFieldAliasModalOpen, setIsFieldAliasModalOpen] = useState<boolean>(false);
+  const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
+  const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes'>('import');
   const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState<boolean>(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
@@ -141,6 +140,7 @@ export default function App() {
   // Map Editing (Phase 3) state
   const [interactionMode, setInteractionMode] = useState<MapInteractionMode>('hand');
   const [selectedFeature, setSelectedFeature] = useState<GeoJsonFeatureItem | null>(null);
+  const [isAttributePaneOpen, setIsAttributePaneOpen] = useState<boolean>(false);
 
   // Revert pointer mode to hand if user becomes guest or on mobile
   useEffect(() => {
@@ -222,33 +222,96 @@ export default function App() {
   };
 
   const handleJumpToFeature = (feat: GeoJsonFeatureItem) => {
-    setSelectedFeature(feat);
+    applyFeatureSelect(feat);
 
-    // Bật hiển thị layer nếu layer đó đang bị ẩn
+    // Bật hiển thị layer CHỈ KHI layer đó đang bị ẩn (tránh render lại toàn bộ bản đồ nếu layer đã hiển thị)
     if (feat.layerId) {
-      setLayers((prevLayers) =>
-        prevLayers.map((l) => (l.id === feat.layerId ? { ...l, visible: true } : l))
-      );
+      setLayers((prevLayers) => {
+        const targetLayer = prevLayers.find((l) => l.id === feat.layerId);
+        if (targetLayer && !targetLayer.visible) {
+          return prevLayers.map((l) => (l.id === feat.layerId ? { ...l, visible: true } : l));
+        }
+        return prevLayers;
+      });
     }
 
     if (!mapInstance) return;
 
+    let rawCoords = feat.coordinates;
+    if (!rawCoords && (feat as any).geometry?.coordinates) {
+      rawCoords = (feat as any).geometry.coordinates;
+    }
+    if (typeof rawCoords === 'string') {
+      try {
+        rawCoords = JSON.parse(rawCoords);
+      } catch (e) {
+        rawCoords = [];
+      }
+    }
+
     const points: [number, number][] = [];
     const collectCoords = (arr: any) => {
-      if (Array.isArray(arr) && arr.length === 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
-        points.push([arr[1], arr[0]]);
+      if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+        const a = arr[0];
+        const b = arr[1];
+        if (Math.abs(a) > 90 && Math.abs(b) <= 90) {
+          // a is longitude (~102-110), b is latitude (~8-24)
+          points.push([b, a]);
+        } else if (Math.abs(b) > 90 && Math.abs(a) <= 90) {
+          // a is latitude, b is longitude
+          points.push([a, b]);
+        } else {
+          // Standard GeoJSON [longitude, latitude] -> Leaflet [lat, lng]
+          points.push([b, a]);
+        }
       } else if (Array.isArray(arr)) {
         arr.forEach(collectCoords);
+      } else if (arr && typeof arr === 'object') {
+        const lat = arr.lat ?? arr.latitude;
+        const lng = arr.lng ?? arr.longitude;
+        if (typeof lat === 'number' && typeof lng === 'number') {
+          points.push([lat, lng]);
+        }
       }
     };
 
-    collectCoords(feat.coordinates);
+    collectCoords(rawCoords);
+
+    // Fallback nếu coordinates chưa có nhưng có trong properties
+    if (points.length === 0 && feat.properties) {
+      const p = feat.properties;
+      const lat = p.lat ?? p.latitude ?? p.ViDo ?? p.vi_do ?? p.y;
+      const lng = p.lng ?? p.longitude ?? p.KinhDo ?? p.kinh_do ?? p.x;
+      if (typeof lat === 'number' && typeof lng === 'number') {
+        points.push([lat, lng]);
+      } else if (typeof lat === 'string' && typeof lng === 'string' && !isNaN(Number(lat)) && !isNaN(Number(lng))) {
+        points.push([Number(lat), Number(lng)]);
+      }
+    }
 
     if (points.length === 0) return;
 
+    // Ngắt ngay animation trước đó để tránh xung đột
+    try {
+      (mapInstance as any).stop?.();
+    } catch (e) {}
+
+    // Đóng popup cũ nếu có (không tự động mở popup)
+    try {
+      mapInstance.closePopup();
+    } catch (e) {}
+
     const bounds = L.latLngBounds(points);
     const center = bounds.getCenter();
-    mapInstance.flyTo(center, 14, { duration: 1.0 });
+
+    // Cập nhật tọa độ con trỏ tức thì
+    setCursorLocation({ lat: center.lat, lng: center.lng });
+
+    // Jump nhanh bản đồ để đối tượng vào vị trí trung tâm với mức zoom 13
+    mapInstance.flyTo(center, 13, {
+      duration: 0.35,
+      easeLinearity: 0.25,
+    });
   };
 
   // App initial loading splash state
@@ -347,12 +410,18 @@ export default function App() {
     if (!selectedFeature || !originalSelectedFeatureRef.current) return false;
     if (selectedFeature.id !== originalSelectedFeatureRef.current.id) return false;
 
-    const currentCoords = JSON.stringify(selectedFeature.coordinates);
-    const origCoords = JSON.stringify(originalSelectedFeatureRef.current.coordinates);
-    const currentProps = JSON.stringify(selectedFeature.properties);
-    const origProps = JSON.stringify(originalSelectedFeatureRef.current.properties);
-
-    return currentCoords !== origCoords || currentProps !== origProps;
+    const orig = originalSelectedFeatureRef.current;
+    if (selectedFeature.coordinates !== orig.coordinates) {
+      if (JSON.stringify(selectedFeature.coordinates) !== JSON.stringify(orig.coordinates)) {
+        return true;
+      }
+    }
+    if (selectedFeature.properties !== orig.properties) {
+      if (JSON.stringify(selectedFeature.properties) !== JSON.stringify(orig.properties)) {
+        return true;
+      }
+    }
+    return false;
   }, [selectedFeature]);
   const handleImportConfirm = (
     targetLayerId: string,
@@ -430,7 +499,7 @@ export default function App() {
       } catch (e) {}
 
       const targetLayerObj = layers.find((l) => l.id === targetLayerId);
-      const layerName = targetLayerObj ? targetLayerObj.name.split(':')[0] : targetLayerId;
+      const layerName = targetLayerObj?.name ? targetLayerObj.name.split(':')[0] : targetLayerId;
 
       let toastMsg = `Import thành công [${layerName}]: ${addedCount} mới`;
       if (updatedCount > 0) toastMsg += `, ${updatedCount} ghi đè`;
@@ -471,28 +540,33 @@ export default function App() {
   const [targetMarkerLocation, setTargetMarkerLocation] = useState<{
     lat: number;
     lng: number;
+    timestamp?: number;
   } | null>(null);
   const locationLayerGroupRef = useRef<L.LayerGroup | null>(null);
 
   const handleGoToCoordinate = (lat: number, lng: number) => {
-    setTargetMarkerLocation({ lat, lng });
+    setTargetMarkerLocation({ lat, lng, timestamp: Date.now() });
     setCursorLocation({ lat, lng });
   };
 
   const handleToggleLayerVisibility = (layerId: string) => {
-    setLayers((prevLayers) =>
-      prevLayers.map((l) =>
-        l.id === layerId ? { ...l, visible: !l.visible } : l
-      )
-    );
+    React.startTransition(() => {
+      setLayers((prevLayers) =>
+        prevLayers.map((l) =>
+          l.id === layerId ? { ...l, visible: !l.visible } : l
+        )
+      );
+    });
   };
 
   const handleToggleLayerGroupVisibility = (layerIds: string[], visible: boolean) => {
-    setLayers((prevLayers) =>
-      prevLayers.map((l) =>
-        layerIds.includes(l.id) ? { ...l, visible } : l
-      )
-    );
+    React.startTransition(() => {
+      setLayers((prevLayers) =>
+        prevLayers.map((l) =>
+          layerIds.includes(l.id) ? { ...l, visible } : l
+        )
+      );
+    });
   };
 
   const handleRenameLayer = async (layerId: string, newName: string) => {
@@ -658,8 +732,11 @@ export default function App() {
     } else if (activeDrawMode === 'polygon' && vertices.length >= 3) {
       const polygonCoords = [...vertices];
       if (
-        polygonCoords[0][0] !== polygonCoords[polygonCoords.length - 1][0] ||
-        polygonCoords[0][1] !== polygonCoords[polygonCoords.length - 1][1]
+        polygonCoords.length > 0 &&
+        Array.isArray(polygonCoords[0]) &&
+        Array.isArray(polygonCoords[polygonCoords.length - 1]) &&
+        (polygonCoords[0][0] !== polygonCoords[polygonCoords.length - 1][0] ||
+          polygonCoords[0][1] !== polygonCoords[polygonCoords.length - 1][1])
       ) {
         polygonCoords.push(polygonCoords[0]);
       }
@@ -690,8 +767,10 @@ export default function App() {
     setSelectedFeature(feat);
     if (feat) {
       originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(feat));
+      setIsAttributePaneOpen(true);
     } else {
       originalSelectedFeatureRef.current = null;
+      setIsAttributePaneOpen(false);
     }
   };
 
@@ -701,7 +780,10 @@ export default function App() {
       return;
     }
     if (selectedFeature && isUnsaved) {
-      if (feat && feat.id === selectedFeature.id) return;
+      if (feat && feat.id === selectedFeature.id) {
+        setIsAttributePaneOpen(true);
+        return;
+      }
       setPendingNextFeature({ feat });
       return;
     }
@@ -734,21 +816,29 @@ export default function App() {
 
   const handleFeatureGeometryUpdate = (featureId: string, newCoordinates: any) => {
     // Quietly update local React state for real-time vertex dragging without toast or Firestore writes
-    setMapFeatures((prev) =>
-      prev.map((f) =>
-        f.id === featureId ? { ...f, coordinates: newCoordinates, updatedAt: new Date().toISOString() } : f
-      )
-    );
     setSelectedFeature((prev) =>
-      prev && prev.id === featureId
+      prev && isFeatureMatch(prev, featureId)
         ? { ...prev, coordinates: newCoordinates, updatedAt: new Date().toISOString() }
         : prev
+    );
+    setMapFeatures((prev) =>
+      prev.map((f) =>
+        isFeatureMatch(f, featureId) ? { ...f, coordinates: newCoordinates, updatedAt: new Date().toISOString() } : f
+      )
     );
   };
 
   const handleSaveFeature = (featureToSave: GeoJsonFeatureItem) => {
+    const currentUpdater = user?.displayName || user?.username || 'Bản đồ qk5';
+    const updatedProps = {
+      ...(featureToSave.properties || {}),
+      NguoiSua: currentUpdater,
+      CapNhat: new Date().toISOString(),
+    };
+
     const updatedFeat: GeoJsonFeatureItem = {
       ...featureToSave,
+      properties: updatedProps,
       updatedAt: new Date().toISOString(),
     };
 
@@ -761,8 +851,9 @@ export default function App() {
 
     // 3. Instantly update React map features state and defer localStorage serialization to background macrotask
     setMapFeatures((prev) => {
+      const targetKey = getItemUniqueKey(updatedFeat);
       const idx = prev.findIndex(
-        (f) => String(f.id) === String(updatedFeat.id) || getItemUniqueKey(f) === getItemUniqueKey(updatedFeat)
+        (f) => isFeatureMatch(f, updatedFeat.id) || isFeatureMatch(f, targetKey) || getItemUniqueKey(f) === targetKey
       );
       let updatedList: GeoJsonFeatureItem[];
       if (idx >= 0) {
@@ -773,20 +864,23 @@ export default function App() {
         updatedList = [...prev, updatedFeat];
       }
 
+      // Always deduplicate to prevent any possibility of duplicate items
+      const dedupedList = deduplicateFeaturesList(updatedList);
+
       setTimeout(() => {
         try {
-          localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
+          localStorage.setItem('gis_local_map_features', JSON.stringify(dedupedList));
         } catch (e) {}
       }, 0);
 
-      return updatedList;
+      return dedupedList;
     });
 
     // 4. Background sync to Firebase asynchronously
     saveSingleFeatureToFirestore(updatedFeat)
       .then((success) => {
         if (success) {
-          if (syncError && syncError.feature.id === updatedFeat.id) {
+          if (syncError && isFeatureMatch(syncError.feature, updatedFeat.id)) {
             setSyncError(null);
           }
         } else {
@@ -861,6 +955,7 @@ export default function App() {
       showToast('Đã khôi phục đối tượng về vị trí ban đầu.');
     }
     setSelectedFeature(null);
+    setIsAttributePaneOpen(false);
     originalSelectedFeatureRef.current = null;
   };
 
@@ -878,6 +973,7 @@ export default function App() {
 
     if (selectedFeature && String(selectedFeature.id) === String(featureId)) {
       setSelectedFeature(null);
+      setIsAttributePaneOpen(false);
       originalSelectedFeatureRef.current = null;
     }
 
@@ -969,6 +1065,7 @@ export default function App() {
           });
           if (selectedFeature && String(selectedFeature.id) === String(syncError.feature.id)) {
             setSelectedFeature(null);
+            setIsAttributePaneOpen(false);
           }
           showToast('Đối tượng chưa tồn tại trên Firebase, đã hủy bản nháp.');
         } else if (syncError.type === 'delete') {
@@ -1015,6 +1112,10 @@ export default function App() {
     const shiftedCoords = shiftFeatureCoordinates(clipboard.feature, deltaLng, deltaLat);
 
     const newProps: Record<string, any> = { ...(clipboard.feature.properties || {}) };
+    const currentUpdater = user?.displayName || user?.username || 'Bản đồ qk5';
+    newProps['NguoiSua'] = currentUpdater;
+    newProps['CapNhat'] = new Date().toISOString();
+    
     let newId = clipboard.feature.id;
 
     if (!isCut) {
@@ -1099,6 +1200,7 @@ export default function App() {
     });
 
     setSelectedFeature(featureToSave);
+    setIsAttributePaneOpen(true);
     setPendingPasteFeature(null);
     if (clipboard.mode === 'cut') {
       // After cut-pasting (moving), convert clipboard mode to 'copy' with updated coordinates/feature so further pastes work seamlessly
@@ -1222,7 +1324,10 @@ export default function App() {
         onToggleLeftSidebar={toggleLeftSidebar}
         isSearchPaneOpen={isSearchPaneOpen}
         onToggleSearchPane={toggleSearchPane}
-        onOpenFieldAliasModal={() => setIsFieldAliasModalOpen(true)}
+        onOpenDatabaseManagementModal={() => {
+          setDatabaseManagementActiveTab('attributes');
+          setIsDatabaseManagementModalOpen(true);
+        }}
         onOpenUserManagementModal={() => setIsUserManagementModalOpen(true)}
         isMobile={isMobile}
       />
@@ -1249,7 +1354,6 @@ export default function App() {
               onToggleVisibility={handleToggleLayerVisibility}
               onToggleGroupVisibility={handleToggleLayerGroupVisibility}
               currentRole={effectiveRole}
-              onImportClick={() => setIsImportModalOpen(true)}
               onClose={() => {
                 setIsLeftSidebarOpen(false);
                 setTimeout(() => mapInstance?.invalidateSize(), 200);
@@ -1269,7 +1373,7 @@ export default function App() {
               }}
               layers={layers}
               features={mapFeatures}
-              selectedFeatureId={selectedFeature?.id}
+              selectedFeatureId={selectedFeature ? getItemUniqueKey(selectedFeature) : null}
               onSingleClickFeature={handleJumpToFeature}
               onDoubleClickFeature={handleJumpToFeature}
             />
@@ -1290,6 +1394,7 @@ export default function App() {
               handleModeChange(mode);
               if (mode === 'hand') {
                 setSelectedFeature(null);
+                setIsAttributePaneOpen(false);
                 setPendingPasteFeature(null);
               }
             }}
@@ -1351,20 +1456,22 @@ export default function App() {
         </section>
 
         {/* Right Attribute Pane in Pointer Mode */}
-        {interactionMode === 'pointer' && selectedFeature && (
+        {interactionMode === 'pointer' && selectedFeature && isAttributePaneOpen && (
           <AttributePane
             feature={selectedFeature}
             layers={layers}
             currentRole={effectiveRole}
+            currentUser={user}
             onSave={(updated) => {
               handleSaveFeature(updated);
             }}
             onDelete={(id) => {
               handleDeleteFeature(id);
               setSelectedFeature(null);
+              setIsAttributePaneOpen(false);
             }}
             onReload={handleReloadFeature}
-            onClose={() => setSelectedFeature(null)}
+            onClose={() => setIsAttributePaneOpen(false)}
           />
         )}
 
@@ -1395,6 +1502,7 @@ export default function App() {
           feature={editingFeature}
           layers={layers}
           currentRole={effectiveRole}
+          currentUser={user}
           onSave={handleSaveFeature}
           onDelete={handleDeleteFeature}
           onClose={() => {
@@ -1405,19 +1513,14 @@ export default function App() {
       )}
 
 
-      {/* GeoJSON Import Modal Component */}
-      <GeoJsonImportModal
-        isOpen={isImportModalOpen}
-        onClose={() => setIsImportModalOpen(false)}
+      {/* Database Management Modal Component */}
+      <DatabaseManagementModal
+        isOpen={isDatabaseManagementModalOpen}
+        onClose={() => setIsDatabaseManagementModalOpen(false)}
+        defaultTab={databaseManagementActiveTab}
         layers={layers}
         existingFeatures={mapFeatures}
         onImportConfirm={handleImportConfirm}
-      />
-
-      {/* Field Alias Dictionary Modal Component */}
-      <FieldAliasModal
-        isOpen={isFieldAliasModalOpen}
-        onClose={() => setIsFieldAliasModalOpen(false)}
         onAliasesUpdated={handleAliasesUpdated}
       />
 

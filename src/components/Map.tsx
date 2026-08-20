@@ -12,16 +12,15 @@ import {
   DrawToolMode,
   MapInteractionMode,
 } from '../types';
-import { getFieldAlias, sortPropertyRows, isFieldHidden, getItemUniqueKey } from '../fieldAlias';
-
-function isFeatureMatch(feat: GeoJsonFeatureItem, selectedId: string | number | null | undefined): boolean {
-  if (!selectedId || !feat) return false;
-  const s = String(selectedId).toLowerCase();
-  const featIdStr = String(feat.id || '').toLowerCase();
-  const featKeyStr = getItemUniqueKey(feat).toLowerCase();
-
-  return featKeyStr === s || (featIdStr !== '' && featIdStr === s);
-}
+import {
+  getFieldAlias,
+  sortPropertyRows,
+  isFieldHidden,
+  getItemUniqueKey,
+  isFeatureMatch,
+  deduplicateFeaturesList,
+} from '../fieldAlias';
+import { formatDateForDisplay } from '../utils/dateFormatter';
 import {
   calculateLineDistance,
   calculatePolygonArea,
@@ -43,7 +42,7 @@ interface MapProps {
   selectedFeatureId?: string | null;
   activeDrawMode?: DrawToolMode;
   pendingPasteFeature?: GeoJsonFeatureItem | null;
-  targetMarkerLocation?: { lat: number; lng: number } | null;
+  targetMarkerLocation?: { lat: number; lng: number; timestamp?: number } | null;
   currentRole: 'admin' | 'editor' | 'guest';
   onMapReady?: (map: L.Map) => void;
   onCursorMove?: (pos: { lat: number; lng: number } | null) => void;
@@ -125,7 +124,8 @@ function renderPopupProperties(
       return;
     }
     if (alias === 'Tọa độ') hasToaDo = true;
-    const valStr = v !== null && v !== undefined && String(v).trim() !== '' ? String(v) : '---';
+    const formattedVal = formatDateForDisplay(v, k, alias);
+    const valStr = formattedVal !== '' ? formattedVal : (v !== null && v !== undefined && String(v).trim() !== '' ? String(v) : '---');
     validItems.push({ key: k, alias, value: valStr });
   });
 
@@ -155,6 +155,7 @@ function renderPopupProperties(
 }
 
 function toLeafletCoords(coords: any): any {
+  if (coords === null || coords === undefined) return [];
   if (typeof coords === 'string') {
     try {
       coords = JSON.parse(coords);
@@ -179,27 +180,41 @@ function toLeafletCoords(coords: any): any {
     return [y, x];
   }
 
-  return coords.map((c) => toLeafletCoords(c));
+  return coords
+    .filter((c: any) => c !== null && c !== undefined)
+    .map((c: any) => toLeafletCoords(c));
 }
 
 function leafletLatLngsToGeoJsonPolygon(latLngs: any): any {
   if (!Array.isArray(latLngs) || latLngs.length === 0) return [];
 
-  if (Array.isArray(latLngs[0]) && 'lat' in latLngs[0][0]) {
+  if (
+    Array.isArray(latLngs[0]) &&
+    latLngs[0].length > 0 &&
+    latLngs[0][0] &&
+    typeof latLngs[0][0] === 'object' &&
+    'lat' in latLngs[0][0]
+  ) {
     return latLngs.map((ring: any) =>
-      ring.map((ll: any) => [Number(ll.lng.toFixed(6)), Number(ll.lat.toFixed(6))])
+      Array.isArray(ring)
+        ? ring
+            .filter((ll: any) => ll && typeof ll.lng === 'number' && typeof ll.lat === 'number')
+            .map((ll: any) => [Number(ll.lng.toFixed(6)), Number(ll.lat.toFixed(6))])
+        : []
     );
   }
 
-  if ('lat' in latLngs[0]) {
-    const ring = latLngs.map((ll: any) => [
-      Number(ll.lng.toFixed(6)),
-      Number(ll.lat.toFixed(6)),
-    ]);
+  if (latLngs[0] && typeof latLngs[0] === 'object' && 'lat' in latLngs[0]) {
+    const ring = latLngs
+      .filter((ll: any) => ll && typeof ll.lng === 'number' && typeof ll.lat === 'number')
+      .map((ll: any) => [
+        Number(ll.lng.toFixed(6)),
+        Number(ll.lat.toFixed(6)),
+      ]);
     if (ring.length > 0) {
       const first = ring[0];
       const last = ring[ring.length - 1];
-      if (first[0] !== last[0] || first[1] !== last[1]) {
+      if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
         ring.push([...first]);
       }
     }
@@ -211,11 +226,13 @@ function leafletLatLngsToGeoJsonPolygon(latLngs: any): any {
 
 function leafletLatLngsToGeoJsonLine(latLngs: any): any {
   if (!Array.isArray(latLngs) || latLngs.length === 0) return [];
-  if ('lat' in latLngs[0]) {
-    return latLngs.map((ll: any) => [
-      Number(ll.lng.toFixed(6)),
-      Number(ll.lat.toFixed(6)),
-    ]);
+  if (latLngs[0] && typeof latLngs[0] === 'object' && 'lat' in latLngs[0]) {
+    return latLngs
+      .filter((ll: any) => ll && typeof ll.lng === 'number' && typeof ll.lat === 'number')
+      .map((ll: any) => [
+        Number(ll.lng.toFixed(6)),
+        Number(ll.lat.toFixed(6)),
+      ]);
   }
   return latLngs;
 }
@@ -346,6 +363,7 @@ export const MapComponent: React.FC<MapProps> = ({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const baseLayersRef = useRef<Record<BaseMapType, L.TileLayer> | null>(null);
   const featureLayersRef = useRef<L.LayerGroup | null>(null);
+  const layerSubGroupsRef = useRef<Map<string, L.LayerGroup>>(new Map());
   const tempDrawLayerRef = useRef<L.LayerGroup | null>(null);
   const clickMarkerRef = useRef<L.CircleMarker | null>(null);
 
@@ -378,8 +396,8 @@ export const MapComponent: React.FC<MapProps> = ({
       entry.updateStyle(isSelected, mode);
     });
 
-    // Clean orphan vertex markers if deselected or leaving pointer mode
-    if ((!currId || mode !== 'pointer') && mapInstanceRef.current) {
+    // Clean orphan vertex markers only when transitioning out of pointer mode or deselecting in pointer mode
+    if (prevInteractionModeRef.current === 'pointer' && (mode !== 'pointer' || !currId) && mapInstanceRef.current) {
       const map = mapInstanceRef.current;
       const orphanLayers: L.Layer[] = [];
       map.eachLayer((l: any) => {
@@ -489,7 +507,7 @@ export const MapComponent: React.FC<MapProps> = ({
         }).addTo(layer);
 
         const areaSqMeters = calculatePolygonArea(pts);
-        const perimeter = calculateLineDistance([...pts, pts[0]]);
+        const perimeter = pts.length > 0 ? calculateLineDistance([...pts, pts[0]]) : 0;
 
         setMeasureResult({
           mode: 'area_custom',
@@ -552,7 +570,7 @@ export const MapComponent: React.FC<MapProps> = ({
     });
 
     const areaSqMeters = calculatePolygonArea(latlngs);
-    const perimeter = calculateLineDistance([...latlngs, latlngs[0]]);
+    const perimeter = latlngs.length > 0 ? calculateLineDistance([...latlngs, latlngs[0]]) : 0;
     const featInfo = getFeatureName(feat);
 
     setMeasureResult({
@@ -832,7 +850,7 @@ export const MapComponent: React.FC<MapProps> = ({
     }
   }, [activeDrawMode, interactionMode]);
 
-  // Handle external target location jump (from Footer coordinate input)
+  // Handle external target location jump (from search list or coordinate input)
   useEffect(() => {
     if (!targetMarkerLocation) return;
     const map = mapInstanceRef.current;
@@ -840,8 +858,15 @@ export const MapComponent: React.FC<MapProps> = ({
 
     const latlng = L.latLng(targetMarkerLocation.lat, targetMarkerLocation.lng);
 
-    map.flyTo(latlng, Math.max(map.getZoom(), 16), { duration: 1.2 });
+    // Ngắt animation cũ để phản hồi tức thì
+    try {
+      (map as any).stop?.();
+    } catch (e) {}
 
+    // Jump nhanh bản đồ tới vị trí với zoom 13
+    map.flyTo(latlng, 13, { duration: 0.35 });
+
+    // Hiển thị marker vị trí tương tự như khi kích chuột vào bản đồ trống
     if (!clickMarkerRef.current) {
       clickMarkerRef.current = L.circleMarker(latlng, {
         radius: 6,
@@ -849,6 +874,7 @@ export const MapComponent: React.FC<MapProps> = ({
         fillOpacity: 1,
         color: '#ffffff',
         weight: 2,
+        interactive: false,
       }).addTo(map);
     } else {
       if (!map.hasLayer(clickMarkerRef.current)) {
@@ -997,21 +1023,23 @@ export const MapComponent: React.FC<MapProps> = ({
     }
     featureLayerMapRef.current.clear();
 
-    // Build visible layer set safely
-    const visibleLayerIds = new Set(layers.filter((l) => l.visible).map((l) => l.id));
-    const visibleLayerMap = new Map<string, LayerConfig>();
-    layers.forEach((l) => visibleLayerMap.set(l.id, l));
-
-    // Display ALL features if their layer is visible OR if layerId is missing/custom
-    const activeFeatures = features.filter((f) => {
-      if (!f) return false;
-      if (!f.layerId) return true;
-      const parentLayer = layers.find((l) => l.id === f.layerId);
-      if (parentLayer) {
-        return parentLayer.visible;
-      }
-      return visibleLayerIds.size === 0 || visibleLayerIds.has(f.layerId);
+    // Re-create dedicated LayerGroup per layerId for instantaneous 0ms show/hide toggling
+    layerSubGroupsRef.current.forEach((grp) => {
+      try {
+        grp.clearLayers();
+      } catch (e) {}
     });
+    layerSubGroupsRef.current.clear();
+
+    layers.forEach((l) => {
+      layerSubGroupsRef.current.set(l.id, L.layerGroup());
+    });
+    layerSubGroupsRef.current.set('_unassigned_', L.layerGroup());
+
+    // Render ALL features into their respective LayerGroups
+    const layerConfigMap = new Map<string, LayerConfig>();
+    layers.forEach((l) => layerConfigMap.set(l.id, l));
+    const activeFeatures = deduplicateFeaturesList(features.filter(Boolean));
 
     const allBounds: L.LatLng[] = [];
 
@@ -1070,7 +1098,8 @@ export const MapComponent: React.FC<MapProps> = ({
     };
 
     activeFeatures.forEach((feat) => {
-      const parentLayer = visibleLayerMap.get(feat.layerId) || layers[0];
+      const featKey = getItemUniqueKey(feat);
+      const parentLayer = layerConfigMap.get(feat.layerId) || layers[0];
 
       let featureColor = parentLayer?.color || '#10b981';
       const rawPhanLoai = feat.properties?.PhanLoai ?? feat.properties?.phanLoai;
@@ -1218,17 +1247,24 @@ export const MapComponent: React.FC<MapProps> = ({
             attachTooltipClickHandler(pointMarker, feat);
           }
 
-          pointMarker.on('dragend', (e: any) => {
+          const handlePointDrag = (e: any) => {
             isGeomanEditingRef.current = true;
             const newLatLng = e.target.getLatLng();
             const newCoords = [
               Number(newLatLng.lng.toFixed(6)),
               Number(newLatLng.lat.toFixed(6)),
             ];
-            if (onFeatureGeometryUpdateRef.current) {
-              onFeatureGeometryUpdateRef.current(feat.id, newCoords);
+            const entry = featureLayerMapRef.current.get(featKey);
+            if (entry) {
+              entry.feature = { ...entry.feature, coordinates: newCoords };
             }
-          });
+            if (onFeatureGeometryUpdateRef.current) {
+              onFeatureGeometryUpdateRef.current(feat.id || featKey, newCoords);
+            }
+          };
+
+          pointMarker.off('dragend', handlePointDrag);
+          pointMarker.on('dragend', handlePointDrag);
 
           pointMarker.on('click', (e: any) => {
             featureClickedRef.current = true;
@@ -1259,14 +1295,16 @@ export const MapComponent: React.FC<MapProps> = ({
             }
           });
 
-          const featKey = getItemUniqueKey(feat);
           featureLayerMapRef.current.set(featKey, {
             feature: feat,
             layer: pointMarker,
             updateStyle: updatePointStyle,
           });
 
-          featureLayersRef.current?.addLayer(pointMarker);
+          const targetSubGroup =
+            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
+            layerSubGroupsRef.current.get('_unassigned_');
+          targetSubGroup?.addLayer(pointMarker);
 
           // Apply initial style after adding layer to DOM
           updatePointStyle(isSelected, (interactionMode || 'hand') as MapInteractionMode);
@@ -1319,20 +1357,30 @@ export const MapComponent: React.FC<MapProps> = ({
                 isGeomanEditingRef.current = true;
                 const updatedLatLngs = polygon.getLatLngs();
                 const newGeoCoords = leafletLatLngsToGeoJsonPolygon(updatedLatLngs);
+                const entry = featureLayerMapRef.current.get(featKey);
+                if (entry) {
+                  entry.feature = { ...entry.feature, coordinates: newGeoCoords };
+                }
                 if (onFeatureGeometryUpdateRef.current) {
-                  onFeatureGeometryUpdateRef.current(feat.id, newGeoCoords);
+                  onFeatureGeometryUpdateRef.current(feat.id || featKey, newGeoCoords);
                 }
               };
 
-              polygon.off('pm:edit', handleGeomanEdit);
-              polygon.off('pm:markerdragend', handleGeomanEdit);
-              polygon.off('pm:vertexchange', handleGeomanEdit);
+              (polygon as any).off('pm:edit');
+              (polygon as any).off('pm:dragend');
+              (polygon as any).off('pm:markerdragend');
+              (polygon as any).off('pm:vertexchange');
 
-              polygon.on('pm:edit', handleGeomanEdit);
-              polygon.on('pm:markerdragend', handleGeomanEdit);
-              polygon.on('pm:vertexchange', handleGeomanEdit);
+              (polygon as any).on('pm:edit', handleGeomanEdit);
+              (polygon as any).on('pm:dragend', handleGeomanEdit);
+              (polygon as any).on('pm:markerdragend', handleGeomanEdit);
+              (polygon as any).on('pm:vertexchange', handleGeomanEdit);
             } else if ((polygon as any).pm) {
               try {
+                (polygon as any).off('pm:edit');
+                (polygon as any).off('pm:dragend');
+                (polygon as any).off('pm:markerdragend');
+                (polygon as any).off('pm:vertexchange');
                 if (typeof (polygon as any).pm.disable === 'function') {
                   (polygon as any).pm.disable();
                 }
@@ -1405,14 +1453,16 @@ export const MapComponent: React.FC<MapProps> = ({
             }
           });
 
-          const featKey = getItemUniqueKey(feat);
           featureLayerMapRef.current.set(featKey, {
             feature: feat,
             layer: polygon,
             updateStyle: updatePolygonStyle,
           });
 
-          featureLayersRef.current?.addLayer(polygon);
+          const targetSubGroup =
+            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
+            layerSubGroupsRef.current.get('_unassigned_');
+          targetSubGroup?.addLayer(polygon);
 
           // Apply initial style
           updatePolygonStyle(isSelected, (interactionMode || 'hand') as MapInteractionMode);
@@ -1448,22 +1498,30 @@ export const MapComponent: React.FC<MapProps> = ({
                 isGeomanEditingRef.current = true;
                 const updatedLatLngs = polyline.getLatLngs();
                 const newGeoCoords = leafletLatLngsToGeoJsonLine(updatedLatLngs);
+                const entry = featureLayerMapRef.current.get(featKey);
+                if (entry) {
+                  entry.feature = { ...entry.feature, coordinates: newGeoCoords };
+                }
                 if (onFeatureGeometryUpdateRef.current) {
-                  onFeatureGeometryUpdateRef.current(feat.id, newGeoCoords);
+                  onFeatureGeometryUpdateRef.current(feat.id || featKey, newGeoCoords);
                 }
               };
 
-              polyline.off('pm:edit', handleGeomanEdit);
-              polyline.off('pm:dragend', handleGeomanEdit);
-              polyline.off('pm:markerdragend', handleGeomanEdit);
-              polyline.off('pm:vertexchange', handleGeomanEdit);
+              (polyline as any).off('pm:edit');
+              (polyline as any).off('pm:dragend');
+              (polyline as any).off('pm:markerdragend');
+              (polyline as any).off('pm:vertexchange');
 
-              polyline.on('pm:edit', handleGeomanEdit);
-              polyline.on('pm:dragend', handleGeomanEdit);
-              polyline.on('pm:markerdragend', handleGeomanEdit);
-              polyline.on('pm:vertexchange', handleGeomanEdit);
+              (polyline as any).on('pm:edit', handleGeomanEdit);
+              (polyline as any).on('pm:dragend', handleGeomanEdit);
+              (polyline as any).on('pm:markerdragend', handleGeomanEdit);
+              (polyline as any).on('pm:vertexchange', handleGeomanEdit);
             } else if ((polyline as any).pm) {
               try {
+                (polyline as any).off('pm:edit');
+                (polyline as any).off('pm:dragend');
+                (polyline as any).off('pm:markerdragend');
+                (polyline as any).off('pm:vertexchange');
                 if (typeof (polyline as any).pm.disable === 'function') {
                   (polyline as any).pm.disable();
                 }
@@ -1523,14 +1581,16 @@ export const MapComponent: React.FC<MapProps> = ({
             }
           });
 
-          const featKey = getItemUniqueKey(feat);
           featureLayerMapRef.current.set(featKey, {
             feature: feat,
             layer: polyline,
             updateStyle: updatePolylineStyle,
           });
 
-          featureLayersRef.current?.addLayer(polyline);
+          const targetSubGroup =
+            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
+            layerSubGroupsRef.current.get('_unassigned_');
+          targetSubGroup?.addLayer(polyline);
 
           // Apply initial style
           updatePolylineStyle(isSelected, (interactionMode || 'hand') as MapInteractionMode);
@@ -1539,6 +1599,18 @@ export const MapComponent: React.FC<MapProps> = ({
         console.warn('Error rendering GeoJSON feature on Leaflet:', err, feat);
       }
     });
+
+    // Attach initial visible sub-groups to main featureLayers container
+    layers.forEach((l) => {
+      const grp = layerSubGroupsRef.current.get(l.id);
+      if (grp && l.visible && featureLayersRef.current) {
+        featureLayersRef.current.addLayer(grp);
+      }
+    });
+    const unassigned = layerSubGroupsRef.current.get('_unassigned_');
+    if (unassigned && featureLayersRef.current) {
+      featureLayersRef.current.addLayer(unassigned);
+    }
 
     hasFittedInitialRef.current = true;
     prevFeaturesCountRef.current = features.length;
@@ -1555,7 +1627,24 @@ export const MapComponent: React.FC<MapProps> = ({
         }
       }
     }
-  }, [layers, features, aliasVersion]);
+  }, [features, aliasVersion, layers.map((l) => `${l.id}:${l.color || ''}`).join(';')]);
+
+  // Ultra-fast layer visibility sync (0.1ms instantaneous DOM detach/attach)
+  useEffect(() => {
+    const parentGroup = featureLayersRef.current;
+    if (!parentGroup) return;
+
+    layers.forEach((l) => {
+      const grp = layerSubGroupsRef.current.get(l.id);
+      if (!grp) return;
+      const isAttached = parentGroup.hasLayer(grp);
+      if (l.visible && !isAttached) {
+        parentGroup.addLayer(grp);
+      } else if (!l.visible && isAttached) {
+        parentGroup.removeLayer(grp);
+      }
+    });
+  }, [layers]);
 
   return (
     <div

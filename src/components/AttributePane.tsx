@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { GeoJsonFeatureItem, LayerConfig, UserRole, PHAN_LOAI_COLORS } from '../types';
+import { GeoJsonFeatureItem, LayerConfig, UserRole, PHAN_LOAI_COLORS, AppUser } from '../types';
 import {
   X,
   Table,
@@ -8,13 +8,17 @@ import {
   Trash2,
   Lock,
   RotateCw,
+  Calendar,
 } from 'lucide-react';
 import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
+import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
+import { getSchemaForLayer } from '../FieldSchema';
 
 interface AttributePaneProps {
   feature: GeoJsonFeatureItem | null;
   layers: LayerConfig[];
   currentRole: UserRole;
+  currentUser?: AppUser | null;
   onSave: (feature: GeoJsonFeatureItem) => void;
   onDelete?: (featureId: string) => void;
   onReload?: (featureId: string) => Promise<void>;
@@ -31,6 +35,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   feature,
   layers,
   currentRole,
+  currentUser,
   onSave,
   onDelete,
   onReload,
@@ -141,6 +146,25 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
 
       const handledKeys = new Set(['ten', 'Ten', 'name', 'Name', 'phanloai', 'PhanLoai', 'phanLoai']);
 
+      // Ensure all standard schema fields from the layer are populated
+      const schemaFields = getSchemaForLayer(featLayerId);
+      schemaFields.forEach((field) => {
+        const fieldName = field.name;
+        if (handledKeys.has(fieldName)) return;
+        if (isFieldHidden(fieldName)) return;
+
+        const matchedKey = Object.keys(existingProps).find(
+          (k) => k.toLowerCase() === fieldName.toLowerCase()
+        );
+        if (!matchedKey) {
+          if (fieldName === 'NguoiSua') {
+            existingProps[fieldName] = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+          } else {
+            existingProps[fieldName] = '';
+          }
+        }
+      });
+
       const rows: EditablePropertyRow[] = [];
 
       Object.entries(existingProps).forEach(([k, v]) => {
@@ -148,11 +172,21 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
         if (isFieldHidden(k)) return;
 
         const alias = getFieldAlias(k);
+        const isDate = isDateField(k, alias || k);
+        let displayVal = isDate
+          ? formatDateForDisplay(v, k, alias || k)
+          : v !== null && v !== undefined
+          ? String(v)
+          : '';
+
+        if (k.toLowerCase() === 'nguoisua' && !displayVal) {
+          displayVal = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+        }
 
         rows.push({
           rawKey: k,
           aliasLabel: alias || k,
-          value: v !== null && v !== undefined ? String(v) : '',
+          value: displayVal,
         });
       });
 
@@ -175,7 +209,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
 
       setPropRows(sortPropertyRows(rows));
     }
-  }, [feature, layers]);
+  }, [feature, layers, currentUser]);
 
   if (!feature) return null;
 
@@ -191,15 +225,26 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       return;
     }
 
+    const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+
     const properties: Record<string, any> = {
       ...(feature.properties || {}),
       Ten: name.trim(),
       PhanLoai: phanLoai,
+      NguoiSua: currentUpdater,
+      CapNhat: new Date().toISOString(),
     };
 
     propRows.forEach((row) => {
-      properties[row.rawKey] = row.value;
+      const origVal = feature.properties?.[row.rawKey];
+      if (isDateField(row.rawKey, row.aliasLabel)) {
+        properties[row.rawKey] = parseDateInputToStorageValue(row.value, origVal, row.rawKey);
+      } else {
+        properties[row.rawKey] = row.value;
+      }
     });
+
+    properties['NguoiSua'] = currentUpdater;
 
     const updatedFeature: GeoJsonFeatureItem = {
       ...feature,
@@ -372,11 +417,13 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
                 )
                 .map((row) => {
                 const locked = isLockedField(row.rawKey, row.aliasLabel);
+                const isDate = isDateField(row.rawKey, row.aliasLabel);
                 const displayKey = showRawFieldName ? row.rawKey : row.aliasLabel;
                 return (
                   <tr key={row.rawKey} className="hover:bg-slate-50 transition">
                     <td className="py-2 px-2.5 border-r border-slate-200 font-bold bg-slate-50 text-slate-700 text-[11px] flex items-center gap-1.5">
                       {locked && <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
+                      {isDate && <Calendar className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
                       <span className="truncate" title={displayKey}>{displayKey}</span>
                     </td>
                     <td className="py-1.5 px-2">
@@ -388,6 +435,35 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
                           className="w-full px-2 py-1 rounded border border-slate-200 text-xs font-mono font-semibold text-slate-600 bg-slate-100 cursor-not-allowed opacity-90 select-all"
                           title={locked ? "Trường mã số (OBJECTID) bị khóa, không thể chỉnh sửa" : "Bạn không có quyền chỉnh sửa"}
                         />
+                      ) : isDate ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={row.value}
+                            placeholder="DD/MM/YYYY"
+                            onChange={(e) => handleValueChange(row.rawKey, e.target.value)}
+                            className="w-full px-2 py-1 rounded border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-blue-500 outline-none font-medium"
+                          />
+                          <div className="relative shrink-0 flex items-center justify-center">
+                            <input
+                              type="date"
+                              value={toHtmlDateInputValue(row.value, row.rawKey, row.aliasLabel)}
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  const [y, m, d] = e.target.value.split('-');
+                                  handleValueChange(row.rawKey, `${d}/${m}/${y}`);
+                                } else {
+                                  handleValueChange(row.rawKey, '');
+                                }
+                              }}
+                              className="w-7 h-7 opacity-0 absolute inset-0 cursor-pointer z-10"
+                              title="Chọn ngày từ lịch"
+                            />
+                            <div className="w-7 h-7 rounded border border-slate-300 bg-slate-50 hover:bg-blue-50 hover:border-blue-300 text-slate-600 hover:text-blue-600 flex items-center justify-center transition shadow-2xs">
+                              <Calendar className="w-3.5 h-3.5" />
+                            </div>
+                          </div>
+                        </div>
                       ) : row.value.length > 60 ? (
                         <textarea
                           rows={2}

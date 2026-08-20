@@ -1,3 +1,5 @@
+import { GeoJsonFeatureItem } from './types';
+
 /**
  * Central Field Alias Mapping Dictionary for GIS Layers
  * Allows mapping raw GeoJSON property key names (e.g., TimDuoc, ChuaThay, Xa, Tinh)
@@ -37,6 +39,8 @@ export const DEFAULT_FIELD_ALIASES: Record<string, string> = {
   // 6. Thời gian & Cập nhật & Nguồn
   ThoiGian: 'Thời gian',
   CapNhat: 'TG cập nhật',
+  NguoiSua: 'Người cập nhật',
+  NguoiCapNhat: 'Người cập nhật',
   Nguon: 'Nguồn TT',
 
   // 7. Địa điểm / Địa chỉ / Tọa độ / Vị trí
@@ -310,9 +314,43 @@ export function getItemUniqueKey(feat: any): string {
   const layerId = feat.layerId || 'default';
   const objId = extractObjectId(feat);
   if (objId) {
-    return `${layerId}_objid_${objId.toLowerCase()}`;
+    return `${layerId}_objid_${String(objId).toLowerCase().trim()}`;
   }
-  return `${layerId}_id_${String(feat.id || '').toLowerCase()}`;
+  const idStr = feat.id !== undefined && feat.id !== null ? String(feat.id).toLowerCase().trim() : '';
+  if (idStr !== '') {
+    return `${layerId}_id_${idStr}`;
+  }
+  const codeStr = feat.code ? String(feat.code).toLowerCase().trim() : '';
+  if (codeStr !== '') {
+    return `${layerId}_code_${codeStr}`;
+  }
+  return `${layerId}_id_${String(feat.name || 'unknown').toLowerCase().trim()}`;
+}
+
+/**
+ * Robust matcher checking if a feature matches targetIdOrKey.
+ */
+export function isFeatureMatch(feat: any, targetIdOrKey: string | number | null | undefined): boolean {
+  if (!targetIdOrKey || !feat) return false;
+  const s = String(targetIdOrKey).toLowerCase().trim();
+  if (!s) return false;
+
+  const featKey = getItemUniqueKey(feat).toLowerCase().trim();
+  if (featKey === s) return true;
+
+  const featIdStr = feat.id !== undefined && feat.id !== null ? String(feat.id).toLowerCase().trim() : '';
+  if (featIdStr !== '' && (featIdStr === s || s.endsWith(`_id_${featIdStr}`))) return true;
+
+  const objId = extractObjectId(feat);
+  if (objId !== null && objId !== undefined) {
+    const objIdStr = String(objId).toLowerCase().trim();
+    if (objIdStr !== '' && (objIdStr === s || s.endsWith(`_objid_${objIdStr}`))) return true;
+  }
+
+  const codeStr = feat.code ? String(feat.code).toLowerCase().trim() : '';
+  if (codeStr !== '' && (codeStr === s || s.endsWith(`_code_${codeStr}`))) return true;
+
+  return false;
 }
 
 export function sanitizeFeatureProperties<T extends { properties?: any }>(feat: T): T {
@@ -334,7 +372,7 @@ export function sanitizeFeatureProperties<T extends { properties?: any }>(feat: 
  * Utility to deduplicate a list of GeoJsonFeatureItems by layerId + OBJECTID or id.
  * Prefers keeping the feature with the newer updatedAt date (or last in list if equal).
  */
-export function deduplicateFeaturesList<T extends { id?: string | number; layerId?: string; updatedAt?: string; properties?: any; code?: string }>(
+export function deduplicateFeaturesList<T extends GeoJsonFeatureItem = GeoJsonFeatureItem>(
   features: T[]
 ): T[] {
   if (!features || features.length === 0) return [];
@@ -342,6 +380,7 @@ export function deduplicateFeaturesList<T extends { id?: string | number; layerI
   const map = new Map<string, T>();
 
   features.forEach((rawFeat) => {
+    if (!rawFeat) return;
     const feat = sanitizeFeatureProperties(rawFeat);
     const key = getItemUniqueKey(feat);
 
@@ -418,10 +457,11 @@ export function getFieldPriorityScore(rawKey: string, aliasLabel: string): numbe
   if (k === 'vitri' || k === 'location' || a.includes('vị trí')) return 87;
   if (k === 'toado' || k === 'coordinates' || a.includes('tọa độ')) return 88;
 
-  // Mức 5: Thông tin bổ trợ (Đơn vị, Nguồn tư liệu, Ngày cập nhật, Ghi chú, Mô tả)
+  // Mức 5: Thông tin bổ trợ (Đơn vị, Nguồn tư liệu, Ngày cập nhật, Người cập nhật, Ghi chú, Mô tả)
   if (k === 'donvi' || a.includes('đơn vị')) return 200;
   if (k === 'nguon' || k === 'nguontulieu' || a.includes('nguồn')) return 205;
-  if (k === 'capnhat' || k === 'ngaycapnhat' || k === 'updatedat' || a.includes('cập nhật')) return 210;
+  if (k === 'capnhat' || k === 'ngaycapnhat' || k === 'updatedat' || a.includes('tg cập nhật') || a.includes('thời gian cập nhật')) return 210;
+  if (k === 'nguoisua' || k === 'nguoicapnhat' || a.includes('người cập nhật') || a.includes('người sửa')) return 211;
   if (k === 'ghichu' || k === 'mota' || k === 'description' || a.includes('ghi chú') || a.includes('mô tả')) return 220;
 
 
