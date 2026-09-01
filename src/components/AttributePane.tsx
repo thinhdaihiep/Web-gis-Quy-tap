@@ -245,6 +245,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
     });
 
     properties['NguoiSua'] = currentUpdater;
+    properties['CapNhat'] = new Date().toISOString();
 
     const updatedFeature: GeoJsonFeatureItem = {
       ...feature,

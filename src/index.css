@@ -241,3 +241,14 @@
   box-shadow: 0 0 10px rgba(37, 99, 235, 0.9);
 }
 
+/* ========================================================
+   RASTER / GEOTIFF CRISP RENDERING
+   ======================================================== */
+.leaflet-pane.leaflet-rasterPane-pane img,
+.leaflet-image-layer {
+  image-rendering: -webkit-optimize-contrast !important;
+  image-rendering: crisp-edges !important;
+  image-rendering: high-quality !important;
+}
+
+

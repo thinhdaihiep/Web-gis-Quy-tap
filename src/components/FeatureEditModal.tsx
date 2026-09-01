@@ -179,6 +179,10 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       }
     });
 
+    // Luôn ghi ngày hiện tại và tên người dùng đăng nhập vào CapNhat và NguoiSua
+    properties['NguoiSua'] = currentUpdater;
+    properties['CapNhat'] = new Date().toISOString();
+
     const updatedFeature: GeoJsonFeatureItem = {
       id: feature.id || `feat-${Date.now()}`,
       layerId: selectedLayerId,

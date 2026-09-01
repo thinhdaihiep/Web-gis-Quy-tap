@@ -78,10 +78,10 @@ export function extractPolygonLatLngs(coordinates: any): L.LatLng[] {
 
   const collectRing = (arr: any) => {
     if (Array.isArray(arr) && arr.length > 0) {
-      if (typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+      if (typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
         points.push(L.latLng(arr[1], arr[0]));
       } else if (Array.isArray(arr[0])) {
-        if (typeof arr[0][0] === 'number') {
+        if (typeof arr[0][0] === 'number' && !isNaN(arr[0][0])) {
           arr.forEach((pt: any) => {
             if (Array.isArray(pt) && pt.length >= 2) {
               points.push(L.latLng(pt[1], pt[0]));

@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import L from 'leaflet';
 import proj4 from 'proj4';
+import { createLeafletGeoRasterLayer } from '../utils/geotiffLoader';
 import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 
@@ -11,6 +12,10 @@ import {
   PHAN_LOAI_COLORS,
   DrawToolMode,
   MapInteractionMode,
+  RasterLayer,
+  RasterLoadingStatus,
+  normalizeBoundsBox,
+  isBoundsInViewport,
 } from '../types';
 import {
   getFieldAlias,
@@ -36,6 +41,9 @@ proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
 interface MapProps {
   baseMap: BaseMapType;
   layers: LayerConfig[];
+  rasterLayers?: RasterLayer[];
+  activeRasterLayerId?: string | null;
+  isRasterVisible?: boolean;
   features: GeoJsonFeatureItem[];
   aliasVersion?: number;
   interactionMode?: MapInteractionMode;
@@ -51,6 +59,7 @@ interface MapProps {
   onFeatureCreate?: (newFeaturePartial: Partial<GeoJsonFeatureItem>) => void;
   onDrawingPointsChange?: (count: number) => void;
   drawingVerticesRef?: React.MutableRefObject<[number, number][]>;
+  onRasterStatusChange?: (status: RasterLoadingStatus) => void;
 }
 
 function getFeatureName(feat: GeoJsonFeatureItem): { name: string; hiddenKey: string | null } {
@@ -165,7 +174,7 @@ function toLeafletCoords(coords: any): any {
   }
   if (!Array.isArray(coords) || coords.length === 0) return [];
 
-  if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+  if (typeof coords[0] === 'number' && !isNaN(coords[0]) && typeof coords[1] === 'number' && !isNaN(coords[1])) {
     let x = coords[0];
     let y = coords[1];
 
@@ -198,7 +207,7 @@ function leafletLatLngsToGeoJsonPolygon(latLngs: any): any {
     return latLngs.map((ring: any) =>
       Array.isArray(ring)
         ? ring
-            .filter((ll: any) => ll && typeof ll.lng === 'number' && typeof ll.lat === 'number')
+            .filter((ll: any) => ll && typeof ll.lng === 'number' && !isNaN(ll.lng) && typeof ll.lat === 'number' && !isNaN(ll.lat))
             .map((ll: any) => [Number(ll.lng.toFixed(6)), Number(ll.lat.toFixed(6))])
         : []
     );
@@ -206,7 +215,7 @@ function leafletLatLngsToGeoJsonPolygon(latLngs: any): any {
 
   if (latLngs[0] && typeof latLngs[0] === 'object' && 'lat' in latLngs[0]) {
     const ring = latLngs
-      .filter((ll: any) => ll && typeof ll.lng === 'number' && typeof ll.lat === 'number')
+      .filter((ll: any) => ll && typeof ll.lng === 'number' && !isNaN(ll.lng) && typeof ll.lat === 'number' && !isNaN(ll.lat))
       .map((ll: any) => [
         Number(ll.lng.toFixed(6)),
         Number(ll.lat.toFixed(6)),
@@ -228,7 +237,7 @@ function leafletLatLngsToGeoJsonLine(latLngs: any): any {
   if (!Array.isArray(latLngs) || latLngs.length === 0) return [];
   if (latLngs[0] && typeof latLngs[0] === 'object' && 'lat' in latLngs[0]) {
     return latLngs
-      .filter((ll: any) => ll && typeof ll.lng === 'number' && typeof ll.lat === 'number')
+      .filter((ll: any) => ll && typeof ll.lng === 'number' && !isNaN(ll.lng) && typeof ll.lat === 'number' && !isNaN(ll.lat))
       .map((ll: any) => [
         Number(ll.lng.toFixed(6)),
         Number(ll.lat.toFixed(6)),
@@ -343,6 +352,9 @@ function createPointIcon(
 export const MapComponent: React.FC<MapProps> = ({
   baseMap,
   layers,
+  rasterLayers = [],
+  activeRasterLayerId = null,
+  isRasterVisible = false,
   features,
   aliasVersion,
   interactionMode = 'hand',
@@ -358,14 +370,30 @@ export const MapComponent: React.FC<MapProps> = ({
   onFeatureCreate,
   onDrawingPointsChange,
   drawingVerticesRef,
+  onRasterStatusChange,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const baseLayersRef = useRef<Record<BaseMapType, L.TileLayer> | null>(null);
   const featureLayersRef = useRef<L.LayerGroup | null>(null);
+  const rasterLayerGroupRef = useRef<L.LayerGroup | null>(null);
   const layerSubGroupsRef = useRef<Map<string, L.LayerGroup>>(new Map());
   const tempDrawLayerRef = useRef<L.LayerGroup | null>(null);
   const clickMarkerRef = useRef<L.CircleMarker | null>(null);
+  const rasterLayersCacheRef = useRef<Map<string, { layer: L.GridLayer; metadata: any }>>(new Map());
+
+  const onRasterStatusChangeRef = useRef(onRasterStatusChange);
+  onRasterStatusChangeRef.current = onRasterStatusChange;
+  const lastRasterStatusJsonRef = useRef<string>('');
+
+  const reportRasterStatus = useCallback((status: RasterLoadingStatus) => {
+    const json = JSON.stringify(status);
+    if (lastRasterStatusJsonRef.current === json) return;
+    lastRasterStatusJsonRef.current = json;
+    if (onRasterStatusChangeRef.current) {
+      onRasterStatusChangeRef.current(status);
+    }
+  }, []);
 
   // Feature Layer Cache Ref for fast selection updates
   const featureLayerMapRef = useRef<
@@ -675,16 +703,16 @@ export const MapComponent: React.FC<MapProps> = ({
 
       // 1. OpenStreetMap Standard (Tiếng Việt đầy đủ cấp Thôn/Xóm/Xã)
       const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>',
+        maxZoom: 18,
       });
 
       // 2. ESRI World Topo Map (Địa hình & Đường đồng mức)
       const esriTopoLayer = L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
         {
-          attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, iPC, USGS, FAO, NPS, NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), swisstopo, MapmyIndia, &copy; OpenStreetMap contributors, and the GIS User Community',
-          maxZoom: 19,
+          attribution: '&copy; <a href="https://www.esri.com/" target="_blank" rel="noreferrer">Esri</a> &mdash; Topo Map',
+          maxZoom: 18,
         }
       );
 
@@ -692,7 +720,7 @@ export const MapComponent: React.FC<MapProps> = ({
       const satelliteLayer = L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         {
-          attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+          attribution: '&copy; <a href="https://www.esri.com/" target="_blank" rel="noreferrer">Esri</a> &mdash; Imagery',
           maxZoom: 18,
         }
       );
@@ -705,7 +733,16 @@ export const MapComponent: React.FC<MapProps> = ({
         satellite: satelliteLayer,
       };
 
+      // Create dedicated pane for raster layers (z-index 350, sits above base tilePane 200 and below overlayPane 400)
+      try {
+        if (!map.getPane('rasterPane')) {
+          const rPane = map.createPane('rasterPane');
+          rPane.style.zIndex = '350';
+        }
+      } catch (_) {}
+
       featureLayersRef.current = L.layerGroup().addTo(map);
+      rasterLayerGroupRef.current = L.layerGroup({ pane: 'rasterPane' } as any).addTo(map);
       tempDrawLayerRef.current = L.layerGroup().addTo(map);
       measureLayerRef.current = L.layerGroup().addTo(map);
 
@@ -783,7 +820,329 @@ export const MapComponent: React.FC<MapProps> = ({
     };
   }, []);
 
-  // Update Base Map
+  // Update Raster Layers (COG / GeoTIFF) - Display on top of active base map when isRasterVisible is true
+  useEffect(() => {
+    let isActive = true;
+    const map = mapInstanceRef.current;
+    const rasterGroup = rasterLayerGroupRef.current;
+    if (!map || !rasterGroup) return;
+
+    const cache = rasterLayersCacheRef.current;
+    const pendingUrls = new Set<string>();
+    let bufferDebounceTimer: any = null;
+    
+    // Evaluate and load rasters based on current viewport
+    const evaluateRasters = () => {
+      if (!isActive) return;
+
+      if (!isRasterVisible || !rasterLayers || rasterLayers.length === 0) {
+        rasterGroup.clearLayers();
+        reportRasterStatus({ state: 'idle' });
+        return;
+      }
+
+      // Requirement 1: Hide raster completely when zoom < 12
+      if (map.getZoom() < 12) {
+        rasterGroup.clearLayers();
+        reportRasterStatus({ 
+          state: 'idle', 
+          message: 'Hãy phóng to bản đồ (zoom >= 12) để xem lớp raster.' 
+        });
+        return;
+      }
+
+      const targetLayers = rasterLayers.filter(
+        (layer) => !activeRasterLayerId || layer.id === activeRasterLayerId
+      );
+
+      const activeLayer = targetLayers[0];
+      const activeLayerName = activeLayer?.name || 'Bản đồ Raster';
+
+      let allFilesToProcess: Array<{
+        url: string;
+        fileName?: string;
+        format?: 'COG' | 'GEOTIFF';
+        opacity?: number;
+        bounds?: any;
+      }> = [];
+
+      targetLayers.forEach((layer) => {
+        if (layer.files && layer.files.length > 0) {
+          layer.files.forEach((f) => {
+            if (f.url) allFilesToProcess.push({ ...f, opacity: layer.opacity ?? 1.0 });
+          });
+        } else if (layer.url) {
+          allFilesToProcess.push({
+            url: layer.url,
+            fileName: layer.name,
+            opacity: layer.opacity ?? 1.0,
+            bounds: layer.bounds,
+          });
+        }
+      });
+
+      // Requirement 2: Evaluate files based on map center distance
+      const currentCenter = map.getCenter();
+
+      // Sort by distance from viewport center
+      const getDistanceToCenter = (f: any) => {
+        const box = normalizeBoundsBox(f.bounds);
+        if (!box) return Infinity; 
+        
+        const dLat = Math.max(0, box.south - currentCenter.lat, currentCenter.lat - box.north);
+        const dLng = Math.max(0, box.west - currentCenter.lng, currentCenter.lng - box.east);
+        const distanceToEdge = dLat * dLat + dLng * dLng;
+
+        // If the map center is INSIDE the image (distanceToEdge === 0),
+        // we break ties by calculating distance to the center of the image itself
+        if (distanceToEdge === 0) {
+            const boxCenterLat = (box.south + box.north) / 2;
+            const boxCenterLng = (box.west + box.east) / 2;
+            const distToBoxCenter = Math.pow(boxCenterLat - currentCenter.lat, 2) + Math.pow(boxCenterLng - currentCenter.lng, 2);
+            return distToBoxCenter * 0.0000001; // Tiny penalty to sort among central images
+        }
+
+        return distanceToEdge;
+      };
+
+      let activeFiles = [...allFilesToProcess];
+
+      // Limit strictly to 9 nearest rasters (1 center + 8 surrounding)
+      // This is optimal for zoom >= 13, giving perfect continuity without memory bloat
+      if (activeFiles.length > 9) {
+        activeFiles.sort((a, b) => getDistanceToCenter(a) - getDistanceToCenter(b));
+        activeFiles = activeFiles.slice(0, 9);
+      }
+
+      if (activeFiles.length === 0) {
+        rasterGroup.clearLayers();
+        reportRasterStatus({
+          state: 'idle',
+          message: 'Không có mảnh raster nào trong khu vực đang xem.',
+          activeLayerName,
+        });
+        return;
+      }
+
+      // Sync active layers on the map
+      const currentUrls = new Set(activeFiles.map((f) => f.url));
+      rasterGroup.eachLayer((layer: any) => {
+        let layerUrl = null;
+        for (const [url, item] of cache.entries()) {
+          if (item.layer === layer) {
+            layerUrl = url;
+            break;
+          }
+        }
+        if (layerUrl && !currentUrls.has(layerUrl)) {
+          rasterGroup.removeLayer(layer);
+        }
+      });
+
+      let loadedCount = 0;
+      let visibleLoadedCount = 0;
+      let combinedBoundsBox: any = null;
+
+      // Attach already-cached layers that are in the Active Set
+      activeFiles.forEach((file) => {
+        if (cache.has(file.url)) {
+          const cachedItem = cache.get(file.url)!;
+          if (typeof (cachedItem.layer as any).setOpacity === 'function') {
+            (cachedItem.layer as any).setOpacity(file.opacity ?? 1.0);
+          }
+          if (!rasterGroup.hasLayer(cachedItem.layer)) {
+            rasterGroup.addLayer(cachedItem.layer);
+          }
+          if (cachedItem.metadata?.bounds) {
+            if (!combinedBoundsBox) {
+              combinedBoundsBox = { ...cachedItem.metadata.bounds };
+            } else {
+              combinedBoundsBox = {
+                south: Math.min(combinedBoundsBox.south, cachedItem.metadata.bounds.south),
+                west: Math.min(combinedBoundsBox.west, cachedItem.metadata.bounds.west),
+                north: Math.max(combinedBoundsBox.north, cachedItem.metadata.bounds.north),
+                east: Math.max(combinedBoundsBox.east, cachedItem.metadata.bounds.east),
+              };
+            }
+          }
+          loadedCount++;
+        }
+      });
+
+      if (loadedCount === activeFiles.length) {
+        reportRasterStatus({
+          state: 'loaded',
+          progress: 100,
+          message: `Đã nạp ${loadedCount}/${activeFiles.length} ảnh raster`,
+          loadedCount,
+          totalCount: activeFiles.length,
+          activeLayerName,
+          bounds: combinedBoundsBox,
+        });
+      } else {
+        const currentProgress = Math.round((loadedCount / activeFiles.length) * 100) || 5;
+        reportRasterStatus({
+          state: 'loading',
+          progress: currentProgress,
+          message: `Đang nạp ${currentProgress}%`,
+          loadedCount,
+          totalCount: activeFiles.length,
+          activeLayerName,
+          bounds: combinedBoundsBox,
+        });
+      }
+
+      // Shared single raster loader function
+      const loadSingleRaster = async (file: any) => {
+        if (!isActive || !file || !file.url || cache.has(file.url) || pendingUrls.has(file.url)) {
+          return;
+        }
+
+        pendingUrls.add(file.url);
+        try {
+          const { layer: geoRasterLayer, metadata } = await createLeafletGeoRasterLayer(file.url, {
+            opacity: file.opacity ?? 1.0,
+            resolution: 256,
+            pane: 'rasterPane',
+            onProgress: (percent) => {
+              if (isActive && percent < 100 && loadedCount < activeFiles.length) {
+                const currentProgress = Math.min(99, Math.round(((loadedCount + percent / 100) / activeFiles.length) * 100));
+                reportRasterStatus({
+                  state: 'loading',
+                  progress: currentProgress,
+                  message: `Đang nạp ${currentProgress}%`,
+                  loadedCount,
+                  totalCount: activeFiles.length,
+                  activeLayerName,
+                });
+              }
+            },
+          });
+
+          if (isActive && mapInstanceRef.current) {
+            cache.set(file.url, { layer: geoRasterLayer, metadata });
+            if (!rasterGroup.hasLayer(geoRasterLayer)) {
+              rasterGroup.addLayer(geoRasterLayer);
+            }
+
+            if (metadata.bounds) {
+              if (!combinedBoundsBox) {
+                combinedBoundsBox = { ...metadata.bounds };
+              } else {
+                combinedBoundsBox = {
+                  south: Math.min(combinedBoundsBox.south, metadata.bounds.south),
+                  west: Math.min(combinedBoundsBox.west, metadata.bounds.west),
+                  north: Math.max(combinedBoundsBox.north, metadata.bounds.north),
+                  east: Math.max(combinedBoundsBox.east, metadata.bounds.east),
+                };
+              }
+            }
+
+            loadedCount++;
+
+            if (loadedCount >= activeFiles.length) {
+              reportRasterStatus({
+                state: 'loaded',
+                progress: 100,
+                message: `Đã nạp hoàn tất`,
+                loadedCount,
+                totalCount: activeFiles.length,
+                activeLayerName,
+                bounds: combinedBoundsBox,
+              });
+            } else {
+              const currentProgress = Math.round((loadedCount / activeFiles.length) * 100);
+              reportRasterStatus({
+                state: 'loading',
+                progress: currentProgress,
+                message: `Đang nạp ${currentProgress}%`,
+                loadedCount,
+                totalCount: activeFiles.length,
+                activeLayerName,
+                bounds: combinedBoundsBox,
+              });
+            }
+          }
+        } catch (e: any) {
+          console.error('Lỗi khi nạp file raster COG:', file.fileName || file.url, e);
+        } finally {
+          pendingUrls.delete(file.url);
+        }
+      };
+
+      const pendingFiles = activeFiles.filter((f) => f.url && !cache.has(f.url));
+      if (pendingFiles.length > 0) {
+        if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
+        
+        bufferDebounceTimer = setTimeout(() => {
+          if (!isActive) return;
+          
+          // Run loading in background microtasks with spacing so UI interactions never lag
+          (async () => {
+            let idx = 0;
+            const processNext = async () => {
+              if (!isActive || idx >= pendingFiles.length) return;
+              const file = pendingFiles[idx++];
+              if (file && file.url && !cache.has(file.url) && !pendingUrls.has(file.url)) {
+                // Yield to main thread before loading each raster
+                await new Promise((res) => setTimeout(res, 60));
+                await loadSingleRaster(file);
+              }
+              if (isActive) {
+                await processNext();
+              }
+            };
+
+            // Background worker with cooperative concurrency
+            const workers = Math.min(4, pendingFiles.length);
+            for (let b = 0; b < workers; b++) {
+              processNext();
+            }
+          })();
+        }, 500); // 500ms debounce before starting loads to ensure smooth panning
+      }
+    };
+
+    let debounceTimer: any = null;
+    const debouncedEvaluateRasters = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        evaluateRasters();
+      }, 150);
+    };
+
+    const handleClearRasterCacheEvent = (e: any) => {
+      const urls: string[] = e?.detail?.urls;
+      if (urls && Array.isArray(urls)) {
+        urls.forEach((u) => cache.delete(u));
+      } else {
+        cache.clear();
+      }
+      rasterGroup.clearLayers();
+      evaluateRasters();
+    };
+
+    window.addEventListener('clear-raster-cache', handleClearRasterCacheEvent);
+
+    // Evaluate initially
+    evaluateRasters();
+
+    // Re-evaluate on map movements with debounce to keep panning silky smooth
+    map.on('moveend', debouncedEvaluateRasters);
+    map.on('zoomend', debouncedEvaluateRasters);
+
+    return () => {
+      isActive = false;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
+      window.removeEventListener('clear-raster-cache', handleClearRasterCacheEvent);
+      map.off('moveend', debouncedEvaluateRasters);
+      map.off('zoomend', debouncedEvaluateRasters);
+      rasterGroup.clearLayers();
+    };
+  }, [rasterLayers, isRasterVisible, activeRasterLayerId]);
+
+  // Update Base Map (Phố, Địa hình, Vệ tinh)
   useEffect(() => {
     const map = mapInstanceRef.current;
     const baseLayers = baseLayersRef.current;
@@ -1318,8 +1677,8 @@ export const MapComponent: React.FC<MapProps> = ({
             if (
               Array.isArray(arr) &&
               arr.length === 2 &&
-              typeof arr[0] === 'number' &&
-              typeof arr[1] === 'number'
+              typeof arr[0] === 'number' && !isNaN(arr[0]) &&
+              typeof arr[1] === 'number' && !isNaN(arr[1])
             ) {
               allBounds.push(L.latLng(arr[0], arr[1]));
             } else if (Array.isArray(arr)) {
@@ -1470,7 +1829,7 @@ export const MapComponent: React.FC<MapProps> = ({
           const leafletCoords = toLeafletCoords(feat.coordinates);
 
           leafletCoords.forEach((c: any) => {
-            if (Array.isArray(c) && typeof c[0] === 'number') {
+            if (Array.isArray(c) && typeof c[0] === 'number' && !isNaN(c[0])) {
               allBounds.push(L.latLng(c[0], c[1]));
             }
           });

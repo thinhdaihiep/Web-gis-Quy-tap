@@ -18,7 +18,8 @@ import {
   Check
 } from 'lucide-react';
 import proj4 from 'proj4';
-import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy } from '../types';
+import { RasterManagementTab } from './RasterManagementTab';
+import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy, RasterLayer, LatLngBoundsBox } from '../types';
 import {
   extractObjectId,
   getCustomAliasMap,
@@ -34,7 +35,7 @@ proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
 function convertCoordinatesToWGS84(coords: any): any {
   if (!Array.isArray(coords) || coords.length === 0) return coords;
 
-  if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+  if (typeof coords[0] === 'number' && !isNaN(coords[0]) && typeof coords[1] === 'number' && !isNaN(coords[1])) {
     let [x, y] = coords;
     if (Math.abs(x) > 180 || Math.abs(y) > 90) {
       try {
@@ -78,7 +79,7 @@ function parseDmsToLatLng(toaDoStr: string): { lat: number; lng: number } | null
 export interface DatabaseManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
-  defaultTab?: 'import' | 'export' | 'attributes';
+  defaultTab?: 'import' | 'export' | 'attributes' | 'raster';
   layers: LayerConfig[];
   existingFeatures: GeoJsonFeatureItem[];
   onImportConfirm: (
@@ -87,6 +88,8 @@ export interface DatabaseManagementModalProps {
     strategy: DuplicateStrategy
   ) => void;
   onAliasesUpdated?: () => void;
+  onRasterLayersUpdated?: (layers: RasterLayer[]) => void;
+  onSelectAndFlyToRaster?: (layerId: string, bounds?: LatLngBoundsBox | null) => void;
 }
 
 export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = ({
@@ -97,8 +100,10 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   existingFeatures,
   onImportConfirm,
   onAliasesUpdated,
+  onRasterLayersUpdated,
+  onSelectAndFlyToRaster,
 }) => {
-  const [activeTab, setActiveTab] = useState<'import' | 'export' | 'attributes'>(defaultTab);
+  const [activeTab, setActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster'>(defaultTab);
 
   // Sync activeTab when defaultTab changes or modal opens
   useEffect(() => {
@@ -224,7 +229,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
           firstCoord = firstCoord[0];
         }
 
-        const isValidWgs84 = typeof firstCoord === 'number' && Math.abs(firstCoord) <= 180;
+        const isValidWgs84 = typeof firstCoord === 'number' && !isNaN(firstCoord) && Math.abs(firstCoord) <= 180;
 
         if (!coords || coords.length === 0 || !isValidWgs84) {
           if (props.ToaDo) {
@@ -484,6 +489,19 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
             <span>Bảng thuộc tính</span>
+          </button>
+          
+          <button
+            type="button"
+            onClick={() => setActiveTab('raster')}
+            className={`px-3.5 py-2 text-xs font-bold rounded-t-lg transition flex items-center gap-2 cursor-pointer border-t border-x ${
+              activeTab === 'raster'
+                ? 'bg-white text-blue-700 border-slate-300 border-b-transparent -mb-px shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Bản đồ nền</span>
           </button>
         </div>
 
@@ -846,6 +864,16 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {/* TAB 4: RASTER (BẢN ĐỒ NỀN) */}
+        {activeTab === 'raster' && (
+          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-700 flex-1">
+            <RasterManagementTab
+              onLayersChange={onRasterLayersUpdated}
+              onSelectAndFlyToRaster={onSelectAndFlyToRaster}
+            />
           </div>
         )}
 

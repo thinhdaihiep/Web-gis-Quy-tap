@@ -1,0 +1,205 @@
+--- src/components/Map.tsx
++++ src/components/Map.tsx
+@@ -822,10 +822,6 @@
+ 
+   // Update Raster Layers (COG / GeoTIFF) - Display on top of active base map when isRasterVisible is true
+   useEffect(() => {
+     let isActive = true;
+     const map = mapInstanceRef.current;
+     const rasterGroup = rasterLayerGroupRef.current;
+     if (!map || !rasterGroup) return;
+ 
+-    if (!isRasterVisible || !rasterLayers || rasterLayers.length === 0) {
+-      rasterGroup.clearLayers();
+-      reportRasterStatus({ state: 'idle' });
+-      return;
+-    }
+-
+     const cache = rasterLayersCacheRef.current;
+     const pendingUrls = new Set<string>();
+ 
+-    const targetLayers = rasterLayers.filter(
+-      (layer) => !activeRasterLayerId || layer.id === activeRasterLayerId
+-    );
+-
+-    const activeLayer = targetLayers[0];
+-    const activeLayerName = activeLayer?.name || 'Bản đồ Raster';
+-
+-    const filesToProcess: Array<{
+-      url: string;
+-      fileName?: string;
+-      format?: 'COG' | 'GEOTIFF';
+-      opacity?: number;
+-    }> = [];
+-
+-    targetLayers.forEach((layer) => {
+-      if (layer.files && layer.files.length > 0) {
+-        layer.files.forEach((f) => {
+-          if (f.url) filesToProcess.push({ ...f, opacity: layer.opacity ?? 1.0 });
+-        });
+-      } else if (layer.url) {
+-        filesToProcess.push({
+-          url: layer.url,
+-          fileName: layer.name,
+-          opacity: layer.opacity ?? 1.0,
+-        });
+-      }
+-    });
+-
+-    if (filesToProcess.length === 0) {
+-      rasterGroup.clearLayers();
+-      reportRasterStatus({
+-        state: 'idle',
+-        message: 'Lớp raster này chưa có file ảnh nào.',
+-        activeLayerName,
+-      });
+-      return;
+-    }
+-
+-    let loadedCount = 0;
+-    let combinedBoundsBox: any = null;
+-
+-    // First, instantly attach any already-cached layers
+-    filesToProcess.forEach((file) => {
+-      if (cache.has(file.url)) {
+-        const cachedItem = cache.get(file.url)!;
+-        if (typeof (cachedItem.layer as any).setOpacity === 'function') {
+-          (cachedItem.layer as any).setOpacity(file.opacity ?? 1.0);
+-        }
+-        if (!rasterGroup.hasLayer(cachedItem.layer)) {
+-          rasterGroup.addLayer(cachedItem.layer);
+-        }
+-        if (cachedItem.metadata?.bounds) {
+-          if (!combinedBoundsBox) {
+-            combinedBoundsBox = { ...cachedItem.metadata.bounds };
+-          } else {
+-            combinedBoundsBox = {
+-              south: Math.min(combinedBoundsBox.south, cachedItem.metadata.bounds.south),
+-              west: Math.min(combinedBoundsBox.west, cachedItem.metadata.bounds.west),
+-              north: Math.max(combinedBoundsBox.north, cachedItem.metadata.bounds.north),
+-              east: Math.max(combinedBoundsBox.east, cachedItem.metadata.bounds.east),
+-            };
+-          }
+-        }
+-        loadedCount++;
+-      }
+-    });
+-
+-    if (loadedCount === filesToProcess.length) {
+-      reportRasterStatus({
+-        state: 'loaded',
+-        progress: 100,
+-        message: `Đã nạp ${loadedCount}/${filesToProcess.length} ảnh raster`,
+-        loadedCount,
+-        totalCount: filesToProcess.length,
+-        activeLayerName,
+-        bounds: combinedBoundsBox,
+-      });
+-    } else {
+-      reportRasterStatus({
+-        state: 'loading',
+-        progress: Math.round((loadedCount / filesToProcess.length) * 100) || 5,
+-        message: `Đang nạp ${filesToProcess.length} ảnh raster...`,
+-        loadedCount,
+-        totalCount: filesToProcess.length,
+-        activeLayerName,
+-        bounds: combinedBoundsBox,
+-      });
+-    }
+-
+-    // Load any pending files with a controlled concurrency queue (prevents browser crash on 100+ files)
+-    const pendingFiles = filesToProcess.filter((f) => f.url && !cache.has(f.url));
+-    const CONCURRENCY_LIMIT = 4;
+-    let currentIndex = 0;
+-
+-    const processNext = async () => {
+-      if (!isActive || currentIndex >= pendingFiles.length) return;
+-      const file = pendingFiles[currentIndex++];
+-      if (!file || !file.url || cache.has(file.url) || pendingUrls.has(file.url)) {
+-        await processNext();
+-        return;
+-      }
+-
+-      pendingUrls.add(file.url);
+-      try {
+-        const { layer: geoRasterLayer, metadata } = await createLeafletGeoRasterLayer(file.url, {
+-          opacity: file.opacity ?? 1.0,
+-          resolution: 256,
+-          pane: 'rasterPane',
+-          onProgress: (percent) => {
+-            if (isActive && percent < 100) {
+-              reportRasterStatus({
+-                state: 'loading',
+-                progress: Math.round(((loadedCount + percent / 100) / filesToProcess.length) * 100),
+-                message: `Đang tải: ${file.fileName || 'file raster'} (${percent}%)`,
+-                loadedCount,
+-                totalCount: filesToProcess.length,
+-                activeLayerName,
+-              });
+-            }
+-          },
+-        });
+-
+-        if (isActive && mapInstanceRef.current) {
+-          cache.set(file.url, { layer: geoRasterLayer, metadata });
+-          if (!rasterGroup.hasLayer(geoRasterLayer)) {
+-            rasterGroup.addLayer(geoRasterLayer);
+-          }
+-
+-          if (metadata.bounds) {
+-            if (!combinedBoundsBox) {
+-              combinedBoundsBox = { ...metadata.bounds };
+-            } else {
+-              combinedBoundsBox = {
+-                south: Math.min(combinedBoundsBox.south, metadata.bounds.south),
+-                west: Math.min(combinedBoundsBox.west, metadata.bounds.west),
+-                north: Math.max(combinedBoundsBox.north, metadata.bounds.north),
+-                east: Math.max(combinedBoundsBox.east, metadata.bounds.east),
+-              };
+-            }
+-          }
+-
+-          loadedCount++;
+-          reportRasterStatus({
+-            state: loadedCount === filesToProcess.length ? 'loaded' : 'loading',
+-            progress: Math.round((loadedCount / filesToProcess.length) * 100),
+-            message:
+-              loadedCount === filesToProcess.length
+-                ? `Đã nạp hoàn tất ${loadedCount}/${filesToProcess.length} ảnh raster`
+-                : `Đang nạp ảnh raster (${loadedCount}/${filesToProcess.length})...`,
+-            loadedCount,
+-            totalCount: filesToProcess.length,
+-            activeLayerName,
+-            bounds: combinedBoundsBox,
+-          });
+-        }
+-      } catch (e: any) {
+-        console.error('Lỗi khi nạp file raster COG:', file.fileName || file.url, e);
+-        if (isActive) {
+-          reportRasterStatus({
+-            state: 'error',
+-            error: e.message || 'Lỗi khi nạp file raster',
+-            activeLayerName,
+-            loadedCount,
+-            totalCount: filesToProcess.length,
+-          });
+-        }
+-      } finally {
+-        pendingUrls.delete(file.url);
+-        if (isActive) {
+-          await processNext();
+-        }
+-      }
+-    };
+-
+-    // Spawn concurrent workers
+-    const workersCount = Math.min(CONCURRENCY_LIMIT, pendingFiles.length);
+-    for (let i = 0; i < workersCount; i++) {
+-      processNext();
+-    }
+-
+-    return () => {
+-      isActive = false;
+-      rasterGroup.clearLayers();
+-    };
+-  }, [rasterLayers, isRasterVisible, activeRasterLayerId]);

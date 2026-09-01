@@ -13,7 +13,8 @@ import { DatabaseManagementModal } from './components/DatabaseManagementModal';
 import { UserManagementModal } from './components/UserManagementModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
-import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode } from './types';
+
+import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode, RasterLayer, RasterLoadingStatus, LatLngBoundsBox, normalizeBoundsBox } from './types';
 import {
   saveImportedFeaturesToFirestore,
   saveSingleFeatureToFirestore,
@@ -21,6 +22,7 @@ import {
   loadSharedFeaturesFromFirestore,
   loadFieldAliasDictionaryFromFirestore,
   loadLayerConfigsFromFirestore,
+  loadRasterLayersFromFirestore,
   saveLayerConfigsToFirestore,
   deleteFeatureFromFirestore,
   isDemoFeatureId,
@@ -28,7 +30,7 @@ import {
   getStoredUser
 } from './firebaseService';
 import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
-import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw } from 'lucide-react';
+import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, Loader2, CheckCircle2 } from 'lucide-react';
 
 function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: any } {
   if (!featOrGeom) return { type: 'Point', coordinates: [0, 0] };
@@ -39,7 +41,7 @@ function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: 
 
 function computeFeatureCenter(featOrGeom: any): [number, number] {
   const { type, coordinates } = getFeatureCoordsAndType(featOrGeom);
-  if (type === 'Point' && Array.isArray(coordinates) && typeof coordinates[0] === 'number') {
+  if (type === 'Point' && Array.isArray(coordinates) && typeof coordinates[0] === 'number' && !isNaN(coordinates[0])) {
     return [coordinates[0], coordinates[1]];
   }
 
@@ -48,7 +50,7 @@ function computeFeatureCenter(featOrGeom: any): [number, number] {
   let count = 0;
 
   const extract = (arr: any) => {
-    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
       totalLng += arr[0];
       totalLat += arr[1];
       count++;
@@ -66,7 +68,7 @@ function shiftFeatureCoordinates(featOrGeom: any, deltaLng: number, deltaLat: nu
   const { coordinates } = getFeatureCoordsAndType(featOrGeom);
 
   const shift = (arr: any): any => {
-    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
       return [
         Number((arr[0] + deltaLng).toFixed(6)),
         Number((arr[1] + deltaLat).toFixed(6)),
@@ -123,10 +125,36 @@ export default function App() {
 
   const [baseMap, setBaseMap] = useState<BaseMapType>('street');
   const [layers, setLayers] = useState<LayerConfig[]>(DEFAULT_LAYERS);
+  const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>([]);
+  const [activeRasterLayerId, setActiveRasterLayerId] = useState<string | null>(null);
+  const [isRasterVisible, setIsRasterVisible] = useState<boolean>(false);
+  const [rasterStatus, setRasterStatus] = useState<RasterLoadingStatus>({ state: 'idle' });
+  const [showRasterToast, setShowRasterToast] = useState<boolean>(false);
+  const [rasterToastData, setRasterToastData] = useState<RasterLoadingStatus>({ state: 'idle' });
+
+  // Auto-dismiss raster toast when loaded or after timeout
+  useEffect(() => {
+    if (!isRasterVisible || rasterStatus.state === 'idle' || rasterStatus.state === 'loaded') {
+      setShowRasterToast(false);
+      return;
+    }
+
+    if (rasterStatus.state === 'loading') {
+      setRasterToastData(rasterStatus);
+      setShowRasterToast(true);
+    } else if (rasterStatus.state === 'error') {
+      setRasterToastData(rasterStatus);
+      setShowRasterToast(true);
+      const timer = setTimeout(() => {
+        setShowRasterToast(false);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [rasterStatus, isRasterVisible]);
   const [mapFeatures, setMapFeatures] = useState<GeoJsonFeatureItem[]>(INITIAL_MAP_FEATURES);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
-  const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes'>('import');
+  const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster'>('import');
   const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState<boolean>(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
@@ -164,6 +192,23 @@ export default function App() {
   const handleAliasesUpdated = () => {
     setAliasVersion((prev) => prev + 1);
   };
+
+  const handleBaseMapChange = (newBaseMap: BaseMapType) => {
+    setBaseMap(newBaseMap);
+  };
+
+  const handleRasterLayersUpdated = (newLayers: RasterLayer[]) => {
+    setRasterLayers(newLayers);
+    if (newLayers.length > 0) {
+      if (!activeRasterLayerId || !newLayers.some((l) => l.id === activeRasterLayerId)) {
+        setActiveRasterLayerId(newLayers[0].id);
+      }
+    } else {
+      setActiveRasterLayerId(null);
+      setIsRasterVisible(false);
+    }
+  };
+
   const [mapInstance, setMapInstance] = useState<L.Map | null>(null);
   const [zoomLevel, setZoomLevel] = useState<number | null>(8);
   const [mapScale, setMapScale] = useState<number | null>(null);
@@ -251,7 +296,7 @@ export default function App() {
 
     const points: [number, number][] = [];
     const collectCoords = (arr: any) => {
-      if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+      if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
         const a = arr[0];
         const b = arr[1];
         if (Math.abs(a) > 90 && Math.abs(b) <= 90) {
@@ -269,7 +314,7 @@ export default function App() {
       } else if (arr && typeof arr === 'object') {
         const lat = arr.lat ?? arr.latitude;
         const lng = arr.lng ?? arr.longitude;
-        if (typeof lat === 'number' && typeof lng === 'number') {
+        if (typeof lat === 'number' && !isNaN(lat) && typeof lng === 'number' && !isNaN(lng)) {
           points.push([lat, lng]);
         }
       }
@@ -282,7 +327,7 @@ export default function App() {
       const p = feat.properties;
       const lat = p.lat ?? p.latitude ?? p.ViDo ?? p.vi_do ?? p.y;
       const lng = p.lng ?? p.longitude ?? p.KinhDo ?? p.kinh_do ?? p.x;
-      if (typeof lat === 'number' && typeof lng === 'number') {
+      if (typeof lat === 'number' && !isNaN(lat) && typeof lng === 'number' && !isNaN(lng)) {
         points.push([lat, lng]);
       } else if (typeof lat === 'string' && typeof lng === 'string' && !isNaN(Number(lat)) && !isNaN(Number(lng))) {
         points.push([Number(lat), Number(lng)]);
@@ -377,6 +422,14 @@ export default function App() {
               dbLayerNames[l.id] ? { ...l, name: dbLayerNames[l.id] } : l
             )
           );
+        }
+
+        setSplashStatusText('Đang nạp dữ liệu Raster nền...');
+        // 4. Load Raster layers
+        const dbRasterLayers = await loadRasterLayersFromFirestore();
+        if (dbRasterLayers && dbRasterLayers.length > 0) {
+          setRasterLayers(dbRasterLayers);
+          setActiveRasterLayerId(dbRasterLayers[0].id);
         }
 
         setSplashStatusText('Hoàn tất!');
@@ -549,6 +602,38 @@ export default function App() {
     setCursorLocation({ lat, lng });
   };
 
+  const handleFlyToRaster = (layerId?: string, bounds?: LatLngBoundsBox | null) => {
+    setIsRasterVisible(true);
+    if (layerId) {
+      setActiveRasterLayerId(layerId);
+    }
+    setIsDatabaseManagementModalOpen(false);
+
+    const targetLayer = layerId
+      ? rasterLayers.find((l) => l.id === layerId)
+      : rasterLayers.find((l) => l.id === activeRasterLayerId) || rasterLayers[0];
+
+    const targetBounds = bounds || rasterStatus.bounds || targetLayer?.bounds || targetLayer?.files[0]?.bounds;
+
+    if (mapInstance && targetBounds) {
+      const box = normalizeBoundsBox(targetBounds);
+      if (box) {
+        mapInstance.flyToBounds(
+          [
+            [box.south, box.west],
+            [box.north, box.east],
+          ],
+          { maxZoom: 16, duration: 1.2 }
+        );
+        return;
+      }
+    }
+
+    if (targetLayer) {
+      showToast(`Đã bật lớp raster: "${targetLayer.name}"`);
+    }
+  };
+
   const handleToggleLayerVisibility = (layerId: string) => {
     React.startTransition(() => {
       setLayers((prevLayers) =>
@@ -594,7 +679,7 @@ export default function App() {
         bounds.push(L.latLng(feat.coordinates[1], feat.coordinates[0]));
       } else if (feat.coordinates && Array.isArray(feat.coordinates)) {
         const collect = (arr: any) => {
-          if (Array.isArray(arr) && arr.length === 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+          if (Array.isArray(arr) && arr.length === 2 && typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
             bounds.push(L.latLng(arr[1], arr[0]));
           } else if (Array.isArray(arr)) {
             arr.forEach(collect);
@@ -1427,6 +1512,9 @@ export default function App() {
           <MapComponent
             baseMap={baseMap}
             layers={layers}
+            rasterLayers={rasterLayers}
+            activeRasterLayerId={activeRasterLayerId}
+            isRasterVisible={isRasterVisible}
             features={mapFeatures}
             aliasVersion={aliasVersion}
             interactionMode={interactionMode}
@@ -1442,17 +1530,39 @@ export default function App() {
             onFeatureCreate={handleFeatureCreate}
             onDrawingPointsChange={setDrawingPointsCount}
             drawingVerticesRef={drawingVerticesRef}
+            onRasterStatusChange={setRasterStatus}
           />
 
-          {/* Map Overlay Controls (Top Right BaseMap Switcher & Zoom & GPS Locate) */}
+          {/* Map Overlay Controls (Top Right 3 BaseMaps Switcher & Raster Checkbox/Combo & Zoom & GPS Locate) */}
           <MapOverlay
             currentBaseMap={baseMap}
-            onBaseMapChange={setBaseMap}
+            onBaseMapChange={handleBaseMapChange}
+            isRasterVisible={isRasterVisible}
+            onToggleRasterVisibility={(visible) => {
+              setIsRasterVisible(visible);
+              if (visible && !activeRasterLayerId && rasterLayers.length > 0) {
+                setActiveRasterLayerId(rasterLayers[0].id);
+              }
+            }}
+            rasterLayers={rasterLayers}
+            activeRasterLayerId={activeRasterLayerId}
+            onRasterChange={(id) => {
+              setActiveRasterLayerId(id);
+            }}
             onZoomIn={() => mapInstance?.zoomIn()}
             onZoomOut={() => mapInstance?.zoomOut()}
             onLocateUser={handleLocateUser}
             isLocating={isLocating}
+            zoomLevel={zoomLevel}
           />
+
+          {/* Raster Loading Status - Leaflet Control Style */}
+          {showRasterToast && isRasterVisible && rasterToastData.state === 'loading' && (
+            <div className="absolute bottom-[18px] right-0 z-[1000] pointer-events-auto bg-white/80 backdrop-blur-[2px] text-slate-700 text-[11px] px-2 py-0.5 flex items-center gap-1.5 rounded-tl-md">
+              <Loader2 className="w-3 h-3 animate-spin text-blue-600 shrink-0" />
+              <span>{`Đang nạp ${rasterToastData.progress ?? 0}%`}</span>
+            </div>
+          )}
         </section>
 
         {/* Right Attribute Pane in Pointer Mode */}
@@ -1522,6 +1632,8 @@ export default function App() {
         existingFeatures={mapFeatures}
         onImportConfirm={handleImportConfirm}
         onAliasesUpdated={handleAliasesUpdated}
+        onRasterLayersUpdated={handleRasterLayersUpdated}
+        onSelectAndFlyToRaster={handleFlyToRaster}
       />
 
       {isUserManagementModalOpen && (

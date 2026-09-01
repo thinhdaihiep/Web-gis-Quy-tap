@@ -12,6 +12,16 @@ export function isDateField(key: string, aliasLabel?: string): boolean {
   const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
   const cleanAlias = (aliasLabel || '').toLowerCase();
 
+  // Exclude person / user fields that might have "cập nhật" in alias or key (like "Người cập nhật", "NguoiSua", "NguoiCapNhat")
+  if (
+    cleanKey.includes('nguoi') ||
+    cleanKey.includes('user') ||
+    cleanKey.includes('author') ||
+    cleanAlias.includes('người')
+  ) {
+    return false;
+  }
+
   const dateKeys = [
     'capnhat',
     'ngaycapnhat',
@@ -34,7 +44,8 @@ export function isDateField(key: string, aliasLabel?: string): boolean {
 
   if (
     cleanAlias.includes('tg cập nhật') ||
-    cleanAlias.includes('cập nhật') ||
+    cleanAlias.includes('thời gian cập nhật') ||
+    cleanAlias.includes('ngày cập nhật') ||
     cleanAlias.includes('ngày sinh') ||
     cleanAlias.includes('ngày mất') ||
     cleanAlias.includes('hy sinh') ||
@@ -195,7 +206,7 @@ export function parseDateInputToStorageValue(
     // If original was timestamp ms (13-digit) or if it is CapNhat field:
     if (
       isCapNhatField ||
-      (typeof originalVal === 'number' && originalVal >= 1000000000000) ||
+      (typeof originalVal === 'number' && !isNaN(originalVal) && originalVal >= 1000000000000) ||
       originalVal === 1782864000000 ||
       originalVal === 1767744000000
     ) {
@@ -203,12 +214,12 @@ export function parseDateInputToStorageValue(
     }
 
     // If original was 8-digit YYYYMMDD
-    if (typeof originalVal === 'number' && originalVal >= 10000101 && originalVal <= 99991231) {
+    if (typeof originalVal === 'number' && !isNaN(originalVal) && originalVal >= 10000101 && originalVal <= 99991231) {
       return Number(`${yStr}${mStr}${dStr}`);
     }
 
     // If original was a number
-    if (typeof originalVal === 'number') {
+    if (typeof originalVal === 'number' && !isNaN(originalVal)) {
       return Date.UTC(y, m - 1, d, 0, 0, 0);
     }
 
@@ -224,18 +235,18 @@ export function parseDateInputToStorageValue(
 
     if (
       isCapNhatField ||
-      (typeof originalVal === 'number' && originalVal >= 1000000000000) ||
+      (typeof originalVal === 'number' && !isNaN(originalVal) && originalVal >= 1000000000000) ||
       originalVal === 1782864000000 ||
       originalVal === 1767744000000
     ) {
       return Date.UTC(y, m - 1, d, 0, 0, 0);
     }
 
-    if (typeof originalVal === 'number' && originalVal >= 10000101 && originalVal <= 99991231) {
+    if (typeof originalVal === 'number' && !isNaN(originalVal) && originalVal >= 10000101 && originalVal <= 99991231) {
       return Number(`${yStr}${mStr.padStart(2, '0')}${dStr.padStart(2, '0')}`);
     }
 
-    if (typeof originalVal === 'number') {
+    if (typeof originalVal === 'number' && !isNaN(originalVal)) {
       return Date.UTC(y, m - 1, d, 0, 0, 0);
     }
 

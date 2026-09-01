@@ -4,11 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "postinstall": "sed -i 's/this.fetch=!1/this._fetch=!1/g' node_modules/georaster/dist/georaster.browser.bundle.min.js && sed -i 's/this.fetch=false/this._fetch=false/g' node_modules/georaster/dist/georaster.browser.bundle.min.js || true"
   },
   "dependencies": {
     "@geoman-io/leaflet-geoman-free": "^2.20.0",
@@ -19,8 +21,11 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "firebase": "^12.16.0",
+    "georaster": "^1.6.0",
+    "georaster-layer-for-leaflet": "^4.1.2",
+    "geotiff": "^3.0.5",
     "leaflet": "^1.9.4",
-    "lucide-react": "^0.546.0",
+    "lucide-react": "^1.33.0",
     "motion": "^12.23.24",
     "proj4": "^2.21.0",
     "react": "^19.0.1",
@@ -33,6 +38,7 @@
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "glob": "^13.0.6",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

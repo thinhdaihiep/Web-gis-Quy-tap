@@ -1,6 +1,6 @@
 import { doc, setDoc, getDoc, getDocs, collection, writeBatch, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from './firebase';
-import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole } from './types';
+import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole, RasterLayer, RasterFileItem } from './types';
 import { deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
 
 const COLLECTION_NAME = 'map_features';
@@ -73,7 +73,7 @@ export const getStoredUser = (): AppUser | null => {
  * to significantly compress GeoJSON document payload size in Firestore.
  */
 function optimizeCoordinates(coords: any): any {
-  if (typeof coords === 'number') {
+  if (typeof coords === 'number' && !isNaN(coords)) {
     return Math.round(coords * 1000000) / 1000000;
   }
   if (Array.isArray(coords)) {
@@ -504,3 +504,42 @@ export async function loadLayerConfigsFromFirestore(): Promise<Record<string, st
   return null;
 }
 
+
+export async function loadRasterLayersFromFirestore(): Promise<RasterLayer[]> {
+  try {
+    const querySnapshot = await getDocs(collection(db, 'raster_layers'));
+    const fetchedLayers: RasterLayer[] = [];
+    querySnapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      let files: RasterFileItem[] = Array.isArray(data.files) ? data.files : [];
+      
+      // Backward compatibility: if layer had a single direct URL without files array
+      if (files.length === 0 && data.url) {
+        files = [{
+          id: `${docSnap.id}_file_0`,
+          fileName: data.name || 'Raster File',
+          url: data.url,
+          format: data.format || 'COG',
+          minZoom: data.minZoom || 12,
+          maxZoom: data.maxZoom || 18,
+          bounds: data.bounds || null,
+          uploadedAt: data.createdAt || new Date().toISOString(),
+        }];
+      }
+
+      fetchedLayers.push({
+        id: docSnap.id,
+        name: data.name || 'Bản đồ nền',
+        type: data.type || 'COG',
+        files: files,
+        opacity: data.opacity ?? 1.0,
+        createdAt: data.createdAt || new Date().toISOString(),
+        updatedAt: data.updatedAt,
+      });
+    });
+    return fetchedLayers;
+  } catch (error) {
+    console.error('Error fetching raster layers:', error);
+    return [];
+  }
+}
