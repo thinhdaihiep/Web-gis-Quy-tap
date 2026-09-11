@@ -1,5 +1,4 @@
 import { fromArrayBuffer } from 'geotiff';
-import { convertAnyBBoxTo4326 } from '../utils/projections';
 import { ParsedGeoRasterInfo } from '../utils/geotiffLoader';
 
 self.onmessage = async (e: MessageEvent) => {
@@ -15,11 +14,23 @@ self.onmessage = async (e: MessageEvent) => {
     const origWidth = firstImage.getWidth();
     const origHeight = firstImage.getHeight();
     const bbox = firstImage.getBoundingBox();
-    const geoKeys = firstImage.getGeoKeys ? firstImage.getGeoKeys() : {};
-    const epsg = geoKeys?.ProjectedCSTypeGeoKey || geoKeys?.GeographicTypeGeoKey;
-    const bounds = convertAnyBBoxTo4326(bbox[0], bbox[1], bbox[2], bbox[3], epsg);
+    if (!bbox || !Array.isArray(bbox) || bbox.length < 4) {
+      throw new Error('Không thể xác định toạ độ địa lý (Bounding Box) của file GeoTIFF.');
+    }
+    
+    // Dự án luôn dùng duy nhất 1 hệ toạ độ EPSG:4326 (WGS84 Lon/Lat degrees)
+    const bounds = {
+      west: Math.min(bbox[0], bbox[2]),
+      south: Math.min(bbox[1], bbox[3]),
+      east: Math.max(bbox[0], bbox[2]),
+      north: Math.max(bbox[1], bbox[3]),
+    };
 
-    if (!bounds) {
+    if (
+      typeof bounds.west !== 'number' || typeof bounds.south !== 'number' ||
+      typeof bounds.east !== 'number' || typeof bounds.north !== 'number' ||
+      isNaN(bounds.west) || isNaN(bounds.south) || isNaN(bounds.east) || isNaN(bounds.north)
+    ) {
       throw new Error('Không thể xác định toạ độ địa lý (Bounding Box) của file GeoTIFF.');
     }
 
@@ -125,11 +136,11 @@ self.onmessage = async (e: MessageEvent) => {
         const rasters: any = await targetImage.readRasters({ interleave: false });
         const numBands = Array.isArray(rasters) ? rasters.length : 1;
 
-        if (numBands >= 3) {
+        if (numBands >= 3 && rasters && rasters[0] && rasters[1] && rasters[2]) {
           const rBand = rasters[0];
           const gBand = rasters[1];
           const bBand = rasters[2];
-          const aBand = numBands >= 4 ? rasters[3] : null;
+          const aBand = numBands >= 4 && rasters[3] ? rasters[3] : null;
 
           for (let i = 0; i < totalPixels; i++) {
             const r = rBand[i] ?? 0;
@@ -143,8 +154,9 @@ self.onmessage = async (e: MessageEvent) => {
             data32[i] = (alpha << 24) | (b << 16) | (g << 8) | r;
           }
           decoded = true;
-        } else if (numBands === 1) {
-          const band = rasters[0] || rasters;
+        } else if (numBands === 1 && rasters) {
+          const band = Array.isArray(rasters) ? rasters[0] : rasters;
+          if (!band) return;
           let min = Infinity;
           let max = -Infinity;
 
@@ -201,7 +213,7 @@ self.onmessage = async (e: MessageEvent) => {
           id,
           success: true,
           blob,
-          metadata: { bounds, epsg, width: origWidth, height: origHeight }
+          metadata: { bounds, epsg: 4326, width: origWidth, height: origHeight }
         });
         return;
       } catch (e) {
@@ -214,7 +226,7 @@ self.onmessage = async (e: MessageEvent) => {
       id,
       success: true,
       buffer,
-      metadata: { bounds, epsg, width: origWidth, height: origHeight, renderWidth: width, renderHeight: height }
+      metadata: { bounds, epsg: 4326, width: origWidth, height: origHeight, renderWidth: width, renderHeight: height }
     }, [buffer]);
 
   } catch (error: any) {

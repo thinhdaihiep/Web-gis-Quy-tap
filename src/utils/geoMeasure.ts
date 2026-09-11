@@ -80,10 +80,10 @@ export function extractPolygonLatLngs(coordinates: any): L.LatLng[] {
     if (Array.isArray(arr) && arr.length > 0) {
       if (typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
         points.push(L.latLng(arr[1], arr[0]));
-      } else if (Array.isArray(arr[0])) {
+      } else if (arr[0] && Array.isArray(arr[0]) && arr[0].length > 0) {
         if (typeof arr[0][0] === 'number' && !isNaN(arr[0][0])) {
           arr.forEach((pt: any) => {
-            if (Array.isArray(pt) && pt.length >= 2) {
+            if (Array.isArray(pt) && pt.length >= 2 && typeof pt[0] === 'number' && typeof pt[1] === 'number' && !isNaN(pt[0]) && !isNaN(pt[1])) {
               points.push(L.latLng(pt[1], pt[0]));
             }
           });
@@ -96,4 +96,57 @@ export function extractPolygonLatLngs(coordinates: any): L.LatLng[] {
 
   collectRing(coordinates);
   return points;
+}
+
+/**
+ * Generates a regular polygon (e.g. 5-sided pentagon) with a given radius (in meters)
+ * centered at a target latitude/longitude using WGS84 spherical geodesic projection.
+ * Returns GeoJSON coordinates array: [ [lng, lat], ... , [lng, lat] ] (closed ring).
+ *
+ * @param centerLat Center latitude in degrees
+ * @param centerLng Center longitude in degrees
+ * @param radiusMeters Radius in meters (e.g. 150m for a 300m diameter polygon)
+ * @param sides Number of sides (default 5 for pentagon)
+ */
+export function generateRegularPolygonCoordinates(
+  centerLat: number,
+  centerLng: number,
+  radiusMeters: number,
+  sides: number = 5
+): [number, number][] {
+  const coordinates: [number, number][] = [];
+  const R = EARTH_RADIUS; // WGS84 Earth radius in meters (6378137)
+  const angularDistance = radiusMeters / R;
+
+  const latRad = (centerLat * Math.PI) / 180;
+  const lngRad = (centerLng * Math.PI) / 180;
+
+  // 0 degrees is North, angles progress clockwise: 0, 72, 144, 216, 288 degrees
+  for (let i = 0; i < sides; i++) {
+    const bearingRad = (i * 2 * Math.PI) / sides; // Bearing from North
+
+    const ptLatRad = Math.asin(
+      Math.sin(latRad) * Math.cos(angularDistance) +
+      Math.cos(latRad) * Math.sin(angularDistance) * Math.cos(bearingRad)
+    );
+
+    const ptLngRad =
+      lngRad +
+      Math.atan2(
+        Math.sin(bearingRad) * Math.sin(angularDistance) * Math.cos(latRad),
+        Math.cos(angularDistance) - Math.sin(latRad) * Math.sin(ptLatRad)
+      );
+
+    const ptLat = (ptLatRad * 180) / Math.PI;
+    const ptLng = (ptLngRad * 180) / Math.PI;
+
+    coordinates.push([ptLng, ptLat]);
+  }
+
+  // Close the polygon ring by repeating the first vertex
+  if (coordinates.length > 0) {
+    coordinates.push([coordinates[0][0], coordinates[0][1]]);
+  }
+
+  return coordinates;
 }

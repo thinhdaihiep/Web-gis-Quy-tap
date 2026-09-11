@@ -109,12 +109,12 @@ export const Footer: React.FC<FooterProps> = ({
   };
 
   return (
-    <footer className="h-7 bg-slate-900 text-slate-200 border-t border-slate-800 flex items-center justify-between px-4 text-[11px] shrink-0 z-[3000] font-medium">
+    <footer className="min-h-[28px] h-auto py-1 sm:py-0 bg-slate-900 text-slate-200 border-t border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between px-2 sm:px-4 gap-y-1 gap-x-2 text-[10px] sm:text-[11px] shrink-0 z-[3000] font-medium w-full">
       {/* Left side: Coordinates */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center w-full sm:w-auto">
         {/* Cursor Coordinates Interactive Input */}
         <div
-          className={`flex items-center gap-1.5 px-2 py-0.5 rounded border transition-colors ${
+          className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-0.5 rounded border transition-colors w-full sm:w-auto ${
             inputError
               ? 'bg-red-950/80 border-red-500/80 text-red-200'
               : isEditing
@@ -127,7 +127,7 @@ export const Footer: React.FC<FooterProps> = ({
             Tọa độ:
           </span>
 
-          <div className="relative flex items-center min-w-0">
+          <div className="relative flex items-center min-w-0 flex-1 sm:flex-none">
             <input
               ref={inputRef}
               type="text"
@@ -140,7 +140,7 @@ export const Footer: React.FC<FooterProps> = ({
               onBlur={handleBlur}
               onKeyDown={handleKeyDown}
               placeholder="Nhập tọa độ WGS84..."
-              className={`font-mono text-[11px] font-bold bg-transparent outline-none w-[180px] sm:w-[280px] transition-colors ${
+              className={`font-mono text-[10px] sm:text-[11px] font-bold bg-transparent outline-none w-full sm:w-[280px] transition-colors min-w-[120px] ${
                 inputError
                   ? 'text-red-300 placeholder-red-400/60'
                   : 'text-emerald-400 focus:text-white'
@@ -174,12 +174,12 @@ export const Footer: React.FC<FooterProps> = ({
               type="button"
               onClick={handleCopyCoordinates}
               className="ml-0.5 p-0.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition cursor-pointer flex items-center gap-0.5 shrink-0"
-              title="Sao chép chuỗi tọa độ (bao gồm ° và N, E) vào Clipboard"
+              title="Sao chép chuỗi tọa độ vào Clipboard"
             >
               {copied ? (
                 <>
                   <Check className="w-3 h-3 text-emerald-400" />
-                  <span className="text-[9px] text-emerald-400 font-bold px-0.5">Đã chép</span>
+                  <span className="text-[9px] text-emerald-400 font-bold px-0.5 hidden sm:inline">Đã chép</span>
                 </>
               ) : (
                 <Copy className="w-3 h-3" />
@@ -190,8 +190,8 @@ export const Footer: React.FC<FooterProps> = ({
       </div>
 
       {/* Right side: Scale & Copyright */}
-      <div className="flex gap-2 sm:gap-4 items-center text-[10px] text-slate-400 shrink-0">
-        <span className="hidden sm:inline">
+      <div className="flex gap-2 sm:gap-4 items-center text-[9px] sm:text-[10px] text-slate-400 shrink-0 w-full sm:w-auto justify-between sm:justify-end">
+        <span>
           {mapScale ? (
             <>
               Tỷ lệ 1:{mapScale.toLocaleString('vi-VN')}
@@ -205,7 +205,7 @@ export const Footer: React.FC<FooterProps> = ({
             'Tỷ lệ 1:5.000'
           )}
         </span>
-        <span className="hidden lg:inline">© 2026 Ban Bản đồ/Phòng Tác chiến Quân khu 5</span>
+        <span className="truncate">© 2026 Ban Bản đồ/Phòng Tác chiến QK5</span>
       </div>
     </footer>
   );

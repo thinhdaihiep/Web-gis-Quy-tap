@@ -5,6 +5,7 @@ import {
   Hand,
   Check,
   RotateCcw,
+  Plus,
   Copy,
   Scissors,
   Clipboard,
@@ -33,6 +34,8 @@ interface MapEditorToolbarProps {
   // Clipboard & Ghost Paste Props
   hasClipboard?: boolean;
   hasTargetLocation?: boolean;
+  hasPointMarker?: boolean;
+  onAddFeature?: () => void;
   pendingPasteFeature?: GeoJsonFeatureItem | null;
   onCopy?: () => void;
   onCut?: () => void;
@@ -56,6 +59,8 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
   onCancelPendingNext,
   hasClipboard = false,
   hasTargetLocation = false,
+  hasPointMarker = false,
+  onAddFeature,
   pendingPasteFeature = null,
   onCopy,
   onCut,
@@ -158,10 +163,31 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
           <Target className="w-4 h-4" />
         </button>
 
-        {/* Chức năng Xóa, Copy, Cut, Paste chỉ hiển thị ở chế độ Pointer / Edit Mode */}
+        {/* Chức năng Thêm đối tượng, Xóa, Copy, Cut, Paste chỉ hiển thị ở chế độ Pointer / Edit Mode */}
         {interactionMode === 'pointer' && currentRole !== 'guest' && (
           <>
             <div className="h-4 w-px bg-slate-200 mx-0.5" />
+
+            {/* Nút Thêm đối tượng mới (+) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (hasPointMarker && onAddFeature) onAddFeature();
+              }}
+              disabled={!hasPointMarker}
+              className={`p-2 rounded-xl transition ${
+                hasPointMarker
+                  ? 'text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer'
+                  : 'text-slate-300 cursor-not-allowed'
+              }`}
+              title={
+                hasPointMarker
+                  ? 'Thêm đối tượng mới tại điểm đánh dấu (+)'
+                  : 'Hãy đánh dấu điểm trên bản đồ trước khi thêm đối tượng'
+              }
+            >
+              <Plus className="w-4 h-4" />
+            </button>
 
             {/* Nút Xóa (Delete) */}
             <button

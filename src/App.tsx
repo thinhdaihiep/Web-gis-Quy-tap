@@ -7,6 +7,7 @@ import { LeftSidebar } from './components/LeftSidebar';
 import { MapOverlay } from './components/MapOverlay';
 import { MapEditorToolbar } from './components/MapEditorToolbar';
 import { FeatureEditModal } from './components/FeatureEditModal';
+import { AddFeatureModal } from './components/AddFeatureModal';
 import { AttributePane } from './components/AttributePane';
 import { Footer } from './components/Footer';
 import { DatabaseManagementModal } from './components/DatabaseManagementModal';
@@ -30,7 +31,7 @@ import {
   getStoredUser
 } from './firebaseService';
 import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
-import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, Loader2, CheckCircle2 } from 'lucide-react';
+import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, Loader2, CheckCircle2, Layers } from 'lucide-react';
 
 function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: any } {
   if (!featOrGeom) return { type: 'Point', coordinates: [0, 0] };
@@ -132,14 +133,14 @@ export default function App() {
   const [showRasterToast, setShowRasterToast] = useState<boolean>(false);
   const [rasterToastData, setRasterToastData] = useState<RasterLoadingStatus>({ state: 'idle' });
 
-  // Auto-dismiss raster toast when loaded or after timeout
+  // Manage raster status indicator (loading progress or visible file names when loaded)
   useEffect(() => {
-    if (!isRasterVisible || rasterStatus.state === 'idle' || rasterStatus.state === 'loaded') {
+    if (!isRasterVisible || rasterStatus.state === 'idle') {
       setShowRasterToast(false);
       return;
     }
 
-    if (rasterStatus.state === 'loading') {
+    if (rasterStatus.state === 'loading' || rasterStatus.state === 'loaded') {
       setRasterToastData(rasterStatus);
       setShowRasterToast(true);
     } else if (rasterStatus.state === 'error') {
@@ -179,6 +180,7 @@ export default function App() {
   const [activeDrawMode, setActiveDrawMode] = useState<DrawToolMode>('select');
   const [editingFeature, setEditingFeature] = useState<Partial<GeoJsonFeatureItem> | null>(null);
   const [isFeatureEditModalOpen, setIsFeatureEditModalOpen] = useState<boolean>(false);
+  const [isAddFeatureModalOpen, setIsAddFeatureModalOpen] = useState<boolean>(false);
   const [drawingPointsCount, setDrawingPointsCount] = useState<number>(0);
   const drawingVerticesRef = useRef<[number, number][]>([]);
 
@@ -611,9 +613,9 @@ export default function App() {
 
     const targetLayer = layerId
       ? rasterLayers.find((l) => l.id === layerId)
-      : rasterLayers.find((l) => l.id === activeRasterLayerId) || rasterLayers[0];
+      : (rasterLayers.find((l) => l.id === activeRasterLayerId) || (rasterLayers.length > 0 ? rasterLayers[0] : null));
 
-    const targetBounds = bounds || rasterStatus.bounds || targetLayer?.bounds || targetLayer?.files[0]?.bounds;
+    const targetBounds = bounds || rasterStatus.bounds || targetLayer?.bounds || targetLayer?.files?.[0]?.bounds;
 
     if (mapInstance && targetBounds) {
       const box = normalizeBoundsBox(targetBounds);
@@ -675,8 +677,16 @@ export default function App() {
 
     const bounds: L.LatLng[] = [];
     layerFeatures.forEach((feat) => {
-      if (feat.type === 'Point' && Array.isArray(feat.coordinates) && feat.coordinates.length >= 2) {
-        bounds.push(L.latLng(feat.coordinates[1], feat.coordinates[0]));
+      if (
+        feat.type === 'Point' &&
+        Array.isArray(feat.coordinates) &&
+        feat.coordinates.length >= 2 &&
+        feat.coordinates[0] !== null &&
+        feat.coordinates[1] !== null &&
+        !isNaN(Number(feat.coordinates[0])) &&
+        !isNaN(Number(feat.coordinates[1]))
+      ) {
+        bounds.push(L.latLng(Number(feat.coordinates[1]), Number(feat.coordinates[0])));
       } else if (feat.coordinates && Array.isArray(feat.coordinates)) {
         const collect = (arr: any) => {
           if (Array.isArray(arr) && arr.length === 2 && typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
@@ -1500,6 +1510,8 @@ export default function App() {
             onCancelPendingNext={handleCancelPendingNext}
             hasClipboard={!!clipboard}
             hasTargetLocation={!!(cursorLocation || userLocation)}
+            hasPointMarker={!!cursorLocation}
+            onAddFeature={() => setIsAddFeatureModalOpen(true)}
             pendingPasteFeature={pendingPasteFeature}
             onCopy={handleCopy}
             onCut={handleCut}
@@ -1556,13 +1568,49 @@ export default function App() {
             zoomLevel={zoomLevel}
           />
 
-          {/* Raster Loading Status - Leaflet Control Style */}
-          {showRasterToast && isRasterVisible && rasterToastData.state === 'loading' && (
-            <div className="absolute bottom-[18px] right-0 z-[1000] pointer-events-auto bg-white/80 backdrop-blur-[2px] text-slate-700 text-[11px] px-2 py-0.5 flex items-center gap-1.5 rounded-tl-md">
-              <Loader2 className="w-3 h-3 animate-spin text-blue-600 shrink-0" />
-              <span>{`Đang nạp ${rasterToastData.progress ?? 0}%`}</span>
-            </div>
-          )}
+          {/* Raster Loading Status - Leaflet Control Style (Bottom Left, above Coordinate Bar) */}
+          {showRasterToast && isRasterVisible && (rasterToastData.state === 'loading' || rasterToastData.state === 'loaded') && (() => {
+            const hasFileStatuses = rasterToastData.fileStatuses && rasterToastData.fileStatuses.length > 0;
+            const displayTitle = rasterToastData.fileNames && rasterToastData.fileNames.length > 0
+              ? [...rasterToastData.fileNames].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })).join(', ')
+              : rasterToastData.activeLayerName;
+            
+            return (
+              <div
+                className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/85 backdrop-blur-[2px] text-slate-700 text-[11px] px-2 py-0.5 flex items-center gap-1.5 rounded-tr-md border-t border-r border-slate-200/60 shadow-xs max-w-[360px] sm:max-w-[480px]"
+                title={displayTitle}
+              >
+                {rasterToastData.state === 'loading' ? (
+                  <Loader2 className="w-3 h-3 animate-spin text-blue-600 shrink-0" />
+                ) : (
+                  <Layers className="w-3 h-3 text-emerald-600 shrink-0" />
+                )}
+                
+                <span className="font-medium truncate whitespace-nowrap overflow-hidden">
+                  {hasFileStatuses ? (
+                    rasterToastData.fileStatuses!.map((fs, idx) => (
+                      <span key={idx}>
+                        <span className={fs.state === 'loaded' ? 'text-emerald-700' : 'text-red-700'}>
+                          {fs.name}
+                        </span>
+                        {idx < rasterToastData.fileStatuses!.length - 1 ? <span className="text-slate-800">, </span> : ''}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-slate-800">
+                      {rasterToastData.activeLayerName || 'Raster'}
+                    </span>
+                  )}
+                </span>
+                
+                {rasterToastData.state === 'loading' && (
+                  <span className="text-blue-600 shrink-0 text-[10px] font-medium">
+                    {`(${rasterToastData.progress ?? 0}%)`}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </section>
 
         {/* Right Attribute Pane in Pointer Mode */}
@@ -1618,6 +1666,21 @@ export default function App() {
           onClose={() => {
             setIsFeatureEditModalOpen(false);
             setEditingFeature(null);
+          }}
+        />
+      )}
+
+      {/* Add Feature Modal Component */}
+      {isAddFeatureModalOpen && (
+        <AddFeatureModal
+          isOpen={isAddFeatureModalOpen}
+          onClose={() => setIsAddFeatureModalOpen(false)}
+          layers={layers}
+          mapFeatures={mapFeatures}
+          markerLocation={cursorLocation}
+          currentUser={user}
+          onSave={(newFeature) => {
+            handleSaveFeature(newFeature);
           }}
         />
       )}

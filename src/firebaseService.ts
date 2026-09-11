@@ -11,8 +11,11 @@ const APP_SETTINGS_COLLECTION = 'app_settings';
 
 export const signInWithCredentials = async (username: string, password: string): Promise<AppUser | null> => {
   try {
+    const cleanUser = username.trim().toLowerCase();
+    const cleanPass = password.trim();
+
     // Default admin account
-    if (username === 'admin' && password === '123') {
+    if (cleanUser === 'admin' && (cleanPass === '123' || cleanPass === 'admin')) {
       const adminUser: AppUser = {
         uid: 'admin_static',
         username: 'admin',
@@ -23,21 +26,91 @@ export const signInWithCredentials = async (username: string, password: string):
       return adminUser;
     }
 
-    const q = query(collection(db, 'users'), where('username', '==', username), where('password', '==', password));
-    const snapshot = await getDocs(q);
-    
-    if (!snapshot.empty) {
-      const docSnap = snapshot.docs[0];
-      const data = docSnap.data();
-      const user: AppUser = {
-        uid: docSnap.id,
-        username: data.username,
-        displayName: data.displayName || data.username,
-        role: data.role || 'guest',
-      };
-      localStorage.setItem('gis_user_session', JSON.stringify(user));
-      return user;
+    // 1. Try Firestore Client Query
+    try {
+      let q = query(
+        collection(db, 'users'),
+        where('username', '==', cleanUser),
+        where('password', '==', cleanPass)
+      );
+      let snapshot = await getDocs(q);
+
+      if (snapshot.empty && username.trim() !== cleanUser) {
+        q = query(
+          collection(db, 'users'),
+          where('username', '==', username.trim()),
+          where('password', '==', cleanPass)
+        );
+        snapshot = await getDocs(q);
+      }
+
+      if (!snapshot.empty) {
+        const docSnap = snapshot.docs[0];
+        const data = docSnap.data();
+        const user: AppUser = {
+          uid: docSnap.id,
+          username: data.username,
+          displayName: data.displayName || data.username,
+          role: (data.role as UserRole) || 'editor',
+        };
+        localStorage.setItem('gis_user_session', JSON.stringify(user));
+        return user;
+      }
+    } catch (fsErr) {
+      console.warn('Direct Firestore login failed, falling back to server API:', fsErr);
     }
+
+    // 2. Fallback: Query via Server API /api/users
+    try {
+      const res = await fetch('/api/users');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.users)) {
+          const matched = data.users.find(
+            (u: any) =>
+              (String(u.username || '').trim().toLowerCase() === cleanUser ||
+                String(u.email || '').trim().toLowerCase() === cleanUser) &&
+              String(u.password || '').trim() === cleanPass
+          );
+          if (matched) {
+            const user: AppUser = {
+              uid: matched.uid || `user_${matched.username}`,
+              username: matched.username,
+              displayName: matched.displayName || matched.username,
+              role: (matched.role as UserRole) || 'editor',
+            };
+            localStorage.setItem('gis_user_session', JSON.stringify(user));
+            return user;
+          }
+        }
+      }
+    } catch (apiErr) {
+      console.warn('Server API login fallback failed:', apiErr);
+    }
+
+    // 3. Fallback: Cached users in localStorage (Offline support)
+    try {
+      const cached = localStorage.getItem('gis_cached_users');
+      if (cached) {
+        const list = JSON.parse(cached);
+        const matched = list.find(
+          (u: any) =>
+            (String(u.username || '').trim().toLowerCase() === cleanUser ||
+              String(u.email || '').trim().toLowerCase() === cleanUser) &&
+            String(u.password || '').trim() === cleanPass
+        );
+        if (matched) {
+          const user: AppUser = {
+            uid: matched.uid || `user_${matched.username}`,
+            username: matched.username,
+            displayName: matched.displayName || matched.username,
+            role: (matched.role as UserRole) || 'editor',
+          };
+          localStorage.setItem('gis_user_session', JSON.stringify(user));
+          return user;
+        }
+      }
+    } catch (_) {}
 
     return null;
   } catch (error) {

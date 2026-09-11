@@ -57,7 +57,7 @@ function convertBBoxToBounds(
   minY: number,
   maxX: number,
   maxY: number,
-  epsg?: number | string
+  _epsg?: number | string
 ): LatLngBoundsBox | null {
   if (
     typeof minX !== 'number' || typeof minY !== 'number' ||
@@ -67,7 +67,13 @@ function convertBBoxToBounds(
     return null;
   }
 
-  return convertAnyBBoxTo4326(minX, minY, maxX, maxY, epsg);
+  // Dự án luôn dùng duy nhất 1 hệ toạ độ EPSG:4326 (WGS84 Lon/Lat degrees)
+  return {
+    west: Math.min(minX, maxX),
+    south: Math.min(minY, maxY),
+    east: Math.max(minX, maxX),
+    north: Math.max(minY, maxY),
+  };
 }
 
 /**
@@ -107,7 +113,9 @@ export async function parseGeoTiffMetadata(input: ArrayBuffer | File | Blob | st
       const geoKeys = image.getGeoKeys ? image.getGeoKeys() : {};
       const epsg = geoKeys?.ProjectedCSTypeGeoKey || geoKeys?.GeographicTypeGeoKey;
 
-      const bounds = convertBBoxToBounds(bbox[0], bbox[1], bbox[2], bbox[3], epsg);
+      const bounds = (bbox && Array.isArray(bbox) && bbox.length >= 4)
+        ? convertBBoxToBounds(bbox[0], bbox[1], bbox[2], bbox[3], epsg)
+        : null;
       if (bounds) {
         return {
           bounds,
@@ -159,7 +167,9 @@ export async function parseGeoTiffMetadata(input: ArrayBuffer | File | Blob | st
       const bbox = image.getBoundingBox();
       const geoKeys = image.getGeoKeys ? image.getGeoKeys() : {};
       const epsg = geoKeys?.ProjectedCSTypeGeoKey || geoKeys?.GeographicTypeGeoKey;
-      const bounds = convertBBoxToBounds(bbox[0], bbox[1], bbox[2], bbox[3], epsg);
+      const bounds = (bbox && Array.isArray(bbox) && bbox.length >= 4)
+        ? convertBBoxToBounds(bbox[0], bbox[1], bbox[2], bbox[3], epsg)
+        : null;
 
       return {
         bounds,
@@ -193,46 +203,11 @@ export async function parseGeoTiffMetadata(input: ArrayBuffer | File | Blob | st
 
 /**
  * Automatically detects and normalizes Coordinate Reference System (CRS) for GeoRaster
+ * Luôn dùng duy nhất 1 hệ toạ độ EPSG:4326
  */
-export function detectAndNormalizeProjection(georaster: any, defaultEpsg?: number | string): number | string {
-  const { xmin, ymin, xmax, ymax } = georaster;
-  let proj = georaster.projection || defaultEpsg;
-
-  // Normalize string numbers like "4326" or "EPSG:4326"
-  if (typeof proj === 'string') {
-    const match = proj.match(/\d+/);
-    if (match) {
-      proj = parseInt(match[0], 10);
-    }
-  }
-
-  // If projection is already valid standard EPSG code
-  if (proj && typeof proj === 'number' && !isNaN(proj) && [4326, 3857, 32648, 32649, 3405, 3406, 5899, 5897, 4756, 3148, 3149].includes(proj)) {
-    georaster.projection = proj;
-    return proj;
-  }
-
-  // Check bounding box values to accurately detect projection
-  const minX = Math.min(xmin, xmax);
-  const maxX = Math.max(xmin, xmax);
-  const minY = Math.min(ymin, ymax);
-  const maxY = Math.max(ymin, ymax);
-
-  // 1. Degree coordinates (EPSG:4326) - e.g. Vietnam lng 102~110, lat 8~24
-  if (minX >= -180 && maxX <= 180 && minY >= -90 && maxY <= 90) {
-    georaster.projection = 4326;
-    return 4326;
-  }
-
-  // 2. UTM Zone 48N / 49N / VN-2000 meters in Vietnam - X: 100,000 to 900,000; Y: 700,000 to 3,500,000
-  if (minX >= 100000 && maxX <= 900000 && minY >= 700000 && maxY <= 3500000) {
-    georaster.projection = 32648;
-    return 32648;
-  }
-
-  // 3. Web Mercator meters (EPSG:3857) - meters > 1,000,000
-  georaster.projection = 3857;
-  return 3857;
+export function detectAndNormalizeProjection(georaster: any, _defaultEpsg?: number | string): number | string {
+  georaster.projection = 4326;
+  return 4326;
 }
 
 /**

@@ -106,6 +106,8 @@ export interface RasterLoadingStatus {
   activeLayerName?: string;
   bounds?: LatLngBoundsBox | null;
   error?: string;
+  fileNames?: string[];
+  fileStatuses?: { name: string; state: 'loading' | 'loaded' }[];
 }
 
 /**

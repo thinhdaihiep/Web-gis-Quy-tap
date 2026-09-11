@@ -682,8 +682,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
           <div className="space-y-3">
             {layers.map((layer) => {
               const isIndexingThis = indexingLayerId === layer.id;
-              const indexedCount = layer.files.filter((f) => !!f.bounds).length;
-              const allIndexed = layer.files.length > 0 && indexedCount === layer.files.length;
+              const files = layer.files || [];
+              const indexedCount = files.filter((f) => !!f.bounds).length;
+              const allIndexed = files.length > 0 && indexedCount === files.length;
 
               return (
                 <div
@@ -734,7 +735,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                             {layer.name}
                           </span>
                           <span className="text-[11px] text-slate-500 font-normal shrink-0">
-                            ({layer.files.length} file)
+                            ({files.length} file)
                           </span>
                           {layer.githubReleaseUrl && (
                             <a
@@ -747,7 +748,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                               <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                           )}
-                          {layer.files.length > 0 && (
+                          {files.length > 0 && (
                             <span
                               className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-medium ${
                                 allIndexed
@@ -758,7 +759,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                             >
                               {allIndexed
                                 ? '✓ Chỉ mục 100%'
-                                : `Chỉ mục: ${indexedCount}/${layer.files.length}`}
+                                : `Chỉ mục: ${indexedCount}/${files.length}`}
                             </span>
                           )}
                         </div>
@@ -770,7 +771,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                       {/* Nút Xem / Phóng tới lớp trên bản đồ */}
                       {onSelectAndFlyToRaster && (
                         <button
-                          onClick={() => onSelectAndFlyToRaster(layer.id, layer.bounds || (layer.files[0]?.bounds))}
+                          onClick={() => onSelectAndFlyToRaster(layer.id, layer.bounds || files[0]?.bounds)}
                           className="p-1.5 bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white rounded transition cursor-pointer flex items-center justify-center shadow-xs"
                           title="Bật và phóng bản đồ tới phạm vi lớp này"
                         >
@@ -781,7 +782,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                       {/* Nút Tải lại danh sách (Đồng bộ + Chỉ mục) */}
                       <button
                         onClick={() => handleSyncAndIndexLayer(layer)}
-                        disabled={isIndexingThis || (layer.files.length === 0 && !layer.githubReleaseUrl)}
+                        disabled={isIndexingThis || (files.length === 0 && !layer.githubReleaseUrl)}
                         className="p-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white disabled:bg-slate-100 disabled:text-slate-300 rounded transition cursor-pointer disabled:cursor-not-allowed flex items-center justify-center shadow-xs"
                         title="Tải lại danh sách file từ GitHub Release và cập nhật lại toàn bộ chỉ mục"
                       >
@@ -884,7 +885,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
                   {/* Files inside Layer */}
                   <div className="p-3">
-                    {layer.files.length === 0 ? (
+                    {files.length === 0 ? (
                       <div className="py-4 px-3 border border-dashed border-slate-200 rounded-md text-center bg-slate-50/50">
                         <Scan className="w-5 h-5 mx-auto text-slate-400 mb-1" />
                         <p className="text-[11px] text-slate-600 font-medium">
@@ -896,7 +897,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                       </div>
                     ) : (
                       <div className="divide-y divide-slate-100 max-h-[300px] overflow-y-auto pr-1">
-                        {layer.files.map((file) => (
+                        {files.map((file) => (
                           <div
                             key={file.id}
                             className="py-2 px-1 flex items-center justify-between gap-2 hover:bg-slate-50/80 rounded transition"

@@ -149,7 +149,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
 
   if (!isOpen) return null;
 
-  const targetLayer = layers.find((l) => l.id === selectedLayerId) || layers[0];
+  const targetLayer = layers.find((l) => l.id === selectedLayerId) || (layers.length > 0 ? layers[0] : null);
 
   // Helper check if duplicate in existingFeatures
   const checkIsDuplicate = (feature: GeoJsonFeatureItem): boolean => {
@@ -425,7 +425,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
 
   return (
     <div className="fixed inset-0 z-[3000] bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-white rounded-xl shadow-2xl border border-slate-300 w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95">
+      <div className="bg-white rounded-xl shadow-2xl border border-slate-300 w-full max-w-3xl h-[92vh] max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95">
         {/* Modal Header */}
         <div className="bg-slate-900 text-white p-4 flex justify-between items-center shrink-0 border-b border-slate-800">
           <div className="flex items-center space-x-3">

@@ -174,7 +174,13 @@ function toLeafletCoords(coords: any): any {
   }
   if (!Array.isArray(coords) || coords.length === 0) return [];
 
-  if (typeof coords[0] === 'number' && !isNaN(coords[0]) && typeof coords[1] === 'number' && !isNaN(coords[1])) {
+  if (
+    coords.length >= 2 &&
+    typeof coords[0] === 'number' &&
+    !isNaN(coords[0]) &&
+    typeof coords[1] === 'number' &&
+    !isNaN(coords[1])
+  ) {
     let x = coords[0];
     let y = coords[1];
 
@@ -190,8 +196,9 @@ function toLeafletCoords(coords: any): any {
   }
 
   return coords
-    .filter((c: any) => c !== null && c !== undefined)
-    .map((c: any) => toLeafletCoords(c));
+    .filter((c: any) => c !== null && c !== undefined && (Array.isArray(c) || typeof c === 'string'))
+    .map((c: any) => toLeafletCoords(c))
+    .filter((c: any) => Array.isArray(c) && c.length > 0);
 }
 
 function leafletLatLngsToGeoJsonPolygon(latLngs: any): any {
@@ -381,6 +388,7 @@ export const MapComponent: React.FC<MapProps> = ({
   const tempDrawLayerRef = useRef<L.LayerGroup | null>(null);
   const clickMarkerRef = useRef<L.CircleMarker | null>(null);
   const rasterLayersCacheRef = useRef<Map<string, { layer: L.GridLayer; metadata: any }>>(new Map());
+  const hasActivatedRasterRef = useRef<boolean>(false);
 
   const onRasterStatusChangeRef = useRef(onRasterStatusChange);
   onRasterStatusChangeRef.current = onRasterStatusChange;
@@ -646,6 +654,7 @@ export const MapComponent: React.FC<MapProps> = ({
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
+    let cleanupWheel: (() => void) | null = null;
 
     if (!mapInstanceRef.current) {
       // Restore map center and zoom level from LocalStorage if available
@@ -680,7 +689,45 @@ export const MapComponent: React.FC<MapProps> = ({
         center: initialCenter,
         zoom: initialZoom,
         zoomControl: false,
+        zoomSnap: 1,
+        zoomDelta: 1,
+        scrollWheelZoom: false, // Sử dụng bộ xử lý con lăn chuột chuyên biệt để đảm bảo mỗi lần lăn chỉ thay đổi đúng +/- 1 mức
       });
+
+      // Điều khiển con lăn chuột: mỗi lần lăn chỉ thu phóng đúng +/- 1 mức zoom, không nhảy bậc
+      const mapContainer = map.getContainer();
+      let wheelCooldown = false;
+      let wheelTimer: any = null;
+
+      const handleWheelZoom = (e: WheelEvent) => {
+        e.preventDefault();
+        if (wheelCooldown) return;
+        if (e.deltaY === 0) return;
+
+        const direction = e.deltaY < 0 ? 1 : -1;
+        const currentZoom = map.getZoom();
+        const minZoom = map.getMinZoom();
+        const maxZoom = map.getMaxZoom();
+        const nextZoom = Math.min(maxZoom, Math.max(minZoom, Math.round(currentZoom) + direction));
+
+        if (nextZoom !== currentZoom) {
+          const mouseLatLng = map.mouseEventToLatLng(e);
+          map.setZoomAround(mouseLatLng, nextZoom, { animate: true });
+          wheelCooldown = true;
+
+          if (wheelTimer) clearTimeout(wheelTimer);
+          wheelTimer = setTimeout(() => {
+            wheelCooldown = false;
+          }, 200);
+        }
+      };
+
+      mapContainer.addEventListener('wheel', handleWheelZoom, { passive: false });
+
+      cleanupWheel = () => {
+        mapContainer.removeEventListener('wheel', handleWheelZoom);
+        if (wheelTimer) clearTimeout(wheelTimer);
+      };
 
       const saveViewState = () => {
         if (!map) return;
@@ -813,6 +860,9 @@ export const MapComponent: React.FC<MapProps> = ({
     }
 
     return () => {
+      if (cleanupWheel) {
+        cleanupWheel();
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -820,12 +870,46 @@ export const MapComponent: React.FC<MapProps> = ({
     };
   }, []);
 
+function getShortRasterName(f: { fileName?: string; name?: string; url?: string }): string {
+  let name = f.fileName || f.name || '';
+  if (!name && f.url) {
+    try {
+      const parts = f.url.split('/');
+      name = decodeURIComponent(parts[parts.length - 1] || '').split('?')[0];
+    } catch {
+      name = f.url.split('/').pop() || '';
+    }
+  }
+  return name.replace(/\.(tif|tiff|geotiff|cog|png|jpg|jpeg)$/i, '').trim();
+}
+
   // Update Raster Layers (COG / GeoTIFF) - Display on top of active base map when isRasterVisible is true
   useEffect(() => {
     let isActive = true;
     const map = mapInstanceRef.current;
     const rasterGroup = rasterLayerGroupRef.current;
     if (!map || !rasterGroup) return;
+
+    if (isRasterVisible) {
+      hasActivatedRasterRef.current = true;
+    }
+
+    // Điều khiển hiển thị trực quan của rasterPane: chỉ hiển thị khi checkbox bật VÀ zoom >= 12
+    const updatePaneVisibility = () => {
+      const rPane = map.getPane('rasterPane');
+      if (rPane) {
+        const isZoomOk = map.getZoom() >= 12;
+        rPane.style.display = (isRasterVisible && isZoomOk) ? '' : 'none';
+      }
+    };
+
+    updatePaneVisibility();
+
+    // Nếu chưa từng bật checkbox raster lần nào, hoặc danh sách layers rỗng thì không tải
+    if (!hasActivatedRasterRef.current || !rasterLayers || rasterLayers.length === 0) {
+      reportRasterStatus({ state: 'idle' });
+      return;
+    }
 
     const cache = rasterLayersCacheRef.current;
     const pendingUrls = new Set<string>();
@@ -835,27 +919,19 @@ export const MapComponent: React.FC<MapProps> = ({
     const evaluateRasters = () => {
       if (!isActive) return;
 
-      if (!isRasterVisible || !rasterLayers || rasterLayers.length === 0) {
+      updatePaneVisibility();
+
+      if (!rasterLayers || rasterLayers.length === 0) {
         rasterGroup.clearLayers();
         reportRasterStatus({ state: 'idle' });
         return;
       }
 
-      // Requirement 1: Hide raster completely when zoom < 12
-      if (map.getZoom() < 12) {
-        rasterGroup.clearLayers();
-        reportRasterStatus({ 
-          state: 'idle', 
-          message: 'Hãy phóng to bản đồ (zoom >= 12) để xem lớp raster.' 
-        });
-        return;
-      }
-
       const targetLayers = rasterLayers.filter(
-        (layer) => !activeRasterLayerId || layer.id === activeRasterLayerId
+        (layer) => layer && (!activeRasterLayerId || layer.id === activeRasterLayerId)
       );
 
-      const activeLayer = targetLayers[0];
+      const activeLayer = targetLayers.length > 0 ? targetLayers[0] : null;
       const activeLayerName = activeLayer?.name || 'Bản đồ Raster';
 
       let allFilesToProcess: Array<{
@@ -867,11 +943,11 @@ export const MapComponent: React.FC<MapProps> = ({
       }> = [];
 
       targetLayers.forEach((layer) => {
-        if (layer.files && layer.files.length > 0) {
+        if (layer?.files && Array.isArray(layer.files) && layer.files.length > 0) {
           layer.files.forEach((f) => {
-            if (f.url) allFilesToProcess.push({ ...f, opacity: layer.opacity ?? 1.0 });
+            if (f?.url) allFilesToProcess.push({ ...f, opacity: layer.opacity ?? 1.0 });
           });
-        } else if (layer.url) {
+        } else if (layer?.url) {
           allFilesToProcess.push({
             url: layer.url,
             fileName: layer.name,
@@ -969,18 +1045,63 @@ export const MapComponent: React.FC<MapProps> = ({
         }
       });
 
+      const mapBounds = map.getBounds();
+      const currentViewportBox = {
+        south: mapBounds.getSouth(),
+        west: mapBounds.getWest(),
+        north: mapBounds.getNorth(),
+        east: mapBounds.getEast(),
+      };
+
+      const getVisibleFileStatuses = () => {
+        const inViewport = activeFiles.filter((f) => {
+          const b = normalizeBoundsBox(f.bounds);
+          if (!b) return true;
+          return !(
+            b.south > currentViewportBox.north ||
+            b.north < currentViewportBox.south ||
+            b.west > currentViewportBox.east ||
+            b.east < currentViewportBox.west
+          );
+        });
+        const targetList = inViewport.length > 0 ? inViewport : activeFiles;
+        
+        const uniqueNames = new Map<string, 'loading' | 'loaded'>();
+        targetList.forEach(f => {
+          const name = getShortRasterName(f);
+          if (name) {
+             const isLoaded = cache.has(f.url);
+             if (!uniqueNames.has(name)) {
+                uniqueNames.set(name, isLoaded ? 'loaded' : 'loading');
+             } else if (!isLoaded) {
+                uniqueNames.set(name, 'loading');
+             }
+          }
+        });
+        
+        return Array.from(uniqueNames.entries())
+          .map(([name, state]) => ({ name, state }))
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+      };
+
       if (loadedCount === activeFiles.length) {
+        const fileStatuses = getVisibleFileStatuses();
+        const fileNames = fileStatuses.map(fs => fs.name);
         reportRasterStatus({
           state: 'loaded',
           progress: 100,
-          message: `Đã nạp ${loadedCount}/${activeFiles.length} ảnh raster`,
+          message: fileNames.join(', ') || `Đã nạp ${loadedCount}/${activeFiles.length} ảnh raster`,
           loadedCount,
           totalCount: activeFiles.length,
           activeLayerName,
           bounds: combinedBoundsBox,
+          fileNames,
+          fileStatuses,
         });
       } else {
         const currentProgress = Math.round((loadedCount / activeFiles.length) * 100) || 5;
+        const fileStatuses = getVisibleFileStatuses();
+        const fileNames = fileStatuses.map(fs => fs.name);
         reportRasterStatus({
           state: 'loading',
           progress: currentProgress,
@@ -989,6 +1110,8 @@ export const MapComponent: React.FC<MapProps> = ({
           totalCount: activeFiles.length,
           activeLayerName,
           bounds: combinedBoundsBox,
+          fileNames,
+          fileStatuses,
         });
       }
 
@@ -1007,6 +1130,8 @@ export const MapComponent: React.FC<MapProps> = ({
             onProgress: (percent) => {
               if (isActive && percent < 100 && loadedCount < activeFiles.length) {
                 const currentProgress = Math.min(99, Math.round(((loadedCount + percent / 100) / activeFiles.length) * 100));
+                const fileStatuses = getVisibleFileStatuses();
+                const fileNames = fileStatuses.map(fs => fs.name);
                 reportRasterStatus({
                   state: 'loading',
                   progress: currentProgress,
@@ -1014,6 +1139,8 @@ export const MapComponent: React.FC<MapProps> = ({
                   loadedCount,
                   totalCount: activeFiles.length,
                   activeLayerName,
+                  fileNames,
+                  fileStatuses,
                 });
               }
             },
@@ -1041,17 +1168,23 @@ export const MapComponent: React.FC<MapProps> = ({
             loadedCount++;
 
             if (loadedCount >= activeFiles.length) {
+              const fileStatuses = getVisibleFileStatuses();
+              const fileNames = fileStatuses.map(fs => fs.name);
               reportRasterStatus({
                 state: 'loaded',
                 progress: 100,
-                message: `Đã nạp hoàn tất`,
+                message: fileNames.join(', ') || `Đã nạp hoàn tất`,
                 loadedCount,
                 totalCount: activeFiles.length,
                 activeLayerName,
                 bounds: combinedBoundsBox,
+                fileNames,
+                fileStatuses,
               });
             } else {
               const currentProgress = Math.round((loadedCount / activeFiles.length) * 100);
+              const fileStatuses = getVisibleFileStatuses();
+              const fileNames = fileStatuses.map(fs => fs.name);
               reportRasterStatus({
                 state: 'loading',
                 progress: currentProgress,
@@ -1060,6 +1193,8 @@ export const MapComponent: React.FC<MapProps> = ({
                 totalCount: activeFiles.length,
                 activeLayerName,
                 bounds: combinedBoundsBox,
+                fileNames,
+                fileStatuses,
               });
             }
           }
@@ -1130,6 +1265,8 @@ export const MapComponent: React.FC<MapProps> = ({
     // Re-evaluate on map movements with debounce to keep panning silky smooth
     map.on('moveend', debouncedEvaluateRasters);
     map.on('zoomend', debouncedEvaluateRasters);
+    map.on('zoom', updatePaneVisibility);
+    map.on('zoomend', updatePaneVisibility);
 
     return () => {
       isActive = false;
@@ -1138,7 +1275,8 @@ export const MapComponent: React.FC<MapProps> = ({
       window.removeEventListener('clear-raster-cache', handleClearRasterCacheEvent);
       map.off('moveend', debouncedEvaluateRasters);
       map.off('zoomend', debouncedEvaluateRasters);
-      rasterGroup.clearLayers();
+      map.off('zoom', updatePaneVisibility);
+      map.off('zoomend', updatePaneVisibility);
     };
   }, [rasterLayers, isRasterVisible, activeRasterLayerId]);
 
@@ -1417,7 +1555,14 @@ export const MapComponent: React.FC<MapProps> = ({
           L.DomEvent.stopPropagation(e);
         }
 
-        const latlng = e.latlng || (typeof (layer as any).getLatLng === 'function' ? (layer as any).getLatLng() : (layer as any).getBounds ? (layer as any).getBounds().getCenter() : undefined);
+        const layerBounds = typeof (layer as any).getBounds === 'function' ? (layer as any).getBounds() : null;
+        const layerCenter = typeof (layer as any).getLatLng === 'function'
+          ? (layer as any).getLatLng()
+          : layerBounds && typeof layerBounds.isValid === 'function' && layerBounds.isValid()
+          ? layerBounds.getCenter()
+          : undefined;
+
+        const latlng = e.latlng || layerCenter;
         if (interactionModeRef.current === 'hand' && typeof (layer as any).openPopup === 'function') {
           (layer as any).openPopup(latlng);
         } else if (typeof (layer as any).closePopup === 'function') {
@@ -1425,7 +1570,7 @@ export const MapComponent: React.FC<MapProps> = ({
           setTimeout(() => (layer as any).closePopup(), 0);
         }
 
-        const center = typeof (layer as any).getLatLng === 'function' ? (layer as any).getLatLng() : (layer as any).getBounds ? (layer as any).getBounds().getCenter() : undefined;
+        const center = layerCenter;
         if (center && onCursorMoveRef.current) {
           onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
         }
@@ -1458,7 +1603,7 @@ export const MapComponent: React.FC<MapProps> = ({
 
     activeFeatures.forEach((feat) => {
       const featKey = getItemUniqueKey(feat);
-      const parentLayer = layerConfigMap.get(feat.layerId) || layers[0];
+      const parentLayer = (feat.layerId ? layerConfigMap.get(feat.layerId) : null) || (layers.length > 0 ? layers[0] : null);
 
       let featureColor = parentLayer?.color || '#10b981';
       const rawPhanLoai = feat.properties?.PhanLoai ?? feat.properties?.phanLoai;
@@ -1514,7 +1659,11 @@ export const MapComponent: React.FC<MapProps> = ({
         if (
           feat.type === 'Point' &&
           Array.isArray(pointCoords) &&
-          pointCoords.length >= 2
+          pointCoords.length >= 2 &&
+          pointCoords[0] !== null &&
+          pointCoords[1] !== null &&
+          !isNaN(Number(pointCoords[0])) &&
+          !isNaN(Number(pointCoords[1]))
         ) {
           let x = Number(pointCoords[0]);
           let y = Number(pointCoords[1]);
@@ -1529,6 +1678,10 @@ export const MapComponent: React.FC<MapProps> = ({
             } catch (e) {
               console.warn('Proj4 point error:', e);
             }
+          }
+
+          if (isNaN(lat) || isNaN(lng)) {
+            return;
           }
 
           const markerLatLng = L.latLng(lat, lng);
@@ -1673,6 +1826,7 @@ export const MapComponent: React.FC<MapProps> = ({
         ) {
           const leafletCoords = toLeafletCoords(feat.coordinates);
 
+          let validPointCount = 0;
           const collectLatLngs = (arr: any) => {
             if (
               Array.isArray(arr) &&
@@ -1681,11 +1835,16 @@ export const MapComponent: React.FC<MapProps> = ({
               typeof arr[1] === 'number' && !isNaN(arr[1])
             ) {
               allBounds.push(L.latLng(arr[0], arr[1]));
+              validPointCount++;
             } else if (Array.isArray(arr)) {
               arr.forEach(collectLatLngs);
             }
           };
           collectLatLngs(leafletCoords);
+
+          if (validPointCount < 3) {
+            return;
+          }
 
           const { name: titleName, hiddenKey } = getFeatureName(feat);
 
@@ -1795,8 +1954,9 @@ export const MapComponent: React.FC<MapProps> = ({
               onFeatureSelectRef.current(feat);
             }
 
-            const center = polygon.getBounds().getCenter();
-            if (onCursorMoveRef.current) {
+            const polyBounds = polygon.getBounds();
+            const center = polyBounds && polyBounds.isValid() ? polyBounds.getCenter() : undefined;
+            if (center && onCursorMoveRef.current) {
               onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
             }
 
@@ -1828,15 +1988,25 @@ export const MapComponent: React.FC<MapProps> = ({
         } else if (feat.type === 'LineString' && Array.isArray(feat.coordinates)) {
           const leafletCoords = toLeafletCoords(feat.coordinates);
 
-          leafletCoords.forEach((c: any) => {
-            if (Array.isArray(c) && typeof c[0] === 'number' && !isNaN(c[0])) {
-              allBounds.push(L.latLng(c[0], c[1]));
-            }
-          });
+          let validPointCount = 0;
+          const validCoords: any[] = [];
+          if (Array.isArray(leafletCoords)) {
+            leafletCoords.forEach((c: any) => {
+              if (Array.isArray(c) && typeof c[0] === 'number' && !isNaN(c[0]) && typeof c[1] === 'number' && !isNaN(c[1])) {
+                allBounds.push(L.latLng(c[0], c[1]));
+                validCoords.push(c);
+                validPointCount++;
+              }
+            });
+          }
+
+          if (validPointCount < 2) {
+            return;
+          }
 
           const { name: titleName, hiddenKey } = getFeatureName(feat);
 
-          const polyline = L.polyline(leafletCoords, {
+          const polyline = L.polyline(validCoords, {
             color: isSelected ? '#2563eb' : featureColor,
             weight: isSelected ? 3 : 2,
           });
@@ -1927,9 +2097,9 @@ export const MapComponent: React.FC<MapProps> = ({
               onFeatureSelectRef.current(feat);
             }
 
-            const bounds = polyline.getBounds();
-            const center = bounds.getCenter();
-            if (onCursorMoveRef.current) {
+            const lineBounds = polyline.getBounds();
+            const center = lineBounds && lineBounds.isValid() ? lineBounds.getCenter() : undefined;
+            if (center && onCursorMoveRef.current) {
               onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
             }
             if (interactionModeRef.current === 'hand') {

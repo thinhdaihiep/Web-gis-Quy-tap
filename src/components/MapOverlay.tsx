@@ -107,7 +107,7 @@ export const MapOverlay: React.FC<MapOverlayProps> = ({
               >
                 {rasterLayers.map((layer) => (
                   <option key={layer.id} value={layer.id}>
-                    {layer.name} ({layer.files?.length || (layer.url ? 1 : 0)} ảnh)
+                    {layer.name}
                   </option>
                 ))}
               </select>
