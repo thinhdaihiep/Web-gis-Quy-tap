@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../firebase';
-import { RasterLayer, RasterFileItem, LatLngBoundsBox, normalizeBoundsBox } from '../types';
+import { RasterLayer, RasterFileItem, LatLngBoundsBox, normalizeBoundsBox, RasterLoadingStatus } from '../types';
 import {
   Layers,
   Loader2,
@@ -32,11 +32,13 @@ import { removeCachedRasters, clearAllRasterCache } from '../utils/rasterCache';
 interface RasterManagementTabProps {
   onLayersChange?: (layers: RasterLayer[]) => void;
   onSelectAndFlyToRaster?: (layerId: string, bounds?: LatLngBoundsBox | null) => void;
+  rasterStatus?: RasterLoadingStatus;
 }
 
 export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   onLayersChange,
   onSelectAndFlyToRaster,
+  rasterStatus,
 }) => {
   const [layers, setLayers] = useState<RasterLayer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -897,87 +899,112 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                       </div>
                     ) : (
                       <div className="divide-y divide-slate-100 max-h-[300px] overflow-y-auto pr-1">
-                        {files.map((file) => (
-                          <div
-                            key={file.id}
-                            className="py-2 px-1 flex items-center justify-between gap-2 hover:bg-slate-50/80 rounded transition"
-                          >
-                            <div className="flex items-center gap-2 min-w-0 flex-1">
-                              <File className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                              <div className="truncate min-w-0">
-                                <div className="flex items-center gap-2 truncate">
-                                  <p
-                                    className="text-xs font-medium text-slate-700 truncate"
-                                    title={file.fileName}
-                                  >
-                                    {file.fileName}
-                                  </p>
-                                  {file.url && (
-                                    <a
-                                      href={file.url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="text-slate-400 hover:text-blue-600 transition shrink-0"
-                                      title="Tải / Mở link gốc"
+                        {files.map((file) => {
+                          const isLoadedInView = (() => {
+                            if (!rasterStatus?.fileStatuses) return false;
+                            const shortName = file.fileName?.replace(/\.(tif|tiff|geotiff|cog|png|jpg|jpeg)$/i, '').trim();
+                            return rasterStatus.fileStatuses.some(
+                              (fs) => fs.state === 'loaded' && (fs.name === shortName || (shortName && fs.name.includes(shortName)) || (file.fileName && file.fileName.includes(fs.name)))
+                            );
+                          })();
+
+                          return (
+                            <div
+                              key={file.id}
+                              className={`py-2 px-1.5 flex items-center justify-between gap-2 rounded transition ${
+                                isLoadedInView ? 'bg-amber-50/70 border border-amber-200/80 shadow-2xs' : 'hover:bg-slate-50/80'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <File className={`w-3.5 h-3.5 shrink-0 ${isLoadedInView ? 'text-amber-500' : 'text-blue-600'}`} />
+                                <div className="truncate min-w-0">
+                                  <div className="flex items-center gap-2 truncate">
+                                    <p
+                                      className={`text-xs truncate ${isLoadedInView ? 'font-bold text-amber-700' : 'font-medium text-slate-700'}`}
+                                      title={file.fileName}
                                     >
-                                      <ExternalLink className="w-3 h-3" />
-                                    </a>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                                  {file.format && (
-                                    <span className="text-blue-700 bg-blue-50 px-1 rounded text-[9px] font-semibold">
-                                      {file.format}
-                                    </span>
-                                  )}
-                                  {file.fileSize && (
-                                    <span className="flex items-center gap-0.5">
-                                      <HardDrive className="w-2.5 h-2.5" />
-                                      {formatFileSize(file.fileSize)}
-                                    </span>
-                                  )}
-                                  {(() => {
-                                    const box = normalizeBoundsBox(file.bounds);
-                                    return box ? (
+                                      {file.fileName}
+                                    </p>
+                                    {isLoadedInView && (
                                       <span
-                                        className="text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded text-[9px] font-mono border border-emerald-200"
-                                        title={`Phạm vi EPSG:4326: [${box.south.toFixed(3)}, ${box.west.toFixed(3)}] đến [${box.north.toFixed(3)}, ${box.east.toFixed(3)}]`}
+                                        className="text-amber-700 bg-amber-100/80 px-1.5 py-0.2 rounded text-[9px] font-bold border border-amber-300 flex items-center gap-1 shrink-0 shadow-2xs"
+                                        title="Mảnh raster này đã tải xong và đang hiển thị trong khung hình bản đồ"
                                       >
-                                        BBox: [{box.south.toFixed(2)}, {box.west.toFixed(2)}]
+                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                        Đang xem (Khung hình)
                                       </span>
-                                    ) : (
-                                      <span className="text-amber-600 bg-amber-50 px-1 rounded text-[9px]">
-                                        Chưa có BBox
+                                    )}
+                                    {file.url && (
+                                      <a
+                                        href={file.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-slate-400 hover:text-blue-600 transition shrink-0"
+                                        title="Tải / Mở link gốc"
+                                      >
+                                        <ExternalLink className="w-3 h-3" />
+                                      </a>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                                    {file.format && (
+                                      <span className="text-blue-700 bg-blue-50 px-1 rounded text-[9px] font-semibold">
+                                        {file.format}
                                       </span>
-                                    );
-                                  })()}
+                                    )}
+                                    {file.fileSize && (
+                                      <span className="flex items-center gap-0.5">
+                                        <HardDrive className="w-2.5 h-2.5" />
+                                        {formatFileSize(file.fileSize)}
+                                      </span>
+                                    )}
+                                    {(() => {
+                                      const box = normalizeBoundsBox(file.bounds);
+                                      return box ? (
+                                        <span
+                                          className="text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded text-[9px] font-mono border border-emerald-200"
+                                          title={`Phạm vi EPSG:4326: [${box.south.toFixed(3)}, ${box.west.toFixed(3)}] đến [${box.north.toFixed(3)}, ${box.east.toFixed(3)}]`}
+                                        >
+                                          BBox: [{box.south.toFixed(2)}, {box.west.toFixed(2)}]
+                                        </span>
+                                      ) : (
+                                        <span className="text-amber-600 bg-amber-50 px-1 rounded text-[9px]">
+                                          Chưa có BBox
+                                        </span>
+                                      );
+                                    })()}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
 
-                            <div className="flex items-center gap-1 shrink-0">
-                              {/* Xem / Phóng tới file này */}
-                              {onSelectAndFlyToRaster && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                {/* Xem / Phóng tới file này */}
+                                {onSelectAndFlyToRaster && (
+                                  <button
+                                    onClick={() => onSelectAndFlyToRaster(layer.id, file.bounds || layer.bounds)}
+                                    className={`p-1.5 rounded transition cursor-pointer ${
+                                      isLoadedInView
+                                        ? 'text-amber-600 hover:bg-amber-100/70'
+                                        : 'text-blue-600 hover:bg-blue-50'
+                                    }`}
+                                    title="Phóng bản đồ tới phạm vi file này"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+
+                                {/* Delete File Button */}
                                 <button
-                                  onClick={() => onSelectAndFlyToRaster(layer.id, file.bounds || layer.bounds)}
-                                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition cursor-pointer"
-                                  title="Phóng bản đồ tới phạm vi file này"
+                                  onClick={() => handleDeleteFile(layer, file)}
+                                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
+                                  title="Xóa file này"
                                 >
-                                  <Eye className="w-3.5 h-3.5" />
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
-                              )}
-
-                              {/* Delete File Button */}
-                              <button
-                                onClick={() => handleDeleteFile(layer, file)}
-                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
-                                title="Xóa file này"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>

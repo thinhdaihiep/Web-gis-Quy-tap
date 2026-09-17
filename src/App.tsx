@@ -351,8 +351,9 @@ export default function App() {
     const bounds = L.latLngBounds(points);
     const center = bounds.getCenter();
 
-    // Cập nhật tọa độ con trỏ tức thì
+    // Cập nhật tọa độ con trỏ và markpoint tức thì tại tâm đối tượng
     setCursorLocation({ lat: center.lat, lng: center.lng });
+    setTargetMarkerLocation({ lat: center.lat, lng: center.lng, timestamp: Date.now() });
 
     // Jump nhanh bản đồ để đối tượng vào vị trí trung tâm với mức zoom 13
     mapInstance.flyTo(center, 13, {
@@ -597,9 +598,13 @@ export default function App() {
     lng: number;
     timestamp?: number;
   } | null>(null);
+  const [selectedCRS, setSelectedCRS] = useState<'4326' | '3405' | '3406'>('4326');
   const locationLayerGroupRef = useRef<L.LayerGroup | null>(null);
 
-  const handleGoToCoordinate = (lat: number, lng: number) => {
+  const handleGoToCoordinate = (lat: number, lng: number, crsMode?: '4326' | '3405' | '3406') => {
+    if (crsMode) {
+      setSelectedCRS(crsMode);
+    }
     setTargetMarkerLocation({ lat, lng, timestamp: Date.now() });
     setCursorLocation({ lat, lng });
   };
@@ -1534,6 +1539,7 @@ export default function App() {
             activeDrawMode={activeDrawMode}
             pendingPasteFeature={pendingPasteFeature}
             targetMarkerLocation={targetMarkerLocation}
+            selectedCRS={selectedCRS}
             currentRole={effectiveRole}
             onMapReady={(map) => setMapInstance(map)}
             onCursorMove={setCursorLocation}
@@ -1581,30 +1587,39 @@ export default function App() {
                 title={displayTitle}
               >
                 {rasterToastData.state === 'loading' ? (
-                  <Loader2 className="w-3 h-3 animate-spin text-blue-600 shrink-0" />
+                  <Loader2 className="w-3 h-3 animate-spin text-amber-500 shrink-0" />
                 ) : (
-                  <Layers className="w-3 h-3 text-emerald-600 shrink-0" />
+                  <Layers className="w-3 h-3 text-amber-500 shrink-0" />
                 )}
                 
                 <span className="font-medium truncate whitespace-nowrap overflow-hidden">
                   {hasFileStatuses ? (
                     rasterToastData.fileStatuses!.map((fs, idx) => (
-                      <span key={idx}>
-                        <span className={fs.state === 'loaded' ? 'text-emerald-700' : 'text-red-700'}>
+                      <span key={idx} className="inline-flex items-center">
+                        <span
+                          className={
+                            fs.state === 'loaded'
+                              ? 'text-amber-600 font-bold inline-flex items-center gap-1'
+                              : 'text-slate-400 font-medium inline-flex items-center gap-1'
+                          }
+                        >
+                          {fs.state === 'loaded' && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 shadow-xs" />
+                          )}
                           {fs.name}
                         </span>
-                        {idx < rasterToastData.fileStatuses!.length - 1 ? <span className="text-slate-800">, </span> : ''}
+                        {idx < rasterToastData.fileStatuses!.length - 1 ? <span className="text-slate-400 mx-1">,</span> : ''}
                       </span>
                     ))
                   ) : (
-                    <span className="text-slate-800">
+                    <span className={rasterToastData.state === 'loaded' ? 'text-amber-600 font-bold' : 'text-slate-800'}>
                       {rasterToastData.activeLayerName || 'Raster'}
                     </span>
                   )}
                 </span>
                 
                 {rasterToastData.state === 'loading' && (
-                  <span className="text-blue-600 shrink-0 text-[10px] font-medium">
+                  <span className="text-amber-600 shrink-0 text-[10px] font-semibold">
                     {`(${rasterToastData.progress ?? 0}%)`}
                   </span>
                 )}
@@ -1642,6 +1657,8 @@ export default function App() {
         userLocation={userLocation}
         zoomLevel={zoomLevel}
         mapScale={mapScale}
+        selectedCRS={selectedCRS}
+        onCRSChange={setSelectedCRS}
         onGoToCoordinate={handleGoToCoordinate}
       />
 
@@ -1697,6 +1714,7 @@ export default function App() {
         onAliasesUpdated={handleAliasesUpdated}
         onRasterLayersUpdated={handleRasterLayersUpdated}
         onSelectAndFlyToRaster={handleFlyToRaster}
+        rasterStatus={rasterStatus}
       />
 
       {isUserManagementModalOpen && (

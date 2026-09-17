@@ -107,7 +107,7 @@ export interface RasterLoadingStatus {
   bounds?: LatLngBoundsBox | null;
   error?: string;
   fileNames?: string[];
-  fileStatuses?: { name: string; state: 'loading' | 'loaded' }[];
+  fileStatuses?: { name: string; state: 'loading' | 'loaded'; inViewport?: boolean }[];
 }
 
 /**

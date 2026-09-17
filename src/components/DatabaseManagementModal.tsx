@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import proj4 from 'proj4';
 import { RasterManagementTab } from './RasterManagementTab';
-import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy, RasterLayer, LatLngBoundsBox } from '../types';
+import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy, RasterLayer, LatLngBoundsBox, RasterLoadingStatus } from '../types';
 import {
   extractObjectId,
   getCustomAliasMap,
@@ -90,6 +90,7 @@ export interface DatabaseManagementModalProps {
   onAliasesUpdated?: () => void;
   onRasterLayersUpdated?: (layers: RasterLayer[]) => void;
   onSelectAndFlyToRaster?: (layerId: string, bounds?: LatLngBoundsBox | null) => void;
+  rasterStatus?: RasterLoadingStatus;
 }
 
 export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = ({
@@ -102,6 +103,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   onAliasesUpdated,
   onRasterLayersUpdated,
   onSelectAndFlyToRaster,
+  rasterStatus,
 }) => {
   const [activeTab, setActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster'>(defaultTab);
 
@@ -873,6 +875,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
             <RasterManagementTab
               onLayersChange={onRasterLayersUpdated}
               onSelectAndFlyToRaster={onSelectAndFlyToRaster}
+              rasterStatus={rasterStatus}
             />
           </div>
         )}

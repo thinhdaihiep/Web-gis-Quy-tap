@@ -9,6 +9,9 @@ import { fetchRasterWithCache, getRasterProxyUrl } from './rasterCache';
 import { LatLngBoundsBox, normalizeBoundsBox } from '../types';
 // @ts-ignore
 import GeoTiffWorker from '../workers/geotiff.worker?worker';
+import { createLeafletTiledRasterLayer, TiledRasterLayer } from './tiledRasterLayer';
+
+export { createLeafletTiledRasterLayer, TiledRasterLayer };
 
 // Ensure proj4 is globally attached to window for georaster-layer-for-leaflet
 if (typeof window !== 'undefined') {
@@ -291,6 +294,7 @@ export async function createLeafletGeoRasterLayer(
     maxZoom?: number;
     maxNativeZoom?: number;
     pane?: string;
+    viewport?: LatLngBoundsBox | null;
     onProgress?: (percent: number) => void;
   } = {}
 ): Promise<{ layer: L.Layer; metadata: ParsedGeoRasterInfo }> {
@@ -302,7 +306,37 @@ export async function createLeafletGeoRasterLayer(
     console.warn('fetchRasterWithCache failed, trying proxy URL:', fetchErr);
   }
 
-  // 2. PRIMARY STRATEGY: Direct Decoded ImageOverlay (Fastest, crispest, 100% stable)
+  // 2. PRIMARY STRATEGY: High-Performance 256x256 Client-Side Tiled Layer with Web Worker
+  // Cuts raster into 256x256 tiles, applies (255,255,255) transparency, prioritizes viewport tiles
+  if (arrayBuffer && arrayBuffer.byteLength > 0) {
+    try {
+      const tiledResult = await createLeafletTiledRasterLayer(arrayBuffer, {
+        opacity: options.opacity ?? 1.0,
+        pane: options.pane || 'rasterPane',
+        tileSize: 256,
+        viewport: options.viewport || null,
+        onProgress: (p) => {
+          if (options.onProgress) {
+            options.onProgress(p.percent);
+          }
+        },
+      });
+
+      return {
+        layer: tiledResult.layer,
+        metadata: {
+          bounds: tiledResult.metadata.bounds,
+          projection: 4326,
+          width: tiledResult.metadata.width,
+          height: tiledResult.metadata.height,
+        },
+      };
+    } catch (tileErr) {
+      console.warn('createLeafletTiledRasterLayer failed, falling back to single ImageOverlay:', tileErr);
+    }
+  }
+
+  // 3. FALLBACK STRATEGY A: Direct Decoded Single ImageOverlay
   if (arrayBuffer && arrayBuffer.byteLength > 0) {
     try {
       const result = await renderGeoTiffToImageOverlay(arrayBuffer, {
@@ -315,7 +349,7 @@ export async function createLeafletGeoRasterLayer(
     }
   }
 
-  // 3. SECONDARY STRATEGY: GeoRasterLayer via georaster parser
+  // 4. FALLBACK STRATEGY B: GeoRasterLayer via georaster parser
   let georaster: any = null;
   if (arrayBuffer) {
     try {

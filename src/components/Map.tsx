@@ -26,6 +26,7 @@ import {
   deduplicateFeaturesList,
 } from '../fieldAlias';
 import { formatDateForDisplay } from '../utils/dateFormatter';
+import { convertWGS84ToTargetCRS } from '../utils/coordinateParser';
 import {
   calculateLineDistance,
   calculatePolygonArea,
@@ -51,6 +52,7 @@ interface MapProps {
   activeDrawMode?: DrawToolMode;
   pendingPasteFeature?: GeoJsonFeatureItem | null;
   targetMarkerLocation?: { lat: number; lng: number; timestamp?: number } | null;
+  selectedCRS?: '4326' | '3405' | '3406';
   currentRole: 'admin' | 'editor' | 'guest';
   onMapReady?: (map: L.Map) => void;
   onCursorMove?: (pos: { lat: number; lng: number } | null) => void;
@@ -369,6 +371,7 @@ export const MapComponent: React.FC<MapProps> = ({
   activeDrawMode = null,
   pendingPasteFeature = null,
   targetMarkerLocation = null,
+  selectedCRS = '4326',
   currentRole,
   onMapReady,
   onCursorMove,
@@ -387,8 +390,10 @@ export const MapComponent: React.FC<MapProps> = ({
   const layerSubGroupsRef = useRef<Map<string, L.LayerGroup>>(new Map());
   const tempDrawLayerRef = useRef<L.LayerGroup | null>(null);
   const clickMarkerRef = useRef<L.CircleMarker | null>(null);
-  const rasterLayersCacheRef = useRef<Map<string, { layer: L.GridLayer; metadata: any }>>(new Map());
+  const rasterLayersCacheRef = useRef<Map<string, { layer: any; metadata: any }>>(new Map());
   const hasActivatedRasterRef = useRef<boolean>(false);
+  const selectedCRSRef = useRef<'4326' | '3405' | '3406'>(selectedCRS);
+  selectedCRSRef.current = selectedCRS;
 
   const onRasterStatusChangeRef = useRef(onRasterStatusChange);
   onRasterStatusChangeRef.current = onRasterStatusChange;
@@ -400,6 +405,28 @@ export const MapComponent: React.FC<MapProps> = ({
     lastRasterStatusJsonRef.current = json;
     if (onRasterStatusChangeRef.current) {
       onRasterStatusChangeRef.current(status);
+    }
+  }, []);
+
+  // Helper đặt/di chuyển markpoint tới vị trí chỉ định
+  const setOrUpdateMarkPoint = useCallback((latlng: L.LatLngExpression) => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const targetLatLng = latlng instanceof L.LatLng ? latlng : L.latLng((latlng as any).lat ?? (latlng as any)[0], (latlng as any).lng ?? (latlng as any)[1]);
+    if (!clickMarkerRef.current) {
+      clickMarkerRef.current = L.circleMarker(targetLatLng, {
+        radius: 6,
+        fillColor: '#ef4444',
+        fillOpacity: 1,
+        color: '#ffffff',
+        weight: 2,
+        interactive: false,
+      }).addTo(map);
+    } else {
+      if (!map.hasLayer(clickMarkerRef.current)) {
+        clickMarkerRef.current.addTo(map);
+      }
+      clickMarkerRef.current.setLatLng(targetLatLng);
     }
   }, []);
 
@@ -467,6 +494,11 @@ export const MapComponent: React.FC<MapProps> = ({
     prevSelectedFeatureIdRef.current = currId;
     prevInteractionModeRef.current = mode;
   }, [selectedFeatureId, interactionMode]);
+
+  // Dynamically update active markpoint popup when selectedCRS changes
+  useEffect(() => {
+    selectedCRSRef.current = selectedCRS;
+  }, [selectedCRS]);
 
   // Measure Tool State & Refs
   const measurePointsRef = useRef<L.LatLng[]>([]);
@@ -837,21 +869,35 @@ export const MapComponent: React.FC<MapProps> = ({
           onFeatureSelectRef.current(null);
         }
 
-        if (!clickMarkerRef.current) {
-          clickMarkerRef.current = L.circleMarker(e.latlng, {
-            radius: 6,
-            fillColor: '#ef4444',
-            fillOpacity: 1,
-            color: '#ffffff',
-            weight: 2,
-            interactive: false,
-          }).addTo(map);
-        } else {
-          if (!map.hasLayer(clickMarkerRef.current)) {
-            clickMarkerRef.current.addTo(map);
+        setOrUpdateMarkPoint(e.latlng);
+      });
+
+      // Khi hiện popup một đối tượng, đặt markpoint chính là tâm của đối tượng
+      map.on('popupopen', (e: any) => {
+        try {
+          const popup = e?.popup;
+          const source = popup?._source;
+          if (source) {
+            let centerLatLng: L.LatLng | undefined;
+            if (typeof source.getLatLng === 'function') {
+              centerLatLng = source.getLatLng();
+            } else if (typeof source.getBounds === 'function') {
+              const bounds = source.getBounds();
+              if (bounds && typeof bounds.isValid === 'function' && bounds.isValid()) {
+                centerLatLng = bounds.getCenter();
+              }
+            }
+            if (!centerLatLng && popup?.getLatLng) {
+              centerLatLng = popup.getLatLng();
+            }
+            if (centerLatLng) {
+              setOrUpdateMarkPoint(centerLatLng);
+              if (onCursorMoveRef.current) {
+                onCursorMoveRef.current({ lat: centerLatLng.lat, lng: centerLatLng.lng });
+              }
+            }
           }
-          clickMarkerRef.current.setLatLng(e.latlng);
-        }
+        } catch (_) {}
       });
 
       if (onMapReady) {
@@ -1019,12 +1065,23 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       let visibleLoadedCount = 0;
       let combinedBoundsBox: any = null;
 
+      const mapBounds = map.getBounds();
+      const currentViewportBox = {
+        south: mapBounds.getSouth(),
+        west: mapBounds.getWest(),
+        north: mapBounds.getNorth(),
+        east: mapBounds.getEast(),
+      };
+
       // Attach already-cached layers that are in the Active Set
       activeFiles.forEach((file) => {
         if (cache.has(file.url)) {
           const cachedItem = cache.get(file.url)!;
           if (typeof (cachedItem.layer as any).setOpacity === 'function') {
             (cachedItem.layer as any).setOpacity(file.opacity ?? 1.0);
+          }
+          if (typeof (cachedItem.layer as any).updateViewport === 'function') {
+            (cachedItem.layer as any).updateViewport(currentViewportBox);
           }
           if (!rasterGroup.hasLayer(cachedItem.layer)) {
             rasterGroup.addLayer(cachedItem.layer);
@@ -1045,42 +1102,44 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         }
       });
 
-      const mapBounds = map.getBounds();
-      const currentViewportBox = {
-        south: mapBounds.getSouth(),
-        west: mapBounds.getWest(),
-        north: mapBounds.getNorth(),
-        east: mapBounds.getEast(),
-      };
-
       const getVisibleFileStatuses = () => {
-        const inViewport = activeFiles.filter((f) => {
-          const b = normalizeBoundsBox(f.bounds);
-          if (!b) return true;
-          return !(
-            b.south > currentViewportBox.north ||
-            b.north < currentViewportBox.south ||
-            b.west > currentViewportBox.east ||
-            b.east < currentViewportBox.west
-          );
-        });
-        const targetList = inViewport.length > 0 ? inViewport : activeFiles;
-        
-        const uniqueNames = new Map<string, 'loading' | 'loaded'>();
-        targetList.forEach(f => {
+        const inViewportUrls = new Set(
+          activeFiles
+            .filter((f) => {
+              const b = normalizeBoundsBox(f.bounds);
+              if (!b) return true;
+              return !(
+                b.south > currentViewportBox.north ||
+                b.north < currentViewportBox.south ||
+                b.west > currentViewportBox.east ||
+                b.east < currentViewportBox.west
+              );
+            })
+            .map((f) => f.url)
+        );
+
+        const targetList = inViewportUrls.size > 0
+          ? activeFiles.filter((f) => inViewportUrls.has(f.url))
+          : activeFiles;
+
+        const uniqueNames = new Map<string, { state: 'loading' | 'loaded'; inViewport: boolean }>();
+        targetList.forEach((f) => {
           const name = getShortRasterName(f);
           if (name) {
-             const isLoaded = cache.has(f.url);
-             if (!uniqueNames.has(name)) {
-                uniqueNames.set(name, isLoaded ? 'loaded' : 'loading');
-             } else if (!isLoaded) {
-                uniqueNames.set(name, 'loading');
-             }
+            const isLoaded = cache.has(f.url);
+            const inView = inViewportUrls.has(f.url);
+            const existing = uniqueNames.get(name);
+            if (!existing) {
+              uniqueNames.set(name, { state: isLoaded ? 'loaded' : 'loading', inViewport: inView });
+            } else {
+              if (!isLoaded) existing.state = 'loading';
+              if (inView) existing.inViewport = true;
+            }
           }
         });
-        
+
         return Array.from(uniqueNames.entries())
-          .map(([name, state]) => ({ name, state }))
+          .map(([name, data]) => ({ name, state: data.state, inViewport: data.inViewport }))
           .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
       };
 
@@ -1127,6 +1186,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             opacity: file.opacity ?? 1.0,
             resolution: 256,
             pane: 'rasterPane',
+            viewport: currentViewportBox,
             onProgress: (percent) => {
               if (isActive && percent < 100 && loadedCount < activeFiles.length) {
                 const currentProgress = Math.min(99, Math.round(((loadedCount + percent / 100) / activeFiles.length) * 100));
@@ -1135,7 +1195,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 reportRasterStatus({
                   state: 'loading',
                   progress: currentProgress,
-                  message: `Đang nạp ${currentProgress}%`,
+                  message: `Đang nạp mảnh ${currentProgress}%`,
                   loadedCount,
                   totalCount: activeFiles.length,
                   activeLayerName,
@@ -1249,8 +1309,19 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     const handleClearRasterCacheEvent = (e: any) => {
       const urls: string[] = e?.detail?.urls;
       if (urls && Array.isArray(urls)) {
-        urls.forEach((u) => cache.delete(u));
+        urls.forEach((u) => {
+          const item = cache.get(u);
+          if (item && typeof (item.layer as any).destroy === 'function') {
+            (item.layer as any).destroy();
+          }
+          cache.delete(u);
+        });
       } else {
+        cache.forEach((item) => {
+          if (item && typeof (item.layer as any).destroy === 'function') {
+            (item.layer as any).destroy();
+          }
+        });
         cache.clear();
       }
       rasterGroup.clearLayers();
@@ -1363,7 +1434,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     // Jump nhanh bản đồ tới vị trí với zoom 13
     map.flyTo(latlng, 13, { duration: 0.35 });
 
-    // Hiển thị marker vị trí tương tự như khi kích chuột vào bản đồ trống
+    // Hiển thị marker vị trí tương tự như khi kích chuột vào bản đồ trống (không hiện popup)
     if (!clickMarkerRef.current) {
       clickMarkerRef.current = L.circleMarker(latlng, {
         radius: 6,
@@ -1562,9 +1633,12 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           ? layerBounds.getCenter()
           : undefined;
 
-        const latlng = e.latlng || layerCenter;
+        const latlng = layerCenter || e.latlng;
         if (interactionModeRef.current === 'hand' && typeof (layer as any).openPopup === 'function') {
           (layer as any).openPopup(latlng);
+          if (layerCenter) {
+            setOrUpdateMarkPoint(layerCenter);
+          }
         } else if (typeof (layer as any).closePopup === 'function') {
           (layer as any).closePopup();
           setTimeout(() => (layer as any).closePopup(), 0);
@@ -1800,7 +1874,8 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               onCursorMoveRef.current({ lat: markerLatLng.lat, lng: markerLatLng.lng });
             }
             if (interactionModeRef.current === 'hand') {
-              pointMarker.openPopup(e.latlng || markerLatLng);
+              pointMarker.openPopup(markerLatLng);
+              setOrUpdateMarkPoint(markerLatLng);
             } else {
               pointMarker.closePopup();
               setTimeout(() => pointMarker.closePopup(), 0);
@@ -1965,7 +2040,11 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               setTimeout(() => polygon.closePopup(), 0);
               handleMeasureFeaturePolygon(feat);
             } else if (interactionModeRef.current === 'hand') {
-              polygon.openPopup(e.latlng || center);
+              const targetPopupLatLng = center || e.latlng;
+              polygon.openPopup(targetPopupLatLng);
+              if (targetPopupLatLng) {
+                setOrUpdateMarkPoint(targetPopupLatLng);
+              }
             } else {
               polygon.closePopup();
               setTimeout(() => polygon.closePopup(), 0);
@@ -2103,7 +2182,11 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
             }
             if (interactionModeRef.current === 'hand') {
-              polyline.openPopup(e.latlng || center);
+              const targetPopupLatLng = center || e.latlng;
+              polyline.openPopup(targetPopupLatLng);
+              if (targetPopupLatLng) {
+                setOrUpdateMarkPoint(targetPopupLatLng);
+              }
             } else {
               polyline.closePopup();
               setTimeout(() => polyline.closePopup(), 0);
