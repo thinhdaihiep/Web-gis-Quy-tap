@@ -1,3 +1,5 @@
+import { addNotification } from '../notificationService';
+
 /**
  * Utility for parsing GitHub Release URLs and fetching asset metadata
  */
@@ -70,13 +72,16 @@ export async function fetchGitHubReleaseAssets(url: string): Promise<GitHubRelea
   });
 
   if (!response.ok) {
+    let errorMsg = '';
     if (response.status === 404) {
-      throw new Error(`Không tìm thấy Release "${tag || 'mới nhất'}" trong repository ${owner}/${repo}. Hãy kiểm tra lại tên tag hoặc trạng thái Public của repository.`);
+      errorMsg = `Không tìm thấy Release "${tag || 'mới nhất'}" trong repository ${owner}/${repo}. Hãy kiểm tra lại tên tag hoặc trạng thái Public của repository.`;
+    } else if (response.status === 403) {
+      errorMsg = 'Đã vượt quá hạn ngạch gọi GitHub API tạm thời hoặc repository ở chế độ Private. Vui lòng thử lại sau ít phút.';
+    } else {
+      errorMsg = `Lỗi kết nối GitHub API (${response.status}): ${response.statusText}`;
     }
-    if (response.status === 403) {
-      throw new Error('Đã vượt quá hạn ngạch gọi GitHub API tạm thời hoặc repository ở chế độ Private. Vui lòng thử lại sau ít phút.');
-    }
-    throw new Error(`Lỗi kết nối GitHub API (${response.status}): ${response.statusText}`);
+    await addNotification(errorMsg, 'error');
+    throw new Error(errorMsg);
   }
 
   const data = await response.json();

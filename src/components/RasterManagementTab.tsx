@@ -28,6 +28,7 @@ import {
 import { parseGeoTiffMetadata } from '../utils/geotiffLoader';
 import { fetchGitHubReleaseAssets, parseGitHubUrl } from '../utils/githubRelease';
 import { removeCachedRasters, clearAllRasterCache } from '../utils/rasterCache';
+import { addNotification } from '../notificationService';
 
 interface RasterManagementTabProps {
   onLayersChange?: (layers: RasterLayer[]) => void;
@@ -73,6 +74,12 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   useEffect(() => {
     fetchLayers();
   }, []);
+
+  useEffect(() => {
+    if (rasterStatus?.state === 'error' && rasterStatus?.error && rasterStatus.error !== errorMessage) {
+      setErrorMessage(rasterStatus.error);
+    }
+  }, [rasterStatus?.state, rasterStatus?.error, errorMessage]);
 
   const fetchLayers = async () => {
     setIsLoading(true);
@@ -123,7 +130,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       }
     } catch (error: any) {
       console.error('Error fetching raster layers:', error);
-      setErrorMessage('Không thể tải danh sách lớp bản đồ nền.');
+      const msg = 'Không thể tải danh sách lớp bản đồ nền.';
+      setErrorMessage(msg);
+      await addNotification(msg, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -176,7 +185,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
           }));
         } catch (ghErr: any) {
           console.warn('GitHub Scan Error:', ghErr);
-          setErrorMessage(`Lỗi quét GitHub: ${ghErr.message}`);
+          const msg = `Lỗi quét GitHub: ${ghErr.message}`;
+          setErrorMessage(msg);
+          await addNotification(msg, 'error');
           setIsCreatingLayer(false);
           setIsScanningGithub(false);
           return;
@@ -216,7 +227,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       }
     } catch (error: any) {
       console.error('Error creating layer:', error);
-      setErrorMessage(`Lỗi tạo lớp: ${error.message}`);
+      const msg = `Lỗi tạo lớp: ${error.message}`;
+      setErrorMessage(msg);
+      await addNotification(msg, 'error');
     } finally {
       setIsCreatingLayer(false);
       setIsScanningGithub(false);
@@ -283,7 +296,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       }
 
       if (targetFiles.length === 0) {
-        setErrorMessage('Không tìm thấy file raster nào trong lớp này để cập nhật chỉ mục.');
+        const msg = 'Không tìm thấy file raster nào trong lớp này để cập nhật chỉ mục.';
+        setErrorMessage(msg);
+        await addNotification(msg, 'warning');
         setIndexingLayerId(null);
         setIndexingProgress(null);
         return;
@@ -320,7 +335,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
           }
         } catch (itemErr: any) {
           console.warn(`Lỗi đọc header file ${item.fileName}:`, itemErr);
-          errorsList.push(`${item.fileName}: ${itemErr?.message || 'Lỗi đọc Header'}`);
+          const msg = `${item.fileName}: ${itemErr?.message || 'Lỗi đọc Header'}`;
+          errorsList.push(msg);
+          await addNotification(`Lỗi cập nhật chỉ mục: ${msg}`, 'error');
           failedCount++;
         }
       }
@@ -350,7 +367,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       }
     } catch (err: any) {
       console.error('Error indexing bounds:', err);
-      setErrorMessage(`Lỗi cập nhật chỉ mục: ${err.message}`);
+      const msg = `Lỗi cập nhật chỉ mục: ${err.message}`;
+      setErrorMessage(msg);
+      await addNotification(msg, 'error');
     } finally {
       setIndexingLayerId(null);
       setIndexingProgress(null);
@@ -394,7 +413,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       }
     } catch (error: any) {
       console.error('Error renaming layer:', error);
-      setErrorMessage(`Lỗi sửa lớp: ${error.message}`);
+      const msg = `Lỗi sửa lớp: ${error.message}`;
+      setErrorMessage(msg);
+      await addNotification(msg, 'error');
     }
   };
 
@@ -444,7 +465,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       }
     } catch (error: any) {
       console.error('Error deleting layer:', error);
-      setErrorMessage(`Lỗi khi xóa lớp: ${error.message}`);
+      const msg = `Lỗi khi xóa lớp: ${error.message}`;
+      setErrorMessage(msg);
+      await addNotification(msg, 'error');
     }
   };
 
@@ -503,7 +526,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         onLayersChange(updatedLayers);
       }
     } catch (err: any) {
-      setErrorMessage(`Lỗi thêm URL: ${err.message}`);
+      const msg = `Lỗi thêm URL: ${err.message}`;
+      setErrorMessage(msg);
+      await addNotification(msg, 'error');
     }
   };
 
@@ -551,7 +576,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       }
     } catch (error: any) {
       console.error('Error deleting file:', error);
-      setErrorMessage(`Lỗi xóa file: ${error.message}`);
+      const msg = `Lỗi xóa file: ${error.message}`;
+      setErrorMessage(msg);
+      await addNotification(msg, 'error');
     }
   };
 
@@ -900,38 +927,47 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                     ) : (
                       <div className="divide-y divide-slate-100 max-h-[300px] overflow-y-auto pr-1">
                         {files.map((file) => {
-                          const isLoadedInView = (() => {
-                            if (!rasterStatus?.fileStatuses) return false;
-                            const shortName = file.fileName?.replace(/\.(tif|tiff|geotiff|cog|png|jpg|jpeg)$/i, '').trim();
-                            return rasterStatus.fileStatuses.some(
-                              (fs) => fs.state === 'loaded' && (fs.name === shortName || (shortName && fs.name.includes(shortName)) || (file.fileName && file.fileName.includes(fs.name)))
-                            );
-                          })();
+                          const isLoaded = rasterStatus?.fileStatuses?.some(
+                            (fs) => fs.name === file.fileName && fs.state === 'loaded'
+                          );
+                          const isInViewport = rasterStatus?.fileStatuses?.some(
+                            (fs) => fs.name === file.fileName && fs.inViewport
+                          );
 
                           return (
                             <div
                               key={file.id}
                               className={`py-2 px-1.5 flex items-center justify-between gap-2 rounded transition ${
-                                isLoadedInView ? 'bg-amber-50/70 border border-amber-200/80 shadow-2xs' : 'hover:bg-slate-50/80'
+                                isLoaded ? 'bg-emerald-50/50 border border-emerald-100' : 
+                                isInViewport ? 'bg-amber-50/50 border border-amber-100' : 'hover:bg-slate-50/80'
                               }`}
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <File className={`w-3.5 h-3.5 shrink-0 ${isLoadedInView ? 'text-amber-500' : 'text-blue-600'}`} />
+                                <File className={`w-3.5 h-3.5 shrink-0 ${isLoaded ? 'text-emerald-500' : isInViewport ? 'text-amber-500' : 'text-blue-600'}`} />
                                 <div className="truncate min-w-0">
                                   <div className="flex items-center gap-2 truncate">
                                     <p
-                                      className={`text-xs truncate ${isLoadedInView ? 'font-bold text-amber-700' : 'font-medium text-slate-700'}`}
+                                      className={`text-xs truncate ${isLoaded ? 'font-bold text-emerald-700' : isInViewport ? 'font-bold text-amber-700' : 'font-medium text-slate-700'}`}
                                       title={file.fileName}
                                     >
                                       {file.fileName}
                                     </p>
-                                    {isLoadedInView && (
+                                    {isInViewport && !isLoaded && (
                                       <span
                                         className="text-amber-700 bg-amber-100/80 px-1.5 py-0.2 rounded text-[9px] font-bold border border-amber-300 flex items-center gap-1 shrink-0 shadow-2xs"
-                                        title="Mảnh raster này đã tải xong và đang hiển thị trong khung hình bản đồ"
+                                        title="Raster này nằm trong khung hình và đang chờ tải"
                                       >
                                         <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                        Đang xem (Khung hình)
+                                        Trong khung hình
+                                      </span>
+                                    )}
+                                    {isLoaded && (
+                                      <span
+                                        className="text-emerald-700 bg-emerald-100/80 px-1.5 py-0.2 rounded text-[9px] font-bold border border-emerald-300 flex items-center gap-1 shrink-0 shadow-2xs"
+                                        title="Raster này đã tải xong"
+                                      >
+                                        <CheckCircle className="w-3 h-3" />
+                                        Đã tải
                                       </span>
                                     )}
                                     {file.url && (
@@ -983,7 +1019,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                                   <button
                                     onClick={() => onSelectAndFlyToRaster(layer.id, file.bounds || layer.bounds)}
                                     className={`p-1.5 rounded transition cursor-pointer ${
-                                      isLoadedInView
+                                      isInViewport
                                         ? 'text-amber-600 hover:bg-amber-100/70'
                                         : 'text-blue-600 hover:bg-blue-50'
                                     }`}

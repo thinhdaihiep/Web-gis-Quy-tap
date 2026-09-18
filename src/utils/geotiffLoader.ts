@@ -7,6 +7,7 @@ import L from 'leaflet';
 import proj4, { convertAnyBBoxTo4326 } from './projections';
 import { fetchRasterWithCache, getRasterProxyUrl } from './rasterCache';
 import { LatLngBoundsBox, normalizeBoundsBox } from '../types';
+import { addNotification } from '../notificationService';
 // @ts-ignore
 import GeoTiffWorker from '../workers/geotiff.worker?worker';
 import { createLeafletTiledRasterLayer, TiledRasterLayer } from './tiledRasterLayer';
@@ -333,6 +334,7 @@ export async function createLeafletGeoRasterLayer(
       };
     } catch (tileErr) {
       console.warn('createLeafletTiledRasterLayer failed, falling back to single ImageOverlay:', tileErr);
+      await addNotification(`Lỗi tải tệp Raster (Tiled Layer): ${url}`, 'error');
     }
   }
 
@@ -346,6 +348,7 @@ export async function createLeafletGeoRasterLayer(
       return result;
     } catch (overlayErr) {
       console.warn('renderGeoTiffToImageOverlay failed, falling back to GeoRasterLayer:', overlayErr);
+      await addNotification(`Lỗi tải tệp Raster (Image Overlay): ${url}`, 'error');
     }
   }
 
@@ -365,6 +368,7 @@ export async function createLeafletGeoRasterLayer(
   }
 
   if (!georaster) {
+    await addNotification(`Không thể khởi tạo raster từ ${url}`, 'error');
     throw new Error(`Không thể khởi tạo raster từ ${url}`);
   }
 

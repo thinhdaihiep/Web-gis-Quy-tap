@@ -1,0 +1,23 @@
+{
+  "entities": {
+    "Notification": {
+      "title": "Notification",
+      "description": "Admin notification about system events or errors",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["error", "info", "warning"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "read": { "type": "boolean" }
+      },
+      "required": ["message", "type", "createdAt", "read"]
+    }
+  },
+  "firestore": {
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "System and error notifications for admins"
+    }
+  }
+}

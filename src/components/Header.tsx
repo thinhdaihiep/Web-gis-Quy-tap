@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Database, Search, LogIn, LogOut, Users } from 'lucide-react';
+import { Layers, Database, Search, LogIn, LogOut, Users, Bell } from 'lucide-react';
 import { UserRole, AppUser } from '../types';
 
 interface HeaderProps {
@@ -14,6 +14,7 @@ interface HeaderProps {
   onToggleSearchPane: () => void;
   onOpenDatabaseManagementModal?: () => void;
   onOpenUserManagementModal?: () => void;
+  onOpenNotificationModal?: () => void;
   isMobile?: boolean;
 }
 
@@ -28,6 +29,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSearchPane,
   onOpenDatabaseManagementModal,
   onOpenUserManagementModal,
+  onOpenNotificationModal,
   isMobile = false,
 }) => {
   return (
@@ -92,6 +94,17 @@ export const Header: React.FC<HeaderProps> = ({
               title="Quản lý người dùng"
             >
               <Users className="w-4 h-4 shrink-0" />
+            </button>
+          )}
+
+          {/* Notification button (Admin) */}
+          {currentRole === 'admin' && onOpenNotificationModal && (
+            <button
+              onClick={onOpenNotificationModal}
+              className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
+              title="Thông báo hệ thống"
+            >
+              <Bell className="w-4 h-4 shrink-0" />
             </button>
           )}
         </div>

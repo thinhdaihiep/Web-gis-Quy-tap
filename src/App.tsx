@@ -12,6 +12,7 @@ import { AttributePane } from './components/AttributePane';
 import { Footer } from './components/Footer';
 import { DatabaseManagementModal } from './components/DatabaseManagementModal';
 import { UserManagementModal } from './components/UserManagementModal';
+import { NotificationModal } from './components/NotificationModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
 
@@ -151,12 +152,13 @@ export default function App() {
       }, 5000);
       return () => clearTimeout(timer);
     }
-  }, [rasterStatus, isRasterVisible]);
+  }, [rasterStatus.state, rasterStatus.error, isRasterVisible]);
   const [mapFeatures, setMapFeatures] = useState<GeoJsonFeatureItem[]>(INITIAL_MAP_FEATURES);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
   const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster'>('import');
   const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState<boolean>(false);
+  const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1429,6 +1431,7 @@ export default function App() {
           setIsDatabaseManagementModalOpen(true);
         }}
         onOpenUserManagementModal={() => setIsUserManagementModalOpen(true)}
+        onOpenNotificationModal={() => setIsNotificationModalOpen(true)}
         isMobile={isMobile}
       />
 
@@ -1719,6 +1722,13 @@ export default function App() {
 
       {isUserManagementModalOpen && (
         <UserManagementModal onClose={() => setIsUserManagementModalOpen(false)} />
+      )}
+
+      {isNotificationModalOpen && (
+        <NotificationModal
+          isOpen={isNotificationModalOpen}
+          onClose={() => setIsNotificationModalOpen(false)}
+        />
       )}
 
       {isLoginModalOpen && (
