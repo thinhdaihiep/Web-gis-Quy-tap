@@ -297,6 +297,10 @@ async function startServer() {
         Accept: '*/*',
       };
 
+      if (targetUrl.includes('github.com') && process.env.GitHub_Access) {
+        headers['Authorization'] = `token ${process.env.GitHub_Access}`;
+      }
+
       if (req.headers.range) {
         headers['Range'] = req.headers.range;
       }
