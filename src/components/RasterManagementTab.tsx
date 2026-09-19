@@ -28,7 +28,6 @@ import {
 import { parseGeoTiffMetadata } from '../utils/geotiffLoader';
 import { fetchGitHubReleaseAssets, parseGitHubUrl } from '../utils/githubRelease';
 import { removeCachedRasters, clearAllRasterCache } from '../utils/rasterCache';
-import { addNotification } from '../notificationService';
 
 interface RasterManagementTabProps {
   onLayersChange?: (layers: RasterLayer[]) => void;
@@ -132,7 +131,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       console.error('Error fetching raster layers:', error);
       const msg = 'Không thể tải danh sách lớp bản đồ nền.';
       setErrorMessage(msg);
-      await addNotification(msg, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -187,7 +185,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
           console.warn('GitHub Scan Error:', ghErr);
           const msg = `Lỗi quét GitHub: ${ghErr.message}`;
           setErrorMessage(msg);
-          await addNotification(msg, 'error');
           setIsCreatingLayer(false);
           setIsScanningGithub(false);
           return;
@@ -229,7 +226,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       console.error('Error creating layer:', error);
       const msg = `Lỗi tạo lớp: ${error.message}`;
       setErrorMessage(msg);
-      await addNotification(msg, 'error');
     } finally {
       setIsCreatingLayer(false);
       setIsScanningGithub(false);
@@ -298,7 +294,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       if (targetFiles.length === 0) {
         const msg = 'Không tìm thấy file raster nào trong lớp này để cập nhật chỉ mục.';
         setErrorMessage(msg);
-        await addNotification(msg, 'warning');
         setIndexingLayerId(null);
         setIndexingProgress(null);
         return;
@@ -337,7 +332,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
           console.warn(`Lỗi đọc header file ${item.fileName}:`, itemErr);
           const msg = `${item.fileName}: ${itemErr?.message || 'Lỗi đọc Header'}`;
           errorsList.push(msg);
-          await addNotification(`Lỗi cập nhật chỉ mục: ${msg}`, 'error');
           failedCount++;
         }
       }
@@ -369,7 +363,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       console.error('Error indexing bounds:', err);
       const msg = `Lỗi cập nhật chỉ mục: ${err.message}`;
       setErrorMessage(msg);
-      await addNotification(msg, 'error');
     } finally {
       setIndexingLayerId(null);
       setIndexingProgress(null);
@@ -415,7 +408,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       console.error('Error renaming layer:', error);
       const msg = `Lỗi sửa lớp: ${error.message}`;
       setErrorMessage(msg);
-      await addNotification(msg, 'error');
     }
   };
 
@@ -467,7 +459,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       console.error('Error deleting layer:', error);
       const msg = `Lỗi khi xóa lớp: ${error.message}`;
       setErrorMessage(msg);
-      await addNotification(msg, 'error');
     }
   };
 
@@ -528,7 +519,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
     } catch (err: any) {
       const msg = `Lỗi thêm URL: ${err.message}`;
       setErrorMessage(msg);
-      await addNotification(msg, 'error');
     }
   };
 
@@ -578,7 +568,6 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       console.error('Error deleting file:', error);
       const msg = `Lỗi xóa file: ${error.message}`;
       setErrorMessage(msg);
-      await addNotification(msg, 'error');
     }
   };
 

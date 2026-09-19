@@ -962,7 +962,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     let bufferDebounceTimer: any = null;
     
     // Evaluate and load rasters based on current viewport
-    const evaluateRasters = () => {
+    const evaluateRasters = (isInstantOnly: boolean = false) => {
       if (!isActive) return;
 
       updatePaneVisibility();
@@ -1104,7 +1104,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
       const getVisibleFileStatuses = () => {
         const inViewportUrls = new Set(
-          activeFiles
+          allFilesToProcess
             .filter((f) => {
               const b = normalizeBoundsBox(f.bounds);
               if (!b) return true;
@@ -1118,12 +1118,8 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             .map((f) => f.url)
         );
 
-        const targetList = inViewportUrls.size > 0
-          ? activeFiles.filter((f) => inViewportUrls.has(f.url))
-          : activeFiles;
-
         const uniqueNames = new Map<string, { state: 'loading' | 'loaded'; inViewport: boolean }>();
-        targetList.forEach((f) => {
+        allFilesToProcess.forEach((f) => {
           const name = getShortRasterName(f);
           if (name) {
             const isLoaded = cache.has(f.url);
@@ -1172,6 +1168,10 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           fileNames,
           fileStatuses,
         });
+      }
+
+      if (isInstantOnly) {
+        return;
       }
 
       // Shared single raster loader function
@@ -1267,6 +1267,30 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
       const pendingFiles = activeFiles.filter((f) => f.url && !cache.has(f.url));
       if (pendingFiles.length > 0) {
+        // Ưu tiên tải các file nằm trong khung nhìn trước, sau đó mới tải các file đệm xung quanh
+        const inViewportUrls = new Set(
+          activeFiles
+            .filter((f) => {
+              const b = normalizeBoundsBox(f.bounds);
+              if (!b) return true;
+              return !(
+                b.south > currentViewportBox.north ||
+                b.north < currentViewportBox.south ||
+                b.west > currentViewportBox.east ||
+                b.east < currentViewportBox.west
+              );
+            })
+            .map((f) => f.url)
+        );
+
+        pendingFiles.sort((a, b) => {
+          const aInView = inViewportUrls.has(a.url);
+          const bInView = inViewportUrls.has(b.url);
+          if (aInView && !bInView) return -1;
+          if (!aInView && bInView) return 1;
+          return getDistanceToCenter(a) - getDistanceToCenter(b);
+        });
+
         if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
         
         bufferDebounceTimer = setTimeout(() => {
@@ -1300,6 +1324,9 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
     let debounceTimer: any = null;
     const debouncedEvaluateRasters = () => {
+      // Run the instant check first to update visible file statuses in real-time
+      evaluateRasters(true);
+
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         evaluateRasters();
@@ -1333,7 +1360,12 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     // Evaluate initially
     evaluateRasters();
 
-    // Re-evaluate on map movements with debounce to keep panning silky smooth
+    // Re-evaluate on map movements with instant response while moving
+    const handleMapMoveInstant = () => {
+      evaluateRasters(true);
+    };
+    
+    map.on('move', handleMapMoveInstant);
     map.on('moveend', debouncedEvaluateRasters);
     map.on('zoomend', debouncedEvaluateRasters);
     map.on('zoom', updatePaneVisibility);
@@ -1344,6 +1376,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       if (debounceTimer) clearTimeout(debounceTimer);
       if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
       window.removeEventListener('clear-raster-cache', handleClearRasterCacheEvent);
+      map.off('move', handleMapMoveInstant);
       map.off('moveend', debouncedEvaluateRasters);
       map.off('zoomend', debouncedEvaluateRasters);
       map.off('zoom', updatePaneVisibility);

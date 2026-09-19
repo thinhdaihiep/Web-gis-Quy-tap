@@ -1,5 +1,3 @@
-import { addNotification } from '../notificationService';
-
 /**
  * Utility for parsing GitHub Release URLs and fetching asset metadata
  */
@@ -80,7 +78,6 @@ export async function fetchGitHubReleaseAssets(url: string): Promise<GitHubRelea
     } else {
       errorMsg = `Lỗi kết nối GitHub API (${response.status}): ${response.statusText}`;
     }
-    await addNotification(errorMsg, 'error');
     throw new Error(errorMsg);
   }
 

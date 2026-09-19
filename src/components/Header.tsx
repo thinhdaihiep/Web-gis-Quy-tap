@@ -86,19 +86,8 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* User Management button (Admin) */}
-          {currentRole === 'admin' && onOpenUserManagementModal && (
-            <button
-              onClick={onOpenUserManagementModal}
-              className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
-              title="Quản lý người dùng"
-            >
-              <Users className="w-4 h-4 shrink-0" />
-            </button>
-          )}
-
-          {/* Notification button (Admin) */}
-          {currentRole === 'admin' && onOpenNotificationModal && (
+          {/* Notification button (Editor and Admin only) */}
+          {(currentRole === 'admin' || currentRole === 'editor') && onOpenNotificationModal && (
             <button
               onClick={onOpenNotificationModal}
               className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"

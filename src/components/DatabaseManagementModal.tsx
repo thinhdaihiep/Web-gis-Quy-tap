@@ -15,10 +15,12 @@ import {
   Search,
   Eye,
   Save,
-  Check
+  Check,
+  Users,
 } from 'lucide-react';
 import proj4 from 'proj4';
 import { RasterManagementTab } from './RasterManagementTab';
+import { UserManagementTab } from './UserManagementTab';
 import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy, RasterLayer, LatLngBoundsBox, RasterLoadingStatus } from '../types';
 import {
   extractObjectId,
@@ -79,7 +81,7 @@ function parseDmsToLatLng(toaDoStr: string): { lat: number; lng: number } | null
 export interface DatabaseManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
-  defaultTab?: 'import' | 'export' | 'attributes' | 'raster';
+  defaultTab?: 'import' | 'export' | 'attributes' | 'raster' | 'users';
   layers: LayerConfig[];
   existingFeatures: GeoJsonFeatureItem[];
   onImportConfirm: (
@@ -105,7 +107,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   onSelectAndFlyToRaster,
   rasterStatus,
 }) => {
-  const [activeTab, setActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster'>(defaultTab);
+  const [activeTab, setActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>(defaultTab);
 
   // Sync activeTab when defaultTab changes or modal opens
   useEffect(() => {
@@ -505,6 +507,19 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
             <Layers className="w-3.5 h-3.5" />
             <span>Bản đồ nền</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('users')}
+            className={`px-3.5 py-2 text-xs font-bold rounded-t-lg transition flex items-center gap-2 cursor-pointer border-t border-x ${
+              activeTab === 'users'
+                ? 'bg-white text-blue-700 border-slate-300 border-b-transparent -mb-px shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>Người dùng</span>
+          </button>
         </div>
 
         {/* TAB 1: NHẬP DỮ LIỆU */}
@@ -877,6 +892,13 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
               onSelectAndFlyToRaster={onSelectAndFlyToRaster}
               rasterStatus={rasterStatus}
             />
+          </div>
+        )}
+
+        {/* TAB 5: NGƯỜI DÙNG */}
+        {activeTab === 'users' && (
+          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-700 flex-1">
+            <UserManagementTab />
           </div>
         )}
 

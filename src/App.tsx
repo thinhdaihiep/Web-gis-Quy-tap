@@ -11,7 +11,6 @@ import { AddFeatureModal } from './components/AddFeatureModal';
 import { AttributePane } from './components/AttributePane';
 import { Footer } from './components/Footer';
 import { DatabaseManagementModal } from './components/DatabaseManagementModal';
-import { UserManagementModal } from './components/UserManagementModal';
 import { NotificationModal } from './components/NotificationModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
@@ -136,28 +135,25 @@ export default function App() {
 
   // Manage raster status indicator (loading progress or visible file names when loaded)
   useEffect(() => {
-    if (!isRasterVisible || rasterStatus.state === 'idle') {
+    if (!isRasterVisible) {
       setShowRasterToast(false);
       return;
     }
 
-    if (rasterStatus.state === 'loading' || rasterStatus.state === 'loaded') {
-      setRasterToastData(rasterStatus);
-      setShowRasterToast(true);
-    } else if (rasterStatus.state === 'error') {
-      setRasterToastData(rasterStatus);
-      setShowRasterToast(true);
+    setRasterToastData(rasterStatus);
+    setShowRasterToast(true);
+
+    if (rasterStatus.state === 'error') {
       const timer = setTimeout(() => {
         setShowRasterToast(false);
       }, 5000);
       return () => clearTimeout(timer);
     }
-  }, [rasterStatus.state, rasterStatus.error, isRasterVisible]);
+  }, [rasterStatus, isRasterVisible]);
   const [mapFeatures, setMapFeatures] = useState<GeoJsonFeatureItem[]>(INITIAL_MAP_FEATURES);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
-  const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster'>('import');
-  const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState<boolean>(false);
+  const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>('import');
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
@@ -1430,7 +1426,6 @@ export default function App() {
           setDatabaseManagementActiveTab('attributes');
           setIsDatabaseManagementModalOpen(true);
         }}
-        onOpenUserManagementModal={() => setIsUserManagementModalOpen(true)}
         onOpenNotificationModal={() => setIsNotificationModalOpen(true)}
         isMobile={isMobile}
       />
@@ -1578,53 +1573,57 @@ export default function App() {
           />
 
           {/* Raster Loading Status - Leaflet Control Style (Bottom Left, above Coordinate Bar) */}
-          {showRasterToast && isRasterVisible && (rasterToastData.state === 'loading' || rasterToastData.state === 'loaded') && (() => {
-            const hasFileStatuses = rasterToastData.fileStatuses && rasterToastData.fileStatuses.length > 0;
-            const displayTitle = rasterToastData.fileNames && rasterToastData.fileNames.length > 0
-              ? [...rasterToastData.fileNames].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })).join(', ')
-              : rasterToastData.activeLayerName;
+          {showRasterToast && isRasterVisible && (() => {
+            const fileStatuses = rasterToastData.fileStatuses || [];
+            // Lọc chính xác các tệp raster đang nằm trong khung nhìn (viewport)
+            const visibleFileStatuses = fileStatuses.filter(fs => fs.inViewport);
+            
+            const isOverallLoading = rasterToastData.state === 'loading';
+            const displayTitle = visibleFileStatuses.map(fs => fs.name).join(', ');
             
             return (
               <div
-                className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/85 backdrop-blur-[2px] text-slate-700 text-[11px] px-2 py-0.5 flex items-center gap-1.5 rounded-tr-md border-t border-r border-slate-200/60 shadow-xs max-w-[360px] sm:max-w-[480px]"
+                className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/90 backdrop-blur-[3px] text-slate-700 text-[11px] px-2.5 py-1 flex items-center gap-3 rounded-tr-md border-t border-r border-slate-200/80 shadow-xs max-w-[360px] sm:max-w-[480px]"
                 title={displayTitle}
               >
-                {rasterToastData.state === 'loading' ? (
-                  <Loader2 className="w-3 h-3 animate-spin text-amber-500 shrink-0" />
-                ) : (
-                  <Layers className="w-3 h-3 text-amber-500 shrink-0" />
-                )}
-                
-                <span className="font-medium truncate whitespace-nowrap overflow-hidden">
-                  {hasFileStatuses ? (
-                    rasterToastData.fileStatuses!.map((fs, idx) => (
+                {/* 1. Phần danh sách file trong khung nhìn */}
+                <span className="font-medium truncate whitespace-nowrap overflow-hidden flex items-center gap-1.5">
+                  {visibleFileStatuses.length > 0 ? (
+                    visibleFileStatuses.map((fs, idx) => (
                       <span key={idx} className="inline-flex items-center">
                         <span
                           className={
                             fs.state === 'loaded'
-                              ? 'text-amber-600 font-bold inline-flex items-center gap-1'
+                              ? 'text-emerald-600 font-semibold inline-flex items-center gap-1'
                               : 'text-slate-400 font-medium inline-flex items-center gap-1'
                           }
                         >
-                          {fs.state === 'loaded' && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 shadow-xs" />
+                          {fs.state === 'loaded' ? (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                          ) : (
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0 animate-pulse" />
                           )}
                           {fs.name}
                         </span>
-                        {idx < rasterToastData.fileStatuses!.length - 1 ? <span className="text-slate-400 mx-1">,</span> : ''}
+                        {idx < visibleFileStatuses.length - 1 ? <span className="text-slate-300 ml-1.5 mr-0.5">|</span> : ''}
                       </span>
                     ))
                   ) : (
-                    <span className={rasterToastData.state === 'loaded' ? 'text-amber-600 font-bold' : 'text-slate-800'}>
-                      {rasterToastData.activeLayerName || 'Raster'}
+                    <span className="text-slate-400 font-medium flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0" />
+                      Không có ảnh trong khung nhìn!
                     </span>
                   )}
                 </span>
                 
-                {rasterToastData.state === 'loading' && (
-                  <span className="text-amber-600 shrink-0 text-[10px] font-semibold">
-                    {`(${rasterToastData.progress ?? 0}%)`}
-                  </span>
+                {/* 2. Phần trạng thái tải (con xoay + %) phía sau */}
+                {isOverallLoading && (
+                  <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500 shrink-0" />
+                    <span className="text-blue-600 shrink-0 text-[10px] font-bold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 flex items-center">
+                      {`${rasterToastData.progress ?? 0}%`}
+                    </span>
+                  </div>
                 )}
               </div>
             );
@@ -1719,10 +1718,6 @@ export default function App() {
         onSelectAndFlyToRaster={handleFlyToRaster}
         rasterStatus={rasterStatus}
       />
-
-      {isUserManagementModalOpen && (
-        <UserManagementModal onClose={() => setIsUserManagementModalOpen(false)} />
-      )}
 
       {isNotificationModalOpen && (
         <NotificationModal

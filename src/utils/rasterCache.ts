@@ -198,13 +198,50 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      // Fastest binary transfer without manual chunk concatenation overhead
-      const arrayBuffer = await response.arrayBuffer();
-      if (arrayBuffer.byteLength > 0) {
-        // Asynchronously save to multi-level cache without blocking the return
-        saveCachedRaster(url, arrayBuffer).catch(() => {});
-        if (onProgress) onProgress(100);
-        return arrayBuffer;
+      const contentLength = response.headers.get('content-length');
+      const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
+
+      if (!response.body || totalBytes <= 0) {
+        // Fallback if ReadableStream is not supported or Content-Length is missing
+        const arrayBuffer = await response.arrayBuffer();
+        if (arrayBuffer.byteLength > 0) {
+          saveCachedRaster(url, arrayBuffer).catch(() => {});
+          if (onProgress) onProgress(100);
+          return arrayBuffer;
+        }
+      } else {
+        const reader = response.body.getReader();
+        let receivedBytes = 0;
+        const chunks: Uint8Array[] = [];
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          if (value) {
+            chunks.push(value);
+            receivedBytes += value.length;
+            if (onProgress) {
+              const percent = Math.min(99, Math.round((receivedBytes / totalBytes) * 100));
+              onProgress(percent);
+            }
+          }
+        }
+
+        // Concatenate all chunks into a single ArrayBuffer
+        const concatenated = new Uint8Array(receivedBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+          concatenated.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        const arrayBuffer = concatenated.buffer;
+        if (arrayBuffer.byteLength > 0) {
+          saveCachedRaster(url, arrayBuffer).catch(() => {});
+          if (onProgress) onProgress(100);
+          return arrayBuffer;
+        }
       }
     } catch (err) {
       lastError = err;
