@@ -960,6 +960,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     const cache = rasterLayersCacheRef.current;
     const pendingUrls = new Set<string>();
     let bufferDebounceTimer: any = null;
+    let visibleStatuses: { name: string; state: 'loading' | 'loaded'; inViewport?: boolean }[] = [];
     
     // Evaluate and load rasters based on current viewport
     const evaluateRasters = (isInstantOnly: boolean = false) => {
@@ -1038,10 +1039,15 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
       if (activeFiles.length === 0) {
         rasterGroup.clearLayers();
+        visibleStatuses = [];
         reportRasterStatus({
           state: 'idle',
           message: 'Không có mảnh raster nào trong khu vực đang xem.',
           activeLayerName,
+          fileStatuses: [],
+          fileNames: [],
+          loadedCount: 0,
+          totalCount: 0,
         });
         return;
       }
@@ -1139,36 +1145,21 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
       };
 
-      if (loadedCount === activeFiles.length) {
-        const fileStatuses = getVisibleFileStatuses();
-        const fileNames = fileStatuses.map(fs => fs.name);
-        reportRasterStatus({
-          state: 'loaded',
-          progress: 100,
-          message: fileNames.join(', ') || `Đã nạp ${loadedCount}/${activeFiles.length} ảnh raster`,
-          loadedCount,
-          totalCount: activeFiles.length,
-          activeLayerName,
-          bounds: combinedBoundsBox,
-          fileNames,
-          fileStatuses,
-        });
-      } else {
-        const currentProgress = Math.round((loadedCount / activeFiles.length) * 100) || 5;
-        const fileStatuses = getVisibleFileStatuses();
-        const fileNames = fileStatuses.map(fs => fs.name);
-        reportRasterStatus({
-          state: 'loading',
-          progress: currentProgress,
-          message: `Đang nạp ${currentProgress}%`,
-          loadedCount,
-          totalCount: activeFiles.length,
-          activeLayerName,
-          bounds: combinedBoundsBox,
-          fileNames,
-          fileStatuses,
-        });
-      }
+      visibleStatuses = getVisibleFileStatuses();
+      const fileNames = visibleStatuses.map(fs => fs.name);
+      const isInitialDone = loadedCount >= activeFiles.length;
+
+      reportRasterStatus({
+        state: isInitialDone ? 'loaded' : 'loading',
+        progress: Math.round((loadedCount / activeFiles.length) * 100) || 0,
+        message: `${loadedCount}/${activeFiles.length}`,
+        loadedCount,
+        totalCount: activeFiles.length,
+        activeLayerName,
+        bounds: combinedBoundsBox,
+        fileNames,
+        fileStatuses: visibleStatuses,
+      });
 
       if (isInstantOnly) {
         return;
@@ -1187,23 +1178,6 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             resolution: 256,
             pane: 'rasterPane',
             viewport: currentViewportBox,
-            onProgress: (percent) => {
-              if (isActive && percent < 100 && loadedCount < activeFiles.length) {
-                const currentProgress = Math.min(99, Math.round(((loadedCount + percent / 100) / activeFiles.length) * 100));
-                const fileStatuses = getVisibleFileStatuses();
-                const fileNames = fileStatuses.map(fs => fs.name);
-                reportRasterStatus({
-                  state: 'loading',
-                  progress: currentProgress,
-                  message: `Đang nạp mảnh ${currentProgress}%`,
-                  loadedCount,
-                  totalCount: activeFiles.length,
-                  activeLayerName,
-                  fileNames,
-                  fileStatuses,
-                });
-              }
-            },
           });
 
           if (isActive && mapInstanceRef.current) {
@@ -1227,36 +1201,27 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
             loadedCount++;
 
-            if (loadedCount >= activeFiles.length) {
-              const fileStatuses = getVisibleFileStatuses();
-              const fileNames = fileStatuses.map(fs => fs.name);
-              reportRasterStatus({
-                state: 'loaded',
-                progress: 100,
-                message: fileNames.join(', ') || `Đã nạp hoàn tất`,
-                loadedCount,
-                totalCount: activeFiles.length,
-                activeLayerName,
-                bounds: combinedBoundsBox,
-                fileNames,
-                fileStatuses,
-              });
-            } else {
-              const currentProgress = Math.round((loadedCount / activeFiles.length) * 100);
-              const fileStatuses = getVisibleFileStatuses();
-              const fileNames = fileStatuses.map(fs => fs.name);
-              reportRasterStatus({
-                state: 'loading',
-                progress: currentProgress,
-                message: `Đang nạp ${currentProgress}%`,
-                loadedCount,
-                totalCount: activeFiles.length,
-                activeLayerName,
-                bounds: combinedBoundsBox,
-                fileNames,
-                fileStatuses,
-              });
+            const shortName = getShortRasterName(file);
+            if (shortName) {
+              visibleStatuses = visibleStatuses.map((item) =>
+                item.name === shortName ? { ...item, state: 'loaded' } : item
+              );
             }
+
+            const updatedNames = visibleStatuses.map((fs) => fs.name);
+            const isDone = loadedCount >= activeFiles.length;
+
+            reportRasterStatus({
+              state: isDone ? 'loaded' : 'loading',
+              progress: Math.round((loadedCount / activeFiles.length) * 100),
+              message: `${loadedCount}/${activeFiles.length}`,
+              loadedCount,
+              totalCount: activeFiles.length,
+              activeLayerName,
+              bounds: combinedBoundsBox,
+              fileNames: updatedNames,
+              fileStatuses: visibleStatuses,
+            });
           }
         } catch (e: any) {
           console.error('Lỗi khi nạp file raster COG:', file.fileName || file.url, e);
@@ -1366,6 +1331,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     };
     
     map.on('move', handleMapMoveInstant);
+    map.on('zoom', handleMapMoveInstant);
     map.on('moveend', debouncedEvaluateRasters);
     map.on('zoomend', debouncedEvaluateRasters);
     map.on('zoom', updatePaneVisibility);
@@ -1377,6 +1343,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
       window.removeEventListener('clear-raster-cache', handleClearRasterCacheEvent);
       map.off('move', handleMapMoveInstant);
+      map.off('zoom', handleMapMoveInstant);
       map.off('moveend', debouncedEvaluateRasters);
       map.off('zoomend', debouncedEvaluateRasters);
       map.off('zoom', updatePaneVisibility);

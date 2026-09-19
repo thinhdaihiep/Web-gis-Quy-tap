@@ -1578,7 +1578,10 @@ export default function App() {
             // Lọc chính xác các tệp raster đang nằm trong khung nhìn (viewport)
             const visibleFileStatuses = fileStatuses.filter(fs => fs.inViewport);
             
-            const isOverallLoading = rasterToastData.state === 'loading';
+            const isOverallLoading =
+              rasterToastData.state === 'loading' &&
+              (rasterToastData.totalCount ?? 0) > 0 &&
+              (rasterToastData.loadedCount ?? 0) < (rasterToastData.totalCount ?? 0);
             const displayTitle = visibleFileStatuses.map(fs => fs.name).join(', ');
             
             return (
@@ -1616,12 +1619,12 @@ export default function App() {
                   )}
                 </span>
                 
-                {/* 2. Phần trạng thái tải (con xoay + %) phía sau */}
+                {/* 2. Phần trạng thái tải (con xoay + số file đã tải/tổng số file dự kiến) phía sau */}
                 {isOverallLoading && (
                   <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500 shrink-0" />
                     <span className="text-blue-600 shrink-0 text-[10px] font-bold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 flex items-center">
-                      {`${rasterToastData.progress ?? 0}%`}
+                      {`${rasterToastData.loadedCount ?? 0}/${rasterToastData.totalCount ?? 0}`}
                     </span>
                   </div>
                 )}
