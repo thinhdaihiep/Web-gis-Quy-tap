@@ -35,7 +35,6 @@ import {
   extractPolygonLatLngs,
 } from '../utils/geoMeasure';
 import { Ruler, DraftingCompass, Target, X } from 'lucide-react';
-import { addNotification } from '../notificationService';
 
 proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
 proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
@@ -405,7 +404,6 @@ export const MapComponent: React.FC<MapProps> = ({
   const onRasterStatusChangeRef = useRef(onRasterStatusChange);
   onRasterStatusChangeRef.current = onRasterStatusChange;
   const lastRasterStatusJsonRef = useRef<string>('');
-  const reportedErrorRasterUrlsRef = useRef<Set<string>>(new Set());
 
   const reportRasterStatus = useCallback((status: RasterLoadingStatus) => {
     const json = JSON.stringify(status);
@@ -1244,18 +1242,6 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               item.name === shortName ? { ...item, state: 'error' } : item
             );
           }
-
-          // Push error notification to Firestore notifications table (avoid repeated notifications for same URL)
-          const errorUrlKey = file.url || file.fileName || 'unknown';
-          if (!reportedErrorRasterUrlsRef.current.has(errorUrlKey)) {
-            reportedErrorRasterUrlsRef.current.add(errorUrlKey);
-            const displayName = file.fileName || shortName || file.url || 'Tệp không xác định';
-            const reason = e?.message || 'Không thể tải hoặc giải mã tệp raster (kiểm tra CORS / kết nối mạng / định dạng COG)';
-            addNotification(`Lỗi tải ảnh raster [${displayName}]: ${reason}`, 'error').catch((err) => {
-              console.warn('Lỗi khi gửi thông báo lỗi raster lên Firestore:', err);
-            });
-          }
-
           const updatedNames = visibleStatuses.map((fs) => fs.name);
           const isDone = (loadedCount + failedUrls.size) >= activeFiles.length;
           reportRasterStatus({

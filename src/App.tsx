@@ -14,8 +14,6 @@ import { DatabaseManagementModal } from './components/DatabaseManagementModal';
 import { NotificationModal } from './components/NotificationModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from './firebase';
 
 import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode, RasterLayer, RasterLoadingStatus, LatLngBoundsBox, normalizeBoundsBox } from './types';
 import {
@@ -157,7 +155,6 @@ export default function App() {
   const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
   const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>('import');
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
-  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -466,21 +463,6 @@ export default function App() {
       }
     }
     initSharedDb();
-  }, []);
-
-  // Listen to unread notifications count in real-time for all users
-  useEffect(() => {
-    try {
-      const q = query(collection(db, 'notifications'), where('read', '==', false));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        setUnreadNotificationsCount(snapshot.size);
-      }, (err) => {
-        console.warn('Lỗi lắng nghe thông báo Firestore:', err);
-      });
-      return () => unsubscribe();
-    } catch (e) {
-      console.warn('Không thể khởi tạo bộ lắng nghe thông báo:', e);
-    }
   }, []);
 
   // Sync state to local storage backup whenever mapFeatures changes
@@ -1461,7 +1443,6 @@ export default function App() {
           setIsDatabaseManagementModalOpen(true);
         }}
         onOpenNotificationModal={() => setIsNotificationModalOpen(true)}
-        unreadNotificationsCount={unreadNotificationsCount}
         isMobile={isMobile}
       />
 
