@@ -35,6 +35,7 @@ import {
   extractPolygonLatLngs,
 } from '../utils/geoMeasure';
 import { Ruler, DraftingCompass, Target, X } from 'lucide-react';
+import { addNotification } from '../notificationService';
 
 proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
 proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
@@ -62,6 +63,7 @@ interface MapProps {
   onDrawingPointsChange?: (count: number) => void;
   drawingVerticesRef?: React.MutableRefObject<[number, number][]>;
   onRasterStatusChange?: (status: RasterLoadingStatus) => void;
+  onMapRenderedReady?: () => void;
 }
 
 function getFeatureName(feat: GeoJsonFeatureItem): { name: string; hiddenKey: string | null } {
@@ -381,6 +383,7 @@ export const MapComponent: React.FC<MapProps> = ({
   onDrawingPointsChange,
   drawingVerticesRef,
   onRasterStatusChange,
+  onMapRenderedReady,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -395,9 +398,14 @@ export const MapComponent: React.FC<MapProps> = ({
   const selectedCRSRef = useRef<'4326' | '3405' | '3406'>(selectedCRS);
   selectedCRSRef.current = selectedCRS;
 
+  const onMapRenderedReadyRef = useRef(onMapRenderedReady);
+  onMapRenderedReadyRef.current = onMapRenderedReady;
+  const hasNotifiedRenderedReadyRef = useRef(false);
+
   const onRasterStatusChangeRef = useRef(onRasterStatusChange);
   onRasterStatusChangeRef.current = onRasterStatusChange;
   const lastRasterStatusJsonRef = useRef<string>('');
+  const reportedErrorRasterUrlsRef = useRef<Set<string>>(new Set());
 
   const reportRasterStatus = useCallback((status: RasterLoadingStatus) => {
     const json = JSON.stringify(status);
@@ -1236,6 +1244,18 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               item.name === shortName ? { ...item, state: 'error' } : item
             );
           }
+
+          // Push error notification to Firestore notifications table (avoid repeated notifications for same URL)
+          const errorUrlKey = file.url || file.fileName || 'unknown';
+          if (!reportedErrorRasterUrlsRef.current.has(errorUrlKey)) {
+            reportedErrorRasterUrlsRef.current.add(errorUrlKey);
+            const displayName = file.fileName || shortName || file.url || 'Tệp không xác định';
+            const reason = e?.message || 'Không thể tải hoặc giải mã tệp raster (kiểm tra CORS / kết nối mạng / định dạng COG)';
+            addNotification(`Lỗi tải ảnh raster [${displayName}]: ${reason}`, 'error').catch((err) => {
+              console.warn('Lỗi khi gửi thông báo lỗi raster lên Firestore:', err);
+            });
+          }
+
           const updatedNames = visibleStatuses.map((fs) => fs.name);
           const isDone = (loadedCount + failedUrls.size) >= activeFiles.length;
           reportRasterStatus({
@@ -2270,6 +2290,17 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         } else {
           container.classList.remove('show-battle-labels');
         }
+      }
+
+      if (!hasNotifiedRenderedReadyRef.current) {
+        hasNotifiedRenderedReadyRef.current = true;
+        map.whenReady(() => {
+          setTimeout(() => {
+            if (onMapRenderedReadyRef.current) {
+              onMapRenderedReadyRef.current();
+            }
+          }, 100);
+        });
       }
     }
   }, [features, aliasVersion, layers.map((l) => `${l.id}:${l.color || ''}`).join(';')]);

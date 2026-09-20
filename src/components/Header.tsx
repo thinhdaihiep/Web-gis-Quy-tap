@@ -15,6 +15,7 @@ interface HeaderProps {
   onOpenDatabaseManagementModal?: () => void;
   onOpenUserManagementModal?: () => void;
   onOpenNotificationModal?: () => void;
+  unreadNotificationsCount?: number;
   isMobile?: boolean;
 }
 
@@ -30,6 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenDatabaseManagementModal,
   onOpenUserManagementModal,
   onOpenNotificationModal,
+  unreadNotificationsCount = 0,
   isMobile = false,
 }) => {
   return (
@@ -86,14 +88,22 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Notification button (Editor and Admin only) */}
-          {(currentRole === 'admin' || currentRole === 'editor') && onOpenNotificationModal && (
+          {/* Notification button (All users) */}
+          {onOpenNotificationModal && (
             <button
               onClick={onOpenNotificationModal}
-              className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
+              className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700 relative"
               title="Thông báo hệ thống"
             >
               <Bell className="w-4 h-4 shrink-0" />
+              {unreadNotificationsCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-red-500 text-[9px] font-bold text-white items-center justify-center">
+                    {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                  </span>
+                </span>
+              )}
             </button>
           )}
         </div>

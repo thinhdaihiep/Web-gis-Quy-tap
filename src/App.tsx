@@ -14,6 +14,8 @@ import { DatabaseManagementModal } from './components/DatabaseManagementModal';
 import { NotificationModal } from './components/NotificationModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db } from './firebase';
 
 import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode, RasterLayer, RasterLoadingStatus, LatLngBoundsBox, normalizeBoundsBox } from './types';
 import {
@@ -155,6 +157,7 @@ export default function App() {
   const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
   const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>('import');
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -361,8 +364,30 @@ export default function App() {
   };
 
   // App initial loading splash state
-  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
+  const [isDbLoaded, setIsDbLoaded] = useState<boolean>(false);
+  const [isMapRendered, setIsMapRendered] = useState<boolean>(false);
+  const [isSplashFadingOut, setIsSplashFadingOut] = useState<boolean>(false);
+  const [showSplash, setShowSplash] = useState<boolean>(true);
   const [splashStatusText, setSplashStatusText] = useState<string>('Nạp bộ nhớ đệm cục bộ...');
+
+  // Dismiss splash only when BOTH database and map are completely ready
+  useEffect(() => {
+    if (isDbLoaded && isMapRendered) {
+      setSplashStatusText('Hoàn tất!');
+      const fadeTimer = setTimeout(() => {
+        setIsSplashFadingOut(true);
+      }, 200);
+
+      const removeTimer = setTimeout(() => {
+        setShowSplash(false);
+      }, 750);
+
+      return () => {
+        clearTimeout(fadeTimer);
+        clearTimeout(removeTimer);
+      };
+    }
+  }, [isDbLoaded, isMapRendered]);
 
   // Load shared features, field aliases, and layer configs from Firestore database on mount
   useEffect(() => {
@@ -433,16 +458,29 @@ export default function App() {
           setActiveRasterLayerId(dbRasterLayers[0].id);
         }
 
-        setSplashStatusText('Hoàn tất!');
+        setSplashStatusText('Đang nạp và định vị bản đồ...');
       } catch (e) {
         console.warn('Lỗi nạp CSDL:', e);
       } finally {
-        setTimeout(() => {
-          setIsLoadingData(false);
-        }, 500);
+        setIsDbLoaded(true);
       }
     }
     initSharedDb();
+  }, []);
+
+  // Listen to unread notifications count in real-time for all users
+  useEffect(() => {
+    try {
+      const q = query(collection(db, 'notifications'), where('read', '==', false));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        setUnreadNotificationsCount(snapshot.size);
+      }, (err) => {
+        console.warn('Lỗi lắng nghe thông báo Firestore:', err);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Không thể khởi tạo bộ lắng nghe thông báo:', e);
+    }
   }, []);
 
   // Sync state to local storage backup whenever mapFeatures changes
@@ -1403,10 +1441,6 @@ export default function App() {
     }, 4000);
   };
 
-  if (isLoadingData) {
-    return <SplashScreen statusText={splashStatusText} />;
-  }
-
   return (
     <div className="flex flex-col h-screen h-[100dvh] w-screen w-[100dvw] overflow-hidden bg-slate-900 font-sans text-slate-900">
       {/* Top High Density Header */}
@@ -1427,6 +1461,7 @@ export default function App() {
           setIsDatabaseManagementModalOpen(true);
         }}
         onOpenNotificationModal={() => setIsNotificationModalOpen(true)}
+        unreadNotificationsCount={unreadNotificationsCount}
         isMobile={isMobile}
       />
 
@@ -1547,6 +1582,7 @@ export default function App() {
             onDrawingPointsChange={setDrawingPointsCount}
             drawingVerticesRef={drawingVerticesRef}
             onRasterStatusChange={setRasterStatus}
+            onMapRenderedReady={() => setIsMapRendered(true)}
           />
 
           {/* Map Overlay Controls (Top Right 3 BaseMaps Switcher & Raster Checkbox/Combo & Zoom & GPS Locate) */}
@@ -1803,6 +1839,14 @@ export default function App() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Global Splash Screen Overlay */}
+      {showSplash && (
+        <SplashScreen
+          statusText={splashStatusText}
+          isFadingOut={isSplashFadingOut}
+        />
       )}
     </div>
   );

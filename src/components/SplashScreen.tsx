@@ -3,11 +3,16 @@ import { Loader2, ShieldCheck } from 'lucide-react';
 
 interface SplashScreenProps {
   statusText?: string;
+  isFadingOut?: boolean;
 }
 
-export const SplashScreen: React.FC<SplashScreenProps> = ({ statusText = 'Đang tải dữ liệu không gian...' }) => {
+export const SplashScreen: React.FC<SplashScreenProps> = ({ statusText = 'Đang tải dữ liệu không gian...', isFadingOut = false }) => {
   return (
-    <div className="fixed inset-0 z-[9999] bg-slate-950 text-slate-100 flex flex-col items-center justify-between p-4 sm:p-6 select-none animate-in fade-in duration-300">
+    <div
+      className={`fixed inset-0 z-[9999] bg-slate-950 text-slate-100 flex flex-col items-center justify-between p-4 sm:p-6 select-none transition-opacity duration-500 ease-out ${
+        isFadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100'
+      }`}
+    >
       {/* Top Ambient Glow / Military Decor */}
       <div className="w-full max-w-xl flex justify-between items-center text-[9px] sm:text-[10px] uppercase font-mono tracking-widest text-slate-500 pt-2 border-b border-slate-800/80 pb-3">
         <span className="flex items-center gap-1.5 text-red-500 font-bold whitespace-nowrap">

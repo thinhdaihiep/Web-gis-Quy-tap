@@ -454,71 +454,71 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
           </button>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="bg-slate-100 border-b border-slate-200 px-4 pt-2 flex items-center gap-1 shrink-0">
+        {/* Tab Navigation - Compact, responsive layout showing all tabs on mobile without icons */}
+        <div className="bg-slate-100 border-b border-slate-200 px-2 sm:px-4 pt-2 grid grid-cols-5 gap-1 shrink-0">
           <button
             type="button"
             onClick={() => setActiveTab('import')}
-            className={`px-3.5 py-2 text-xs font-bold rounded-t-lg transition flex items-center gap-2 cursor-pointer border-t border-x ${
+            className={`px-1 sm:px-3 py-2 text-[11px] sm:text-xs font-bold rounded-t-lg transition flex items-center justify-center text-center cursor-pointer border-t border-x ${
               activeTab === 'import'
                 ? 'bg-white text-blue-700 border-slate-300 border-b-transparent -mb-px shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
             }`}
+            title="Nhập dữ liệu"
           >
-            <Upload className="w-3.5 h-3.5" />
-            <span>Nhập dữ liệu</span>
+            <span className="truncate">Nhập DL</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('export')}
-            className={`px-3.5 py-2 text-xs font-bold rounded-t-lg transition flex items-center gap-2 cursor-pointer border-t border-x ${
+            className={`px-1 sm:px-3 py-2 text-[11px] sm:text-xs font-bold rounded-t-lg transition flex items-center justify-center text-center cursor-pointer border-t border-x ${
               activeTab === 'export'
                 ? 'bg-white text-blue-700 border-slate-300 border-b-transparent -mb-px shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
             }`}
+            title="Xuất dữ liệu"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Xuất dữ liệu</span>
+            <span className="truncate">Xuất DL</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('attributes')}
-            className={`px-3.5 py-2 text-xs font-bold rounded-t-lg transition flex items-center gap-2 cursor-pointer border-t border-x ${
+            className={`px-1 sm:px-3 py-2 text-[11px] sm:text-xs font-bold rounded-t-lg transition flex items-center justify-center text-center cursor-pointer border-t border-x ${
               activeTab === 'attributes'
                 ? 'bg-white text-blue-700 border-slate-300 border-b-transparent -mb-px shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
             }`}
+            title="Bảng thuộc tính"
           >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Bảng thuộc tính</span>
+            <span className="truncate">Thuộc tính</span>
           </button>
           
           <button
             type="button"
             onClick={() => setActiveTab('raster')}
-            className={`px-3.5 py-2 text-xs font-bold rounded-t-lg transition flex items-center gap-2 cursor-pointer border-t border-x ${
+            className={`px-1 sm:px-3 py-2 text-[11px] sm:text-xs font-bold rounded-t-lg transition flex items-center justify-center text-center cursor-pointer border-t border-x ${
               activeTab === 'raster'
                 ? 'bg-white text-blue-700 border-slate-300 border-b-transparent -mb-px shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
             }`}
+            title="Bản đồ nền"
           >
-            <Layers className="w-3.5 h-3.5" />
-            <span>Bản đồ nền</span>
+            <span className="truncate">Bản đồ nền</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('users')}
-            className={`px-3.5 py-2 text-xs font-bold rounded-t-lg transition flex items-center gap-2 cursor-pointer border-t border-x ${
+            className={`px-1 sm:px-3 py-2 text-[11px] sm:text-xs font-bold rounded-t-lg transition flex items-center justify-center text-center cursor-pointer border-t border-x ${
               activeTab === 'users'
                 ? 'bg-white text-blue-700 border-slate-300 border-b-transparent -mb-px shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
             }`}
+            title="Quản lý Người dùng"
           >
-            <Users className="w-3.5 h-3.5" />
-            <span>Người dùng</span>
+            <span className="truncate">Người dùng</span>
           </button>
         </div>
 
