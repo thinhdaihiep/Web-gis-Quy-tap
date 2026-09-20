@@ -959,8 +959,9 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
     const cache = rasterLayersCacheRef.current;
     const pendingUrls = new Set<string>();
+    const failedUrls = new Set<string>();
     let bufferDebounceTimer: any = null;
-    let visibleStatuses: { name: string; state: 'loading' | 'loaded'; inViewport?: boolean }[] = [];
+    let visibleStatuses: { name: string; state: 'loading' | 'loaded' | 'error'; inViewport?: boolean }[] = [];
     
     // Evaluate and load rasters based on current viewport
     const evaluateRasters = (isInstantOnly: boolean = false) => {
@@ -1124,17 +1125,19 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             .map((f) => f.url)
         );
 
-        const uniqueNames = new Map<string, { state: 'loading' | 'loaded'; inViewport: boolean }>();
+        const uniqueNames = new Map<string, { state: 'loading' | 'loaded' | 'error'; inViewport: boolean }>();
         allFilesToProcess.forEach((f) => {
           const name = getShortRasterName(f);
           if (name) {
             const isLoaded = cache.has(f.url);
+            const isFailed = failedUrls.has(f.url);
             const inView = inViewportUrls.has(f.url);
+            const fileState: 'loading' | 'loaded' | 'error' = isLoaded ? 'loaded' : isFailed ? 'error' : 'loading';
             const existing = uniqueNames.get(name);
             if (!existing) {
-              uniqueNames.set(name, { state: isLoaded ? 'loaded' : 'loading', inViewport: inView });
+              uniqueNames.set(name, { state: fileState, inViewport: inView });
             } else {
-              if (!isLoaded) existing.state = 'loading';
+              if (existing.state !== 'loaded') existing.state = fileState;
               if (inView) existing.inViewport = true;
             }
           }
@@ -1209,13 +1212,14 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             }
 
             const updatedNames = visibleStatuses.map((fs) => fs.name);
-            const isDone = loadedCount >= activeFiles.length;
+            const isDone = (loadedCount + failedUrls.size) >= activeFiles.length;
 
             reportRasterStatus({
-              state: isDone ? 'loaded' : 'loading',
+              state: isDone ? (loadedCount > 0 ? 'loaded' : 'error') : 'loading',
               progress: Math.round((loadedCount / activeFiles.length) * 100),
               message: `${loadedCount}/${activeFiles.length}`,
               loadedCount,
+              failedCount: failedUrls.size,
               totalCount: activeFiles.length,
               activeLayerName,
               bounds: combinedBoundsBox,
@@ -1225,6 +1229,27 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           }
         } catch (e: any) {
           console.error('Lỗi khi nạp file raster COG:', file.fileName || file.url, e);
+          failedUrls.add(file.url);
+          const shortName = getShortRasterName(file);
+          if (shortName) {
+            visibleStatuses = visibleStatuses.map((item) =>
+              item.name === shortName ? { ...item, state: 'error' } : item
+            );
+          }
+          const updatedNames = visibleStatuses.map((fs) => fs.name);
+          const isDone = (loadedCount + failedUrls.size) >= activeFiles.length;
+          reportRasterStatus({
+            state: isDone ? (loadedCount > 0 ? 'loaded' : 'error') : 'loading',
+            progress: Math.round((loadedCount / activeFiles.length) * 100),
+            message: `${loadedCount}/${activeFiles.length}`,
+            loadedCount,
+            failedCount: failedUrls.size,
+            totalCount: activeFiles.length,
+            activeLayerName,
+            bounds: combinedBoundsBox,
+            fileNames: updatedNames,
+            fileStatuses: visibleStatuses,
+          });
         } finally {
           pendingUrls.delete(file.url);
         }
@@ -1277,8 +1302,9 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               }
             };
 
-            // Background worker with cooperative concurrency
-            const workers = Math.min(4, pendingFiles.length);
+            // Background queue: Luôn tải lần lượt từng file 1 ở chế độ nền (workers = 1)
+            // Ưu tiên tải các file trong khung nhìn trước
+            const workers = 1;
             for (let b = 0; b < workers; b++) {
               processNext();
             }
@@ -1320,7 +1346,13 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       evaluateRasters();
     };
 
+    const handleRetryFailedRastersEvent = () => {
+      failedUrls.clear();
+      evaluateRasters();
+    };
+
     window.addEventListener('clear-raster-cache', handleClearRasterCacheEvent);
+    window.addEventListener('retry-failed-rasters', handleRetryFailedRastersEvent);
 
     // Evaluate initially
     evaluateRasters();
@@ -1342,6 +1374,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       if (debounceTimer) clearTimeout(debounceTimer);
       if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
       window.removeEventListener('clear-raster-cache', handleClearRasterCacheEvent);
+      window.removeEventListener('retry-failed-rasters', handleRetryFailedRastersEvent);
       map.off('move', handleMapMoveInstant);
       map.off('zoom', handleMapMoveInstant);
       map.off('moveend', debouncedEvaluateRasters);

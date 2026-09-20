@@ -1581,9 +1581,16 @@ export default function App() {
             const isOverallLoading =
               rasterToastData.state === 'loading' &&
               (rasterToastData.totalCount ?? 0) > 0 &&
-              (rasterToastData.loadedCount ?? 0) < (rasterToastData.totalCount ?? 0);
+              ((rasterToastData.loadedCount ?? 0) + (rasterToastData.failedCount ?? 0)) < (rasterToastData.totalCount ?? 0);
+
+            const hasFailedFiles = (rasterToastData.failedCount ?? 0) > 0;
+            const isFinishedWithErrors = !isOverallLoading && hasFailedFiles;
             const displayTitle = visibleFileStatuses.map(fs => fs.name).join(', ');
             
+            const handleRetryFailed = () => {
+              window.dispatchEvent(new CustomEvent('retry-failed-rasters'));
+            };
+
             return (
               <div
                 className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/90 backdrop-blur-[3px] text-slate-700 text-[11px] px-2.5 py-1 flex items-center gap-3 rounded-tr-md border-t border-r border-slate-200/80 shadow-xs max-w-[360px] sm:max-w-[480px]"
@@ -1592,25 +1599,28 @@ export default function App() {
                 {/* 1. Phần danh sách file trong khung nhìn */}
                 <span className="font-medium truncate whitespace-nowrap overflow-hidden flex items-center gap-1.5">
                   {visibleFileStatuses.length > 0 ? (
-                    visibleFileStatuses.map((fs, idx) => (
-                      <span key={idx} className="inline-flex items-center">
-                        <span
-                          className={
-                            fs.state === 'loaded'
-                              ? 'text-emerald-600 font-semibold inline-flex items-center gap-1'
-                              : 'text-slate-400 font-medium inline-flex items-center gap-1'
-                          }
-                        >
-                          {fs.state === 'loaded' ? (
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                          ) : (
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0 animate-pulse" />
-                          )}
-                          {fs.name}
+                    visibleFileStatuses.map((fs, idx) => {
+                      let statusClasses = 'text-slate-400 font-medium inline-flex items-center gap-1';
+                      let dotElement = <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0 animate-pulse" />;
+                      
+                      if (fs.state === 'loaded') {
+                        statusClasses = 'text-emerald-600 font-semibold inline-flex items-center gap-1';
+                        dotElement = <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />;
+                      } else if (fs.state === 'error') {
+                        statusClasses = 'text-red-600 font-semibold inline-flex items-center gap-1';
+                        dotElement = <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />;
+                      }
+
+                      return (
+                        <span key={idx} className="inline-flex items-center">
+                          <span className={statusClasses}>
+                            {dotElement}
+                            {fs.name}
+                          </span>
+                          {idx < visibleFileStatuses.length - 1 ? <span className="text-slate-300 ml-1.5 mr-0.5">|</span> : ''}
                         </span>
-                        {idx < visibleFileStatuses.length - 1 ? <span className="text-slate-300 ml-1.5 mr-0.5">|</span> : ''}
-                      </span>
-                    ))
+                      );
+                    })
                   ) : (
                     <span className="text-slate-400 font-medium flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0" />
@@ -1626,6 +1636,21 @@ export default function App() {
                     <span className="text-blue-600 shrink-0 text-[10px] font-bold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 flex items-center">
                       {`${rasterToastData.loadedCount ?? 0}/${rasterToastData.totalCount ?? 0}`}
                     </span>
+                  </div>
+                )}
+
+                {/* 3. Nút Retry khi hoàn tất quá trình tải mà có file bị lỗi */}
+                {isFinishedWithErrors && (
+                  <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
+                    <button
+                      type="button"
+                      onClick={handleRetryFailed}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded transition-colors cursor-pointer shadow-2xs"
+                      title="Thử tải lại các file raster chưa thành công"
+                    >
+                      <RotateCw className="w-3 h-3 text-red-600" />
+                      <span>Thử lại</span>
+                    </button>
                   </div>
                 )}
               </div>

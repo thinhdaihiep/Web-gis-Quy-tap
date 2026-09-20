@@ -192,8 +192,11 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
   let lastError: any = null;
 
   for (const targetUrl of urlsToTry) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout per attempt
     try {
-      const response = await fetch(targetUrl);
+      const response = await fetch(targetUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -244,6 +247,7 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
         }
       }
     } catch (err) {
+      clearTimeout(timeoutId);
       lastError = err;
       console.warn(`Thử tải từ ${targetUrl} không thành công, đang thử nguồn tiếp theo...`, err);
     }
