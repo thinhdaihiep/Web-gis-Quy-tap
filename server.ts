@@ -1,12 +1,23 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { Readable } from 'stream';
 import { createServer as createViteServer } from 'vite';
 import { fromUrl, fromArrayBuffer } from 'geotiff';
 import proj4 from 'proj4';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+
+// Server-side cache directory for downloaded raster files
+const RASTER_CACHE_DIR = path.join('/tmp', 'raster_cache');
+try {
+  if (!fs.existsSync(RASTER_CACHE_DIR)) {
+    fs.mkdirSync(RASTER_CACHE_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.warn('Could not initialize /tmp/raster_cache:', err);
+}
 
 // Register projection definitions
 proj4.defs('EPSG:3857', '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs');
@@ -200,37 +211,87 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing url parameter' });
       }
 
-      // Follow redirect to get final direct download URL (AWS S3 / raw asset)
-      let effectiveUrl = targetUrl;
-      try {
-        const headRes = await fetch(targetUrl, {
-          method: 'HEAD',
-          redirect: 'follow',
-          headers: { 'User-Agent': 'Mozilla/5.0 WebGIS-COG-Reader' }
-        });
-        if (headRes.url) {
-          effectiveUrl = headRes.url;
-        }
-      } catch (headErr) {
-        // Proceed with original url
-      }
+      const urlHash = crypto.createHash('sha256').update(targetUrl).digest('hex');
+      const cachedFilePath = path.join(RASTER_CACHE_DIR, `${urlHash}.tif`);
 
       let tiff: any = null;
-      try {
-        tiff = await fromUrl(effectiveUrl);
-      } catch (fromUrlErr) {
-        // Fallback: Read first 128KB header range
-        const rangeRes = await fetch(effectiveUrl, {
-          headers: {
-            'Range': 'bytes=0-131071',
-            'User-Agent': 'Mozilla/5.0 WebGIS-COG-Reader'
+
+      // 1. Fast path: check local disk cache first
+      if (fs.existsSync(cachedFilePath)) {
+        try {
+          const buf = fs.readFileSync(cachedFilePath);
+          tiff = await fromArrayBuffer(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+        } catch (readErr) {
+          console.warn('Could not read from cached raster file:', readErr);
+        }
+      }
+
+      // 2. Network path if not cached
+      if (!tiff) {
+        let effectiveUrl = targetUrl;
+        const boundsHeaders: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebGIS-COG-Reader/1.0',
+        };
+
+        let cur = targetUrl;
+        let hops = 0;
+        while (hops < 6) {
+          if (cur.includes('github.com') && process.env.GitHub_Access) {
+            boundsHeaders['Authorization'] = `token ${process.env.GitHub_Access}`;
+          } else {
+            delete boundsHeaders['Authorization'];
           }
-        });
-        if (rangeRes.ok || rangeRes.status === 206) {
-          const buf = await rangeRes.arrayBuffer();
-          tiff = await fromArrayBuffer(buf);
-        } else {
-          throw fromUrlErr;
+          try {
+            const headRes = await fetch(cur, {
+              method: 'HEAD',
+              redirect: 'manual',
+              headers: boundsHeaders,
+            });
+            if ([301, 302, 303, 307, 308].includes(headRes.status)) {
+              const loc = headRes.headers.get('location');
+              if (loc) {
+                cur = new URL(loc, cur).toString();
+                effectiveUrl = cur;
+                hops++;
+                continue;
+              }
+            }
+          } catch (_) {
+            break;
+          }
+          break;
+        }
+
+        try {
+          tiff = await fromUrl(effectiveUrl);
+        } catch (fromUrlErr) {
+          // Fallback: Read first 128KB header range
+          const rangeHeaders: Record<string, string> = {
+            Range: 'bytes=0-131071',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebGIS-COG-Reader/1.0',
+          };
+          if (effectiveUrl.includes('github.com') && process.env.GitHub_Access) {
+            rangeHeaders['Authorization'] = `token ${process.env.GitHub_Access}`;
+          }
+          const rangeRes = await fetch(effectiveUrl, {
+            headers: rangeHeaders,
+          });
+          if (rangeRes.ok || rangeRes.status === 206) {
+            const buf = await rangeRes.arrayBuffer();
+            if (buf.byteLength >= 4) {
+              const view = new DataView(buf);
+              const m = view.getUint16(0);
+              if (m === 0x4949 || m === 0x4d4d) {
+                tiff = await fromArrayBuffer(buf);
+              } else {
+                throw new Error('Not a valid TIFF format');
+              }
+            } else {
+              throw new Error('Buffer too small for TIFF');
+            }
+          } else {
+            throw fromUrlErr;
+          }
         }
       }
 
@@ -267,17 +328,17 @@ async function startServer() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges, Content-Type');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges, Content-Type, X-Raster-Cache');
     res.setHeader('Accept-Ranges', 'bytes');
     return res.sendStatus(200);
   });
 
-  // API route for proxying raster / GeoTIFF / COG with Range support & CORS
+  // API route for proxying raster / GeoTIFF / COG with Range support, Server Disk Cache & CORS
   app.get('/api/proxy-raster', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges, Content-Type');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges, Content-Type, X-Raster-Cache');
     res.setHeader('Accept-Ranges', 'bytes');
 
     const abortController = new AbortController();
@@ -292,25 +353,72 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing url parameter' });
       }
 
+      const urlHash = crypto.createHash('sha256').update(targetUrl).digest('hex');
+      const cachedFilePath = path.join(RASTER_CACHE_DIR, `${urlHash}.tif`);
+
+      // 1. FAST PATH: Serve directly from server disk cache if available
+      if (fs.existsSync(cachedFilePath)) {
+        try {
+          const stats = fs.statSync(cachedFilePath);
+          if (stats.size > 0) {
+            const total = stats.size;
+            res.setHeader('Content-Type', 'image/tiff');
+            res.setHeader('X-Raster-Cache', 'HIT');
+
+            if (req.method === 'HEAD') {
+              res.setHeader('Content-Length', total);
+              return res.status(200).end();
+            }
+
+            if (req.headers.range) {
+              const range = req.headers.range;
+              const parts = range.replace(/bytes=/, '').split('-');
+              const start = parseInt(parts[0], 10);
+              const end = parts[1] ? parseInt(parts[1], 10) : total - 1;
+
+              if (isNaN(start) || start >= total || end >= total || start > end) {
+                res.setHeader('Content-Range', `bytes */${total}`);
+                return res.status(416).end();
+              }
+
+              const chunkSize = end - start + 1;
+              res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+              res.setHeader('Content-Length', chunkSize);
+              res.status(206);
+              return fs.createReadStream(cachedFilePath, { start, end }).pipe(res);
+            } else {
+              res.setHeader('Content-Length', total);
+              res.status(200);
+              return fs.createReadStream(cachedFilePath).pipe(res);
+            }
+          }
+        } catch (cacheErr) {
+          console.warn('Cache read error, falling back to upstream:', cacheErr);
+        }
+      }
+
+      // 2. UPSTREAM PATH: Fetch from GitHub / S3
       const headers: Record<string, string> = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebGIS-Raster-Proxy/1.0',
         Accept: '*/*',
       };
 
-      if (targetUrl.includes('github.com') && process.env.GitHub_Access) {
-        headers['Authorization'] = `token ${process.env.GitHub_Access}`;
-      }
-
       if (req.headers.range) {
         headers['Range'] = req.headers.range;
       }
 
-      // Manually follow redirects so that Range header is preserved across GitHub / S3 redirects
       let currentUrl = targetUrl;
       let hops = 0;
       let upstreamRes: any = null;
 
       while (hops < 6) {
+        // Send GitHub Token to github.com if available; ALWAYS strip Authorization for non-github hosts (like S3)
+        if (currentUrl.includes('github.com') && process.env.GitHub_Access) {
+          headers['Authorization'] = `token ${process.env.GitHub_Access}`;
+        } else {
+          delete headers['Authorization'];
+        }
+
         upstreamRes = await fetch(currentUrl, {
           method: req.method === 'HEAD' ? 'HEAD' : 'GET',
           headers,
@@ -320,7 +428,6 @@ async function startServer() {
 
         if ([301, 302, 303, 307, 308].includes(upstreamRes.status)) {
           const loc = upstreamRes.headers.get('location');
-          // Important: Cancel redirect response body to release Undici connection back to pool
           if (upstreamRes.body) {
             try {
               await upstreamRes.body.cancel();
@@ -338,7 +445,6 @@ async function startServer() {
         throw new Error('No response from upstream raster URL');
       }
 
-      // If client closed connection while we were resolving upstream, exit cleanly
       if (req.destroyed || abortController.signal.aborted) {
         if (upstreamRes.body) {
           try {
@@ -347,6 +453,19 @@ async function startServer() {
         }
         return;
       }
+
+      // If upstream failed with an error status, do NOT stream error HTML as TIFF
+      if (upstreamRes.status >= 400) {
+        let errBody = '';
+        try {
+          errBody = await upstreamRes.text();
+        } catch (_) {}
+        return res.status(upstreamRes.status).json({
+          error: `Upstream returned ${upstreamRes.status}: ${errBody.slice(0, 200)}`,
+        });
+      }
+
+      res.setHeader('X-Raster-Cache', 'MISS');
 
       const contentType = upstreamRes.headers.get('content-type');
       if (contentType) {
@@ -376,12 +495,106 @@ async function startServer() {
         return res.end();
       }
 
-      // Stream response to client instead of buffering whole raster in RAM
+      // Stream response to client and cache to disk if this is a complete GET download
       const stream = Readable.fromWeb(upstreamRes.body as any);
+
+      // If full 200 response (not partial range), tee-stream to local disk cache
+      let fileWriteStream: fs.WriteStream | null = null;
+      let tempFilePath = '';
+
+      if (upstreamRes.status === 200 && !req.headers.range) {
+        tempFilePath = `${cachedFilePath}.${Date.now()}.tmp`;
+        try {
+          fileWriteStream = fs.createWriteStream(tempFilePath);
+          // Explicitly handle and swallow errors on write stream to prevent unhandled 'error' crash
+          fileWriteStream.on('error', (wsErr) => {
+            console.warn('Raster cache file write error handled:', wsErr?.message);
+          });
+        } catch (wsErr) {
+          console.warn('Could not open write stream for raster cache:', wsErr);
+          fileWriteStream = null;
+        }
+      }
+
+      let isCompleted = false;
+      let isStreamFinished = false;
+
+      if (fileWriteStream) {
+        const ws = fileWriteStream;
+        stream.on('data', (chunk) => {
+          if (!ws.destroyed && !ws.closed && !isCompleted) {
+            try {
+              ws.write(chunk);
+            } catch (_) {}
+          }
+        });
+
+        stream.on('end', () => {
+          isStreamFinished = true;
+          if (!ws.destroyed && !ws.closed) {
+            ws.end(() => {
+              isCompleted = true;
+              try {
+                if (fs.existsSync(tempFilePath)) {
+                  const stats = fs.statSync(tempFilePath);
+                  if (stats.size > 1024) {
+                    const fd = fs.openSync(tempFilePath, 'r');
+                    const head = Buffer.alloc(2);
+                    fs.readSync(fd, head, 0, 2, 0);
+                    fs.closeSync(fd);
+                    const isTiff = (head[0] === 0x49 && head[1] === 0x49) || (head[0] === 0x4D && head[1] === 0x4D);
+                    if (isTiff) {
+                      fs.renameSync(tempFilePath, cachedFilePath);
+                      console.log('Raster cached to server disk:', cachedFilePath);
+                    } else {
+                      fs.unlinkSync(tempFilePath);
+                    }
+                  } else {
+                    fs.unlinkSync(tempFilePath);
+                  }
+                }
+              } catch (rErr) {
+                console.warn('Could not validate/rename temp cached raster:', rErr);
+              }
+            });
+          }
+        });
+      } else {
+        stream.on('end', () => {
+          isStreamFinished = true;
+        });
+      }
+
+      const cleanupTempFile = () => {
+        // Only cleanup if connection was truly aborted before completion
+        if (fileWriteStream && !isCompleted && !isStreamFinished && !res.writableEnded) {
+          try {
+            fileWriteStream.removeAllListeners();
+            fileWriteStream.on('error', () => {}); // swallow any remaining destroy events
+            fileWriteStream.destroy();
+          } catch (_) {}
+          try {
+            if (tempFilePath && fs.existsSync(tempFilePath)) {
+              fs.unlinkSync(tempFilePath);
+            }
+          } catch (_) {}
+        }
+      };
+
       stream.on('error', (err: any) => {
+        cleanupTempFile();
         if (!abortController.signal.aborted && !req.destroyed && err?.message !== 'terminated' && err?.name !== 'AbortError') {
           console.warn('Raster proxy stream error:', err?.message);
         }
+      });
+
+      req.on('close', () => {
+        cleanupTempFile();
+        try {
+          if (!stream.destroyed) {
+            stream.destroy();
+          }
+        } catch (_) {}
       });
 
       stream.pipe(res);
@@ -393,7 +606,6 @@ async function startServer() {
         err?.code === 'ECONNRESET' ||
         err?.message?.includes('terminated')
       ) {
-        // Normal client abort / socket cancellation when navigating or zooming map
         return;
       }
       console.error('Raster proxy error:', err);

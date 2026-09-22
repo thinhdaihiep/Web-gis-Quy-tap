@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import L from 'leaflet';
 import proj4 from 'proj4';
 import { createLeafletGeoRasterLayer } from '../utils/geotiffLoader';
+import { removeCachedRaster } from '../utils/rasterCache';
 import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 
@@ -14,6 +15,7 @@ import {
   MapInteractionMode,
   RasterLayer,
   RasterLoadingStatus,
+  LatLngBoundsBox,
   normalizeBoundsBox,
   isBoundsInViewport,
 } from '../types';
@@ -988,6 +990,31 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       const activeLayer = targetLayers.length > 0 ? targetLayers[0] : null;
       const activeLayerName = activeLayer?.name || 'Bản đồ Raster';
 
+      // Immediate Instant UI Response: Show skeleton bounding boxes and auto-fit to layer bounds
+      if (isRasterVisible && activeLayer) {
+        let layerBoundsBox: LatLngBoundsBox | null = null;
+        if (activeLayer.bounds) {
+          layerBoundsBox = normalizeBoundsBox(activeLayer.bounds);
+        }
+        if (activeLayer.files && activeLayer.files.length > 0) {
+          activeLayer.files.forEach((f) => {
+            const b = normalizeBoundsBox(f.bounds);
+            if (b) {
+              if (!layerBoundsBox) {
+                layerBoundsBox = { ...b };
+              } else {
+                layerBoundsBox = {
+                  south: Math.min(layerBoundsBox.south, b.south),
+                  west: Math.min(layerBoundsBox.west, b.west),
+                  north: Math.max(layerBoundsBox.north, b.north),
+                  east: Math.max(layerBoundsBox.east, b.east),
+                };
+              }
+            }
+          });
+        }
+      }
+
       let allFilesToProcess: Array<{
         url: string;
         fileName?: string;
@@ -1158,6 +1185,10 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       const fileNames = visibleStatuses.map(fs => fs.name);
       const isInitialDone = loadedCount >= activeFiles.length;
 
+      // Tìm file đang trong tiến trình nạp nếu có
+      const currentlyPendingFile = activeFiles.find((f) => pendingUrls.has(f.url));
+      const activePendingName = currentlyPendingFile ? getShortRasterName(currentlyPendingFile) : undefined;
+
       reportRasterStatus({
         state: isInitialDone ? 'loaded' : 'loading',
         progress: Math.round((loadedCount / activeFiles.length) * 100) || 0,
@@ -1168,6 +1199,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         bounds: combinedBoundsBox,
         fileNames,
         fileStatuses: visibleStatuses,
+        currentLoadingName: activePendingName,
       });
 
       if (isInstantOnly) {
@@ -1181,6 +1213,26 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         }
 
         pendingUrls.add(file.url);
+        const shortName = getShortRasterName(file);
+        if (shortName) {
+          visibleStatuses = visibleStatuses.map((item) =>
+            item.name === shortName ? { ...item, state: 'loading' } : item
+          );
+          reportRasterStatus({
+            state: 'loading',
+            progress: Math.round((loadedCount / activeFiles.length) * 100) || 0,
+            message: `${loadedCount}/${activeFiles.length}`,
+            loadedCount,
+            failedCount: failedUrls.size,
+            totalCount: activeFiles.length,
+            activeLayerName,
+            bounds: combinedBoundsBox,
+            fileNames: visibleStatuses.map((fs) => fs.name),
+            fileStatuses: visibleStatuses,
+            currentLoadingName: shortName,
+          });
+        }
+
         try {
           const { layer: geoRasterLayer, metadata } = await createLeafletGeoRasterLayer(file.url, {
             opacity: file.opacity ?? 1.0,
@@ -1231,10 +1283,12 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               bounds: combinedBoundsBox,
               fileNames: updatedNames,
               fileStatuses: visibleStatuses,
+              currentLoadingName: undefined,
             });
           }
         } catch (e: any) {
           console.error('Lỗi khi nạp file raster COG:', file.fileName || file.url, e);
+          removeCachedRaster(file.url).catch(() => {});
           failedUrls.add(file.url);
           const shortName = getShortRasterName(file);
           if (shortName) {
@@ -1255,6 +1309,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             bounds: combinedBoundsBox,
             fileNames: updatedNames,
             fileStatuses: visibleStatuses,
+            currentLoadingName: undefined,
           });
         } finally {
           pendingUrls.delete(file.url);

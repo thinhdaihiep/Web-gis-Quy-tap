@@ -109,6 +109,7 @@ export interface RasterLoadingStatus {
   fileNames?: string[];
   fileStatuses?: { name: string; state: 'loading' | 'loaded' | 'error'; inViewport?: boolean }[];
   failedCount?: number;
+  currentLoadingName?: string;
 }
 
 /**

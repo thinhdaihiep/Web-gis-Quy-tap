@@ -32,6 +32,18 @@ export function getRasterProxyUrl(url: string): string {
   return url;
 }
 
+export function isTiffBuffer(buf: ArrayBuffer | null | undefined): boolean {
+  if (!buf || buf.byteLength < 4) return false;
+  try {
+    const view = new DataView(buf);
+    const magic = view.getUint16(0);
+    // 0x4949 = 'II' (Little-Endian TIFF), 0x4D4D = 'MM' (Big-Endian TIFF)
+    return magic === 0x4949 || magic === 0x4d4d;
+  } catch {
+    return false;
+  }
+}
+
 export async function getCachedRaster(key: string): Promise<ArrayBuffer | null> {
   // Level 1: Browser Cache API (Fastest, handles HTTP responses natively)
   if ('caches' in window) {
@@ -39,7 +51,13 @@ export async function getCachedRaster(key: string): Promise<ArrayBuffer | null> 
       const cache = await caches.open('gis_raster_cache');
       const response = await cache.match(key);
       if (response) {
-        return await response.arrayBuffer();
+        const buf = await response.arrayBuffer();
+        if (isTiffBuffer(buf)) {
+          return buf;
+        } else {
+          // Corrupted entry: purge immediately
+          await cache.delete(key);
+        }
       }
     } catch (err) {
       console.warn('Cache API read error:', err);
@@ -49,7 +67,7 @@ export async function getCachedRaster(key: string): Promise<ArrayBuffer | null> 
   // Level 2: IndexedDB (Fallback for raw buffer storage)
   try {
     const db = await openDB();
-    return new Promise((resolve) => {
+    const buf = await new Promise<ArrayBuffer | null>((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readonly');
       const store = tx.objectStore(STORE_NAME);
       const getReq = store.get(key);
@@ -66,6 +84,17 @@ export async function getCachedRaster(key: string): Promise<ArrayBuffer | null> 
 
       getReq.onerror = () => resolve(null);
     });
+
+    if (buf) {
+      if (isTiffBuffer(buf)) {
+        return buf;
+      } else {
+        // Corrupted entry: delete from IndexedDB
+        removeCachedRaster(key).catch(() => {});
+        return null;
+      }
+    }
+    return null;
   } catch (err) {
     console.warn('IndexedDB read error:', err);
     return null;
@@ -73,12 +102,18 @@ export async function getCachedRaster(key: string): Promise<ArrayBuffer | null> 
 }
 
 export async function saveCachedRaster(key: string, data: ArrayBuffer): Promise<void> {
+  // Only cache verified valid TIFF / COG files
+  if (!isTiffBuffer(data)) {
+    console.warn('saveCachedRaster: Skip caching non-TIFF buffer for', key);
+    return;
+  }
+
   // Save to Cache API
   if ('caches' in window) {
     try {
       const cache = await caches.open('gis_raster_cache');
       const response = new Response(data, {
-        headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': data.byteLength.toString() }
+        headers: { 'Content-Type': 'image/tiff', 'Content-Length': data.byteLength.toString() }
       });
       await cache.put(key, response);
     } catch (err) {
@@ -182,18 +217,17 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
     return cached;
   }
 
-  // URLs to try in order: 1. Express backend proxy (Zero CORS issues + Range support) -> 2. Direct -> 3. Fallback CORS proxy
+  // URLs to try in order: 1. Express backend proxy (with /tmp server disk cache) -> 2. Direct URL
   const urlsToTry = [
     getRasterProxyUrl(url),
     url,
-    `https://corsproxy.io/?${encodeURIComponent(url)}`,
   ];
 
   let lastError: any = null;
 
   for (const targetUrl of urlsToTry) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout per attempt
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout per attempt for large rasters
     try {
       const response = await fetch(targetUrl, { signal: controller.signal });
       clearTimeout(timeoutId);
@@ -207,10 +241,12 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
       if (!response.body || totalBytes <= 0) {
         // Fallback if ReadableStream is not supported or Content-Length is missing
         const arrayBuffer = await response.arrayBuffer();
-        if (arrayBuffer.byteLength > 0) {
+        if (isTiffBuffer(arrayBuffer)) {
           saveCachedRaster(url, arrayBuffer).catch(() => {});
           if (onProgress) onProgress(100);
           return arrayBuffer;
+        } else {
+          throw new Error(`Nguồn ${targetUrl} trả về dữ liệu không phải file TIFF/COG hợp lệ.`);
         }
       } else {
         const reader = response.body.getReader();
@@ -240,10 +276,12 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
         }
 
         const arrayBuffer = concatenated.buffer;
-        if (arrayBuffer.byteLength > 0) {
+        if (isTiffBuffer(arrayBuffer)) {
           saveCachedRaster(url, arrayBuffer).catch(() => {});
           if (onProgress) onProgress(100);
           return arrayBuffer;
+        } else {
+          throw new Error(`Nguồn ${targetUrl} trả về dữ liệu không phải file TIFF/COG hợp lệ.`);
         }
       }
     } catch (err) {

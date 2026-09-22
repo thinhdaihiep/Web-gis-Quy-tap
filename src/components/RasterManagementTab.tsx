@@ -919,6 +919,11 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                           const isLoaded = rasterStatus?.fileStatuses?.some(
                             (fs) => fs.name === file.fileName && fs.state === 'loaded'
                           );
+                          const isCurrentlyLoading =
+                            rasterStatus?.currentLoadingName === file.fileName ||
+                            rasterStatus?.fileStatuses?.some(
+                              (fs) => fs.name === file.fileName && fs.state === 'loading'
+                            );
                           const isInViewport = rasterStatus?.fileStatuses?.some(
                             (fs) => fs.name === file.fileName && fs.inViewport
                           );
@@ -927,21 +932,51 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                             <div
                               key={file.id}
                               className={`py-2 px-1.5 flex items-center justify-between gap-2 rounded transition ${
-                                isLoaded ? 'bg-emerald-50/50 border border-emerald-100' : 
-                                isInViewport ? 'bg-amber-50/50 border border-amber-100' : 'hover:bg-slate-50/80'
+                                isLoaded
+                                  ? 'bg-emerald-50/50 border border-emerald-100'
+                                  : isCurrentlyLoading
+                                  ? 'bg-amber-50/70 border border-amber-200'
+                                  : isInViewport
+                                  ? 'bg-amber-50/40 border border-amber-100'
+                                  : 'hover:bg-slate-50/80'
                               }`}
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <File className={`w-3.5 h-3.5 shrink-0 ${isLoaded ? 'text-emerald-500' : isInViewport ? 'text-amber-500' : 'text-blue-600'}`} />
+                                <File
+                                  className={`w-3.5 h-3.5 shrink-0 ${
+                                    isLoaded
+                                      ? 'text-emerald-500'
+                                      : isCurrentlyLoading || isInViewport
+                                      ? 'text-amber-500'
+                                      : 'text-blue-600'
+                                  }`}
+                                />
                                 <div className="truncate min-w-0">
                                   <div className="flex items-center gap-2 truncate">
                                     <p
-                                      className={`text-xs truncate ${isLoaded ? 'font-bold text-emerald-700' : isInViewport ? 'font-bold text-amber-700' : 'font-medium text-slate-700'}`}
+                                      className={`text-xs truncate ${
+                                        isLoaded
+                                          ? 'font-bold text-emerald-700'
+                                          : isCurrentlyLoading
+                                          ? 'font-bold text-amber-600'
+                                          : isInViewport
+                                          ? 'font-bold text-amber-700'
+                                          : 'font-medium text-slate-700'
+                                      }`}
                                       title={file.fileName}
                                     >
                                       {file.fileName}
                                     </p>
-                                    {isInViewport && !isLoaded && (
+                                    {isCurrentlyLoading && !isLoaded && (
+                                      <span
+                                        className="text-amber-700 bg-amber-100/90 px-1.5 py-0.2 rounded text-[9px] font-bold border border-amber-300 flex items-center gap-1 shrink-0 shadow-2xs"
+                                        title="Raster này đang được tải xuống và nạp lên bản đồ"
+                                      >
+                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                        Đang tải
+                                      </span>
+                                    )}
+                                    {!isCurrentlyLoading && isInViewport && !isLoaded && (
                                       <span
                                         className="text-amber-700 bg-amber-100/80 px-1.5 py-0.2 rounded text-[9px] font-bold border border-amber-300 flex items-center gap-1 shrink-0 shadow-2xs"
                                         title="Raster này nằm trong khung hình và đang chờ tải"

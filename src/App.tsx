@@ -31,7 +31,7 @@ import {
   getStoredUser
 } from './firebaseService';
 import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
-import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, Loader2, CheckCircle2, Layers } from 'lucide-react';
+import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, CheckCircle2, Layers } from 'lucide-react';
 
 function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: any } {
   if (!featOrGeom) return { type: 'Point', coordinates: [0, 0] };
@@ -1600,6 +1600,13 @@ export default function App() {
               (rasterToastData.totalCount ?? 0) > 0 &&
               ((rasterToastData.loadedCount ?? 0) + (rasterToastData.failedCount ?? 0)) < (rasterToastData.totalCount ?? 0);
 
+            const currentLoadingName = isOverallLoading ? rasterToastData.currentLoadingName : undefined;
+
+            // Nếu raster đang tải trùng với raster ở khung nhìn thì ẩn tên raster ở khung nhìn đi (tự động hiện lại khi tải xong)
+            const filteredVisibleStatuses = visibleFileStatuses.filter(
+              (fs) => !(currentLoadingName && fs.name === currentLoadingName && fs.state !== 'loaded')
+            );
+
             const hasFailedFiles = (rasterToastData.failedCount ?? 0) > 0;
             const isFinishedWithErrors = !isOverallLoading && hasFailedFiles;
             const displayTitle = visibleFileStatuses.map(fs => fs.name).join(', ');
@@ -1610,15 +1617,15 @@ export default function App() {
 
             return (
               <div
-                className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/90 backdrop-blur-[3px] text-slate-700 text-[11px] px-2.5 py-1 flex items-center gap-3 rounded-tr-md border-t border-r border-slate-200/80 shadow-xs max-w-[360px] sm:max-w-[480px]"
+                className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/90 backdrop-blur-[3px] text-slate-700 text-[11px] px-2.5 py-1 flex items-center gap-2.5 rounded-tr-md border-t border-r border-slate-200/80 shadow-xs max-w-[360px] sm:max-w-[480px]"
                 title={displayTitle}
               >
-                {/* 1. Phần danh sách file trong khung nhìn */}
+                {/* 1. Phần danh sách file trong khung nhìn (ẩn file đang tải nếu trùng, tự động hiện lại khi tải xong) */}
                 <span className="font-medium truncate whitespace-nowrap overflow-hidden flex items-center gap-1.5">
-                  {visibleFileStatuses.length > 0 ? (
-                    visibleFileStatuses.map((fs, idx) => {
-                      let statusClasses = 'text-slate-400 font-medium inline-flex items-center gap-1';
-                      let dotElement = <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0 animate-pulse" />;
+                  {filteredVisibleStatuses.length > 0 ? (
+                    filteredVisibleStatuses.map((fs, idx) => {
+                      let statusClasses = 'text-amber-600 font-semibold inline-flex items-center gap-1';
+                      let dotElement = <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 animate-pulse" />;
                       
                       if (fs.state === 'loaded') {
                         statusClasses = 'text-emerald-600 font-semibold inline-flex items-center gap-1';
@@ -1634,10 +1641,13 @@ export default function App() {
                             {dotElement}
                             {fs.name}
                           </span>
-                          {idx < visibleFileStatuses.length - 1 ? <span className="text-slate-300 ml-1.5 mr-0.5">|</span> : ''}
+                          {idx < filteredVisibleStatuses.length - 1 ? <span className="text-slate-300 ml-1.5 mr-0.5">|</span> : ''}
                         </span>
                       );
                     })
+                  ) : visibleFileStatuses.length > 0 && currentLoadingName ? (
+                    // Nếu tất cả ảnh trong khung nhìn đang được tải (đã hiển thị ở phần đang tải bên cạnh)
+                    null
                   ) : (
                     <span className="text-slate-400 font-medium flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0" />
@@ -1646,12 +1656,15 @@ export default function App() {
                   )}
                 </span>
                 
-                {/* 2. Phần trạng thái tải (con xoay + số file đã tải/tổng số file dự kiến) phía sau */}
-                {isOverallLoading && (
-                  <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500 shrink-0" />
-                    <span className="text-blue-600 shrink-0 text-[10px] font-bold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 flex items-center">
-                      {`${rasterToastData.loadedCount ?? 0}/${rasterToastData.totalCount ?? 0}`}
+                {/* 2. Phần raster đang tải: hiển thị tên raster màu vàng cam với chấm nhấp nháy (đã bỏ con xoay và số đếm) */}
+                {isOverallLoading && currentLoadingName && (
+                  <div className={`flex items-center gap-1.5 ${filteredVisibleStatuses.length > 0 ? 'pl-2 border-l border-slate-200' : ''}`}>
+                    <span
+                      className="text-amber-600 font-bold text-[11px] truncate max-w-[150px] sm:max-w-[200px] inline-flex items-center gap-1.5"
+                      title={`Đang tải: ${currentLoadingName}`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                      <span className="truncate">{currentLoadingName}</span>
                     </span>
                   </div>
                 )}
