@@ -236,11 +236,6 @@ async function startServer() {
         let cur = targetUrl;
         let hops = 0;
         while (hops < 6) {
-          if (cur.includes('github.com') && process.env.GitHub_Access) {
-            boundsHeaders['Authorization'] = `token ${process.env.GitHub_Access}`;
-          } else {
-            delete boundsHeaders['Authorization'];
-          }
           try {
             const headRes = await fetch(cur, {
               method: 'HEAD',
@@ -265,14 +260,10 @@ async function startServer() {
         try {
           tiff = await fromUrl(effectiveUrl);
         } catch (fromUrlErr) {
-          // Fallback: Read first 128KB header range
           const rangeHeaders: Record<string, string> = {
             Range: 'bytes=0-131071',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebGIS-COG-Reader/1.0',
           };
-          if (effectiveUrl.includes('github.com') && process.env.GitHub_Access) {
-            rangeHeaders['Authorization'] = `token ${process.env.GitHub_Access}`;
-          }
           const rangeRes = await fetch(effectiveUrl, {
             headers: rangeHeaders,
           });
@@ -290,7 +281,13 @@ async function startServer() {
               throw new Error('Buffer too small for TIFF');
             }
           } else {
-            throw fromUrlErr;
+            const status = rangeRes.status;
+            if (status === 404) {
+              throw new Error('HTTP 404: Tệp raster không tồn tại (404)');
+            } else if (status === 401 || status === 403) {
+              throw new Error(`HTTP ${status}: Liên kết tải đã hết hạn hoặc không có quyền truy cập`);
+            }
+            throw fromUrlErr || new Error(`HTTP ${status}: ${rangeRes.statusText}`);
           }
         }
       }
@@ -315,10 +312,19 @@ async function startServer() {
         geoKeys
       });
     } catch (err: any) {
-      console.error('API cog-bounds error:', err);
-      return res.status(500).json({
+      const errMsg = err?.message || '';
+      const is404 = errMsg.includes('404') || err?.status === 404;
+      const isExpiredOrAuth = errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('hết hạn') || errMsg.includes('expired');
+      const statusCode = is404 ? 404 : isExpiredOrAuth ? 410 : 500;
+      
+      return res.status(statusCode).json({
         success: false,
-        error: err.message || 'Không thể trích xuất Header COG'
+        status: statusCode,
+        error: is404
+          ? 'Tệp raster không tồn tại (404)'
+          : isExpiredOrAuth
+          ? 'Liên kết tải đã hết hạn, vui lòng nhấn Tải lại danh sách từ GitHub Release'
+          : errMsg || 'Không thể trích xuất Header COG'
       });
     }
   });
@@ -412,12 +418,8 @@ async function startServer() {
       let upstreamRes: any = null;
 
       while (hops < 6) {
-        // Send GitHub Token to github.com if available; ALWAYS strip Authorization for non-github hosts (like S3)
-        if (currentUrl.includes('github.com') && process.env.GitHub_Access) {
-          headers['Authorization'] = `token ${process.env.GitHub_Access}`;
-        } else {
-          delete headers['Authorization'];
-        }
+        // ALWAYS strip Authorization for all hosts to prevent S3 conflicts and maintain public access
+        delete headers['Authorization'];
 
         upstreamRes = await fetch(currentUrl, {
           method: req.method === 'HEAD' ? 'HEAD' : 'GET',

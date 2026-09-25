@@ -238,6 +238,16 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
     setErrorMessage(null);
     setSuccessMessage(null);
 
+    // 1. Tạm dừng và reset hoàn toàn việc tải raster trên bản đồ trong khi đang quét và cập nhật Bounding Box
+    window.dispatchEvent(
+      new CustomEvent('pause-raster-loading', {
+        detail: {
+          layerId: layer.id,
+          message: `Đang tạm dừng tải để cập nhật chỉ mục Bounding Box cho "${layer.name}"...`,
+        },
+      })
+    );
+
     // Tự động xóa bộ nhớ đệm (IndexedDB & in-memory) của các file trong lớp để nạp file mới nhất
     const oldUrls = (layer.files || []).map((f) => f.url).filter(Boolean);
     if (oldUrls.length > 0) {
@@ -269,26 +279,29 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
           const assetsToUse = rasterAssets.length > 0 ? rasterAssets : releaseInfo.assets;
 
-          targetFiles = assetsToUse.map((asset) => ({
-            id: `gh_${asset.id}_${Date.now()}`,
-            fileName: asset.name,
-            url: asset.downloadUrl,
-            format: 'COG',
-            minZoom: 12,
-            maxZoom: 18,
-            fileSize: asset.size,
-            bounds: null, // Xóa sạch chỉ mục cũ để đọc lại chính xác từ Header
-            uploadedAt: asset.updatedAt || asset.createdAt || new Date().toISOString(),
-            source: 'github',
-          }));
+          targetFiles = assetsToUse.map((asset) => {
+            const existingFile = layer.files?.find((f) => f.fileName === asset.name || f.url === asset.downloadUrl);
+            return {
+              id: existingFile?.id || `gh_${asset.id}_${Date.now()}`,
+              fileName: asset.name,
+              url: asset.downloadUrl,
+              format: 'COG',
+              minZoom: 12,
+              maxZoom: 18,
+              fileSize: asset.size,
+              bounds: existingFile?.bounds || null, // Bảo toàn bounds cũ nếu đã có, không xóa sạch
+              uploadedAt: asset.updatedAt || asset.createdAt || new Date().toISOString(),
+              source: 'github',
+            };
+          });
         } catch (ghErr: any) {
           console.warn('Lỗi lấy assets GitHub:', ghErr);
-          // Nếu lỗi gọi GitHub, sử dụng danh sách file hiện có và reset bounds
-          targetFiles = layer.files.map((f) => ({ ...f, bounds: null }));
+          // Nếu lỗi gọi GitHub, sử dụng danh sách file hiện có và bảo toàn bounds cũ
+          targetFiles = layer.files.map((f) => ({ ...f }));
         }
       } else {
-        // Nếu là file URL thông thường, xóa sạch bounds cũ để quét lại từ đầu
-        targetFiles = layer.files.map((f) => ({ ...f, bounds: null }));
+        // Bảo toàn bounds cũ của file
+        targetFiles = layer.files.map((f) => ({ ...f }));
       }
 
       if (targetFiles.length === 0) {
@@ -366,6 +379,12 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
     } finally {
       setIndexingLayerId(null);
       setIndexingProgress(null);
+      // 2. Khôi phục và bắt đầu tải lại raster trên bản đồ với toạ độ Bounding Box mới nhất
+      window.dispatchEvent(
+        new CustomEvent('resume-raster-loading', {
+          detail: { layerId: layer.id },
+        })
+      );
     }
   };
 
@@ -924,6 +943,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                             rasterStatus?.fileStatuses?.some(
                               (fs) => fs.name === file.fileName && fs.state === 'loading'
                             );
+                          const isError = !isLoaded && !isCurrentlyLoading && rasterStatus?.fileStatuses?.some(
+                            (fs) => fs.name === file.fileName && fs.state === 'error'
+                          );
                           const isInViewport = rasterStatus?.fileStatuses?.some(
                             (fs) => fs.name === file.fileName && fs.inViewport
                           );
@@ -932,7 +954,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                             <div
                               key={file.id}
                               className={`py-2 px-1.5 flex items-center justify-between gap-2 rounded transition ${
-                                isLoaded
+                                isError
+                                  ? 'bg-rose-50/80 border border-rose-200'
+                                  : isLoaded
                                   ? 'bg-emerald-50/50 border border-emerald-100'
                                   : isCurrentlyLoading
                                   ? 'bg-amber-50/70 border border-amber-200'
@@ -944,7 +968,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                               <div className="flex items-center gap-2 min-w-0 flex-1">
                                 <File
                                   className={`w-3.5 h-3.5 shrink-0 ${
-                                    isLoaded
+                                    isError
+                                      ? 'text-rose-500'
+                                      : isLoaded
                                       ? 'text-emerald-500'
                                       : isCurrentlyLoading || isInViewport
                                       ? 'text-amber-500'
@@ -955,7 +981,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                                   <div className="flex items-center gap-2 truncate">
                                     <p
                                       className={`text-xs truncate ${
-                                        isLoaded
+                                        isError
+                                          ? 'font-bold text-rose-700'
+                                          : isLoaded
                                           ? 'font-bold text-emerald-700'
                                           : isCurrentlyLoading
                                           ? 'font-bold text-amber-600'
@@ -967,6 +995,15 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                                     >
                                       {file.fileName}
                                     </p>
+                                    {isError && (
+                                      <span
+                                        className="text-rose-700 bg-rose-100/90 px-1.5 py-0.2 rounded text-[9px] font-bold border border-rose-300 flex items-center gap-1 shrink-0 shadow-2xs"
+                                        title="Lỗi tải file raster (HTTP 404 / Không tìm thấy file trên GitHub hoặc URL hỏng)"
+                                      >
+                                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                        Lỗi tải (404/Không tìm thấy)
+                                      </span>
+                                    )}
                                     {isCurrentlyLoading && !isLoaded && (
                                       <span
                                         className="text-amber-700 bg-amber-100/90 px-1.5 py-0.2 rounded text-[9px] font-bold border border-amber-300 flex items-center gap-1 shrink-0 shadow-2xs"
@@ -976,7 +1013,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                                         Đang tải
                                       </span>
                                     )}
-                                    {!isCurrentlyLoading && isInViewport && !isLoaded && (
+                                    {!isCurrentlyLoading && isInViewport && !isLoaded && !isError && (
                                       <span
                                         className="text-amber-700 bg-amber-100/80 px-1.5 py-0.2 rounded text-[9px] font-bold border border-amber-300 flex items-center gap-1 shrink-0 shadow-2xs"
                                         title="Raster này nằm trong khung hình và đang chờ tải"

@@ -406,6 +406,7 @@ export const MapComponent: React.FC<MapProps> = ({
   const onRasterStatusChangeRef = useRef(onRasterStatusChange);
   onRasterStatusChangeRef.current = onRasterStatusChange;
   const lastRasterStatusJsonRef = useRef<string>('');
+  const isRasterPausedRef = useRef<boolean>(false);
 
   const reportRasterStatus = useCallback((status: RasterLoadingStatus) => {
     const json = JSON.stringify(status);
@@ -990,6 +991,21 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       const activeLayer = targetLayers.length > 0 ? targetLayers[0] : null;
       const activeLayerName = activeLayer?.name || 'Bản đồ Raster';
 
+      // Khi đang quét và cập nhật lại chỉ mục Bounding Box, tạm dừng nạp ảnh và xóa layer hiển thị
+      if (isRasterPausedRef.current) {
+        rasterGroup.clearLayers();
+        reportRasterStatus({
+          state: 'loading',
+          message: 'Đang tạm dừng tải raster để cập nhật chỉ mục Bounding Box...',
+          activeLayerName,
+          fileStatuses: [],
+          fileNames: [],
+          loadedCount: 0,
+          totalCount: 0,
+        });
+        return;
+      }
+
       // Immediate Instant UI Response: Show skeleton bounding boxes and auto-fit to layer bounds
       if (isRasterVisible && activeLayer) {
         let layerBoundsBox: LatLngBoundsBox | null = null;
@@ -1287,7 +1303,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             });
           }
         } catch (e: any) {
-          console.error('Lỗi khi nạp file raster COG:', file.fileName || file.url, e);
+          console.warn('Không thể nạp file raster COG (sẽ hiển thị trạng thái lỗi màu đỏ):', file.fileName || file.url, e?.message || e);
           removeCachedRaster(file.url).catch(() => {});
           failedUrls.add(file.url);
           const shortName = getShortRasterName(file);
@@ -1298,6 +1314,10 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           }
           const updatedNames = visibleStatuses.map((fs) => fs.name);
           const isDone = (loadedCount + failedUrls.size) >= activeFiles.length;
+          
+          // Giữ nguyên toàn bộ bounding box sẵn có của lớp, không tự ý làm rỗng hoặc thay đổi
+          const preservedBounds = combinedBoundsBox || normalizeBoundsBox(targetLayers[0]?.bounds) || normalizeBoundsBox(file.bounds);
+
           reportRasterStatus({
             state: isDone ? (loadedCount > 0 ? 'loaded' : 'error') : 'loading',
             progress: Math.round((loadedCount / activeFiles.length) * 100),
@@ -1306,7 +1326,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             failedCount: failedUrls.size,
             totalCount: activeFiles.length,
             activeLayerName,
-            bounds: combinedBoundsBox,
+            bounds: preservedBounds,
             fileNames: updatedNames,
             fileStatuses: visibleStatuses,
             currentLoadingName: undefined,
@@ -1404,16 +1424,55 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         cache.clear();
       }
       rasterGroup.clearLayers();
-      evaluateRasters();
+      if (!isRasterPausedRef.current) {
+        evaluateRasters();
+      }
     };
 
     const handleRetryFailedRastersEvent = () => {
       failedUrls.clear();
+      if (!isRasterPausedRef.current) {
+        evaluateRasters();
+      }
+    };
+
+    const handlePauseRasterLoadingEvent = (e: any) => {
+      isRasterPausedRef.current = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
+      rasterGroup.clearLayers();
+      failedUrls.clear();
+      const currentActive = rasterLayers?.find(
+        (l) => !activeRasterLayerId || l.id === activeRasterLayerId
+      );
+      reportRasterStatus({
+        state: 'loading',
+        message: e?.detail?.message || 'Đang tạm dừng tải raster để cập nhật chỉ mục Bounding Box...',
+        activeLayerName: currentActive?.name || 'Bản đồ Raster',
+        fileStatuses: [],
+        fileNames: [],
+        loadedCount: 0,
+        totalCount: 0,
+      });
+    };
+
+    const handleResumeRasterLoadingEvent = () => {
+      isRasterPausedRef.current = false;
+      failedUrls.clear();
+      cache.forEach((item) => {
+        if (item && typeof (item.layer as any).destroy === 'function') {
+          (item.layer as any).destroy();
+        }
+      });
+      cache.clear();
+      rasterGroup.clearLayers();
       evaluateRasters();
     };
 
     window.addEventListener('clear-raster-cache', handleClearRasterCacheEvent);
     window.addEventListener('retry-failed-rasters', handleRetryFailedRastersEvent);
+    window.addEventListener('pause-raster-loading', handlePauseRasterLoadingEvent);
+    window.addEventListener('resume-raster-loading', handleResumeRasterLoadingEvent);
 
     // Evaluate initially
     evaluateRasters();
@@ -1436,6 +1495,8 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
       window.removeEventListener('clear-raster-cache', handleClearRasterCacheEvent);
       window.removeEventListener('retry-failed-rasters', handleRetryFailedRastersEvent);
+      window.removeEventListener('pause-raster-loading', handlePauseRasterLoadingEvent);
+      window.removeEventListener('resume-raster-loading', handleResumeRasterLoadingEvent);
       map.off('move', handleMapMoveInstant);
       map.off('zoom', handleMapMoveInstant);
       map.off('moveend', debouncedEvaluateRasters);

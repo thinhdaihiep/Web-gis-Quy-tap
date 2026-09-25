@@ -1622,7 +1622,12 @@ export default function App() {
               >
                 {/* 1. Phần danh sách file trong khung nhìn (ẩn file đang tải nếu trùng, tự động hiện lại khi tải xong) */}
                 <span className="font-medium truncate whitespace-nowrap overflow-hidden flex items-center gap-1.5">
-                  {filteredVisibleStatuses.length > 0 ? (
+                  {rasterToastData.message && rasterToastData.message.includes('tạm dừng') ? (
+                    <span className="text-amber-600 font-semibold inline-flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                      {rasterToastData.message}
+                    </span>
+                  ) : filteredVisibleStatuses.length > 0 ? (
                     filteredVisibleStatuses.map((fs, idx) => {
                       let statusClasses = 'text-amber-600 font-semibold inline-flex items-center gap-1';
                       let dotElement = <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 animate-pulse" />;

@@ -232,6 +232,9 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
       const response = await fetch(targetUrl, { signal: controller.signal });
       clearTimeout(timeoutId);
       if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error(`HTTP 404: Tệp raster không tồn tại (${response.statusText || 'Not Found'})`);
+        }
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 

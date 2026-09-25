@@ -89,6 +89,12 @@ export async function parseGeoTiffMetadata(input: ArrayBuffer | File | Blob | st
     try {
       const apiUrl = `/api/cog-bounds?url=${encodeURIComponent(input)}`;
       const res = await fetch(apiUrl);
+      if (res.status === 404) {
+        throw new Error('HTTP 404: Tệp raster không tồn tại (404)');
+      }
+      if (res.status === 410 || res.status === 401 || res.status === 403) {
+        throw new Error('HTTP 410: Liên kết tải raster đã hết hạn (Vui lòng tải lại danh sách từ GitHub Release)');
+      }
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.bounds) {
@@ -103,7 +109,15 @@ export async function parseGeoTiffMetadata(input: ArrayBuffer | File | Blob | st
           }
         }
       }
-    } catch (apiErr) {
+    } catch (apiErr: any) {
+      if (
+        apiErr?.message?.includes('404') ||
+        apiErr?.message?.includes('410') ||
+        apiErr?.message?.includes('hết hạn') ||
+        apiErr?.message?.includes('expired')
+      ) {
+        throw apiErr;
+      }
       console.warn('API /api/cog-bounds failed, falling back to client-side reader:', apiErr);
     }
 
@@ -300,10 +314,18 @@ export async function createLeafletGeoRasterLayer(
 ): Promise<{ layer: L.Layer; metadata: ParsedGeoRasterInfo }> {
   // 1. Fetch file into cache with progress reporting
   let arrayBuffer: ArrayBuffer | null = null;
+  let fetchFailedWith404 = false;
   try {
     arrayBuffer = await fetchRasterWithCache(url, options.onProgress);
-  } catch (fetchErr) {
-    console.warn('fetchRasterWithCache failed, trying proxy URL:', fetchErr);
+  } catch (fetchErr: any) {
+    if (fetchErr?.message?.includes('404')) {
+      fetchFailedWith404 = true;
+    }
+    console.warn('fetchRasterWithCache failed:', fetchErr?.message || fetchErr);
+  }
+
+  if (fetchFailedWith404) {
+    throw new Error(`HTTP 404: Tệp raster không tồn tại trên máy chủ (${url})`);
   }
 
   // 2. PRIMARY STRATEGY: High-Performance 256x256 Client-Side Tiled Layer with Web Worker
