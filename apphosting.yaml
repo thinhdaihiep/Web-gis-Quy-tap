@@ -6,6 +6,11 @@ runConfig:
   maxInstances: 10
   minInstances: 0
 
+# Custom build and run scripts for custom Node.js/Express + Vite app
+scripts:
+  buildCommand: npm run build
+  runCommand: node dist/server.cjs
+
 # Environment variables
 env:
   - variable: NODE_ENV
