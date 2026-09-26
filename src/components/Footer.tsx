@@ -304,7 +304,7 @@ export const Footer: React.FC<FooterProps> = ({
   const badge = getBadgeDetails();
 
   return (
-    <footer className="min-h-[28px] h-auto py-1 sm:py-0 bg-slate-900 text-slate-200 border-t border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between px-2 sm:px-4 gap-y-1 gap-x-2 text-[10px] sm:text-[11px] shrink-0 z-[3000] font-medium w-full">
+    <footer className="min-h-[28px] h-auto py-1 sm:py-0 safe-area-bottom bg-slate-900 text-slate-200 border-t border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between px-2 sm:px-4 gap-y-1 gap-x-2 text-[10px] sm:text-[11px] shrink-0 z-[3000] font-medium w-full">
       {/* Left side: Coordinates */}
       <div className="flex items-center w-full sm:w-auto">
         {/* Cursor Coordinates Interactive Input */}

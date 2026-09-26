@@ -1729,7 +1729,7 @@ export default function App() {
 
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-10 right-10 z-[2000] bg-slate-900 text-white px-4 py-3 rounded-lg shadow-2xl border border-slate-700 flex items-center space-x-2 text-xs animate-bounce">
+        <div className="fixed bottom-14 right-4 sm:bottom-10 sm:right-10 z-[2000] bg-slate-900 text-white px-4 py-3 rounded-lg shadow-2xl border border-slate-700 flex items-center space-x-2 text-xs animate-bounce">
           <Check className="w-4 h-4 text-emerald-400" />
           <span>{toastMessage}</span>
         </div>

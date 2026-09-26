@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Mobile Safe Area Bottom for Android 3-button navigation bar and iOS indicator */
+.safe-area-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+}
+
+@media (min-width: 640px) {
+  .safe-area-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 2px);
+  }
+}
+
 /* Leaflet Custom Permanent Tooltip Styling */
 .custom-map-tooltip {
   background-color: rgba(255, 255, 255, 0.88) !important;
