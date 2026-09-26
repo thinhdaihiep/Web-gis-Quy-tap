@@ -1,0 +1,12 @@
+# Settings for Cloud Run service created by Firebase App Hosting
+runConfig:
+  cpu: 1
+  memoryMiB: 1024
+  concurrency: 80
+  maxInstances: 10
+  minInstances: 0
+
+# Environment variables
+env:
+  - variable: NODE_ENV
+    value: production
