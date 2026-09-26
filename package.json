@@ -45,5 +45,12 @@
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2"
+  },
+  "overrides": {
+    "esbuild": "0.25.12"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-linux-x64-gnu": "^4.63.5",
+    "@rollup/rollup-linux-x64-musl": "^4.63.5"
   }
 }
