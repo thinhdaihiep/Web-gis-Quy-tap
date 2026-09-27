@@ -16,19 +16,23 @@
     "postinstall": "sed -i 's/this.fetch=!1/this._fetch=!1/g' node_modules/georaster/dist/georaster.browser.bundle.min.js && sed -i 's/this.fetch=false/this._fetch=false/g' node_modules/georaster/dist/georaster.browser.bundle.min.js || true"
   },
   "dependencies": {
+    "@esbuild/linux-x64": "^0.25.12",
     "@geoman-io/leaflet-geoman-free": "^2.20.0",
     "@google/genai": "^2.4.0",
+    "@rollup/rollup-linux-x64-gnu": "4.63.5",
+    "@tailwindcss/oxide-linux-x64-gnu": "4.3.3",
     "@tailwindcss/vite": "^4.1.14",
     "@types/proj4": "^2.19.0",
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
-    "esbuild": "0.25.12",
+    "esbuild": "^0.25.0",
     "express": "^4.21.2",
     "firebase": "^12.16.0",
     "georaster": "^1.6.0",
     "georaster-layer-for-leaflet": "^4.1.2",
     "geotiff": "^3.0.5",
     "leaflet": "^1.9.4",
+    "lightningcss-linux-x64-gnu": "1.33.0",
     "lucide-react": "^1.33.0",
     "motion": "^12.23.24",
     "proj4": "^2.21.0",
@@ -43,16 +47,7 @@
     "autoprefixer": "^10.4.21",
     "glob": "^13.0.6",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.21.0",
+    "tsx": "4.19.3",
     "typescript": "~5.8.2"
-  },
-  "overrides": {
-    "tsx": {
-      "esbuild": "$esbuild"
-    }
-  },
-  "optionalDependencies": {
-    "@rollup/rollup-linux-x64-gnu": "^4.63.5",
-    "@rollup/rollup-linux-x64-musl": "^4.63.5"
   }
 }
