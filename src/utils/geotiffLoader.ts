@@ -5,7 +5,7 @@ import parseGeoraster from 'georaster';
 import GeoRasterLayer from 'georaster-layer-for-leaflet';
 import L from 'leaflet';
 import proj4, { convertAnyBBoxTo4326 } from './projections';
-import { fetchRasterWithCache, getRasterProxyUrl } from './rasterCache';
+import { fetchRasterWithCache, getRasterProxyUrl, getCachedRaster } from './rasterCache';
 import { LatLngBoundsBox, normalizeBoundsBox } from '../types';
 // @ts-ignore
 import GeoTiffWorker from '../workers/geotiff.worker?worker';
@@ -85,7 +85,38 @@ function convertBBoxToBounds(
 export async function parseGeoTiffMetadata(input: ArrayBuffer | File | Blob | string): Promise<ParsedGeoRasterInfo> {
   // Case A: Input is a URL string
   if (typeof input === 'string') {
-    // 1. Try server-side fast COG header range reader (/api/cog-bounds)
+    // 0. Check client cache first (IndexedDB / Cache API) - 0 network overhead
+    try {
+      const cached = await getCachedRaster(input);
+      if (cached && cached.byteLength > 0) {
+        return parseGeoTiffMetadata(cached);
+      }
+    } catch (_) {}
+
+    // 1. Direct Range Request via geotiff.js (Works on Firebase Storage & direct CDN without server proxy)
+    try {
+      const tiff = await fromUrl(input);
+      const image = await tiff.getImage(0);
+      const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY]
+      const geoKeys = image.getGeoKeys ? image.getGeoKeys() : {};
+      const epsg = geoKeys?.ProjectedCSTypeGeoKey || geoKeys?.GeographicTypeGeoKey;
+
+      const bounds = (bbox && Array.isArray(bbox) && bbox.length >= 4)
+        ? convertBBoxToBounds(bbox[0], bbox[1], bbox[2], bbox[3], epsg)
+        : null;
+      if (bounds) {
+        return {
+          bounds,
+          projection: epsg || 4326,
+          width: image.getWidth(),
+          height: image.getHeight(),
+        };
+      }
+    } catch (directErr) {
+      // Direct Range Request failed, proceed to server fallback
+    }
+
+    // 2. Try server-side fast COG header range reader (/api/cog-bounds) if backend is running
     try {
       const apiUrl = `/api/cog-bounds?url=${encodeURIComponent(input)}`;
       const res = await fetch(apiUrl);

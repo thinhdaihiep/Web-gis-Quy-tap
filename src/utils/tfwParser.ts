@@ -54,8 +54,8 @@ export function parseTFWContent(content: string): WorldFileTFW | null {
  */
 export async function fetchTFWText(url: string): Promise<string> {
   const urlsToTry = [
-    getRasterProxyUrl(url),
     url,
+    getRasterProxyUrl(url),
     `https://corsproxy.io/?${encodeURIComponent(url)}`,
   ];
 

@@ -233,18 +233,20 @@ export interface RasterFileItem {
   bounds?: LatLngBoundsBox | [[number, number], [number, number]] | null;
   fileSize?: number;
   uploadedAt: string;
-  source?: 'github' | 'upload' | 'url';
+  source?: 'github' | 'firebase' | 'upload' | 'url';
 }
 
 export interface RasterLayer {
   id: string;
   name: string;
   type?: 'COG' | 'GEOTIFF';
+  source?: 'github' | 'firebase' | 'upload' | 'url';
   files: RasterFileItem[];
   opacity?: number;
   createdAt: string;
   updatedAt?: string;
   githubReleaseUrl?: string;
+  storagePath?: string;
   // Legacy fields for backward compatibility
   url?: string;
   minZoom?: number;

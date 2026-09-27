@@ -1,0 +1,11 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      // Cho phép tất cả người dùng đọc dữ liệu raster công khai
+      allow read: if true;
+      // Chỉ cho phép người dùng đã xác thực tải lên/thay đổi
+      allow write: if request.auth != null;
+    }
+  }
+}

@@ -127,7 +127,13 @@ export default function App() {
   const [baseMap, setBaseMap] = useState<BaseMapType>('street');
   const [layers, setLayers] = useState<LayerConfig[]>(DEFAULT_LAYERS);
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>([]);
-  const [activeRasterLayerId, setActiveRasterLayerId] = useState<string | null>(null);
+  const [activeRasterLayerId, setActiveRasterLayerId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('webgis_active_raster_id') || null;
+    } catch (_) {
+      return null;
+    }
+  });
   const [isRasterVisible, setIsRasterVisible] = useState<boolean>(false);
   const [rasterStatus, setRasterStatus] = useState<RasterLoadingStatus>({ state: 'idle' });
   const [showRasterToast, setShowRasterToast] = useState<boolean>(false);
@@ -200,9 +206,26 @@ export default function App() {
   const handleRasterLayersUpdated = (newLayers: RasterLayer[]) => {
     setRasterLayers(newLayers);
     if (newLayers.length > 0) {
-      if (!activeRasterLayerId || !newLayers.some((l) => l.id === activeRasterLayerId)) {
-        setActiveRasterLayerId(newLayers[0].id);
+      let targetId: string | null = null;
+      try {
+        const savedId = localStorage.getItem('webgis_active_raster_id');
+        if (savedId && newLayers.some((l) => l.id === savedId)) {
+          targetId = savedId;
+        }
+      } catch (_) {}
+
+      if (!targetId) {
+        if (activeRasterLayerId && newLayers.some((l) => l.id === activeRasterLayerId)) {
+          targetId = activeRasterLayerId;
+        } else {
+          targetId = newLayers[0].id;
+        }
       }
+
+      setActiveRasterLayerId(targetId);
+      try {
+        if (targetId) localStorage.setItem('webgis_active_raster_id', targetId);
+      } catch (_) {}
     } else {
       setActiveRasterLayerId(null);
       setIsRasterVisible(false);
@@ -1581,6 +1604,9 @@ export default function App() {
             activeRasterLayerId={activeRasterLayerId}
             onRasterChange={(id) => {
               setActiveRasterLayerId(id);
+              try {
+                localStorage.setItem('webgis_active_raster_id', id);
+              } catch (_) {}
             }}
             onZoomIn={() => mapInstance?.zoomIn()}
             onZoomOut={() => mapInstance?.zoomOut()}

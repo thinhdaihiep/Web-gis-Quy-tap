@@ -217,11 +217,11 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
     return cached;
   }
 
-  // URLs to try in order: 1. Express backend proxy (with /tmp server disk cache) -> 2. Direct URL
-  const urlsToTry = [
-    getRasterProxyUrl(url),
-    url,
-  ];
+  // URLs to try in order:
+  // 1. Direct URL first (Direct client-to-CDN download from GitHub Release / Firebase Storage - works on Vercel / serverless)
+  // 2. Express backend proxy (/api/proxy-raster) as fallback if direct fetch fails
+  const proxyUrl = getRasterProxyUrl(url);
+  const urlsToTry = proxyUrl !== url ? [url, proxyUrl] : [url];
 
   let lastError: any = null;
 
