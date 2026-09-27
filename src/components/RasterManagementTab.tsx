@@ -112,8 +112,18 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   };
 
   // Scan files and extract bounding boxes from Firebase Storage
-  const scanFirebaseStorage = async (rawPath: string) => {
-    const cleanPath = rawPath.trim().replace(/^\/+|\/+$/g, '');
+  const scanFirebaseStorage = async (rawPath: string, existingFiles?: RasterFileItem[]) => {
+    let cleanPath = rawPath.trim();
+    // Support gs://bucket/path or https://... URLs seamlessly
+    if (cleanPath.startsWith('gs://')) {
+      cleanPath = cleanPath.replace(/^gs:\/\/[^/]+\/?/, '');
+    } else if (cleanPath.includes('firebasestorage.googleapis.com')) {
+      const match = cleanPath.match(/\/o\/([^?#]+)/);
+      if (match) {
+        cleanPath = decodeURIComponent(match[1]);
+      }
+    }
+    cleanPath = cleanPath.replace(/^\/+|\/+$/g, '');
     if (!cleanPath) {
       throw new Error('Vui lòng nhập đường dẫn thư mục trên Firebase Storage.');
     }
@@ -129,6 +139,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       throw new Error(`Không tìm thấy file GeoTIFF/COG (.tif, .tiff) trong thư mục "${cleanPath}".`);
     }
 
+    const existingBoundsMap = new Map((existingFiles || []).map((f) => [f.fileName, f.bounds]));
     const files: RasterFileItem[] = [];
     const boundsList: (LatLngBoundsBox | null)[] = [];
 
@@ -142,10 +153,18 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         const info = await parseGeoTiffMetadata(url);
         if (info && info.bounds) {
           bounds = info.bounds;
-          boundsList.push(bounds);
         }
       } catch (e) {
         console.warn(`Không thể trích xuất BBox cho ${itemRef.name}:`, e);
+      }
+
+      // Preserve previously verified bounds if new scan could not read
+      if (!bounds && existingBoundsMap.has(itemRef.name)) {
+        bounds = (existingBoundsMap.get(itemRef.name) as LatLngBoundsBox) || null;
+      }
+
+      if (bounds) {
+        boundsList.push(bounds);
       }
 
       files.push({
@@ -165,7 +184,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   };
 
   // Scan files and extract bounding boxes from GitHub Release
-  const scanGithubRelease = async (url: string) => {
+  const scanGithubRelease = async (url: string, existingFiles?: RasterFileItem[]) => {
     const trimmed = url.trim();
     if (!trimmed) {
       throw new Error('Vui lòng nhập đường link GitHub Release.');
@@ -181,6 +200,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       throw new Error('Không tìm thấy file GeoTIFF/COG (.tif, .tiff) nào trong Release này.');
     }
 
+    const existingBoundsMap = new Map((existingFiles || []).map((f) => [f.fileName, f.bounds]));
     const files: RasterFileItem[] = [];
     const boundsList: (LatLngBoundsBox | null)[] = [];
 
@@ -190,10 +210,18 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         const info = await parseGeoTiffMetadata(asset.downloadUrl);
         if (info && info.bounds) {
           bounds = info.bounds;
-          boundsList.push(bounds);
         }
       } catch (e) {
         console.warn(`Không thể trích xuất BBox cho asset ${asset.name}:`, e);
+      }
+
+      // Preserve previously verified bounds if new scan could not read
+      if (!bounds && existingBoundsMap.has(asset.name)) {
+        bounds = (existingBoundsMap.get(asset.name) as LatLngBoundsBox) || null;
+      }
+
+      if (bounds) {
+        boundsList.push(bounds);
       }
 
       files.push({
@@ -314,13 +342,13 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       if (layer.source === 'firebase' || (!layer.githubReleaseUrl && layer.storagePath)) {
         const targetPath = layer.storagePath || layer.name;
-        const result = await scanFirebaseStorage(targetPath);
+        const result = await scanFirebaseStorage(targetPath, layer.files);
         updatedFiles = result.files;
-        combinedBounds = result.combinedBounds;
+        combinedBounds = result.combinedBounds || (layer.bounds as LatLngBoundsBox) || null;
       } else if (layer.githubReleaseUrl) {
-        const result = await scanGithubRelease(layer.githubReleaseUrl);
+        const result = await scanGithubRelease(layer.githubReleaseUrl, layer.files);
         updatedFiles = result.files;
-        combinedBounds = result.combinedBounds;
+        combinedBounds = result.combinedBounds || (layer.bounds as LatLngBoundsBox) || null;
       } else {
         // Fallback for custom files: re-inspect BBoxes
         const boundsList: (LatLngBoundsBox | null)[] = [];

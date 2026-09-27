@@ -93,27 +93,31 @@ export async function parseGeoTiffMetadata(input: ArrayBuffer | File | Blob | st
       }
     } catch (_) {}
 
-    // 1. Direct Range Request via geotiff.js (Works on Firebase Storage & direct CDN without server proxy)
-    try {
-      const tiff = await fromUrl(input);
-      const image = await tiff.getImage(0);
-      const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY]
-      const geoKeys = image.getGeoKeys ? image.getGeoKeys() : {};
-      const epsg = geoKeys?.ProjectedCSTypeGeoKey || geoKeys?.GeographicTypeGeoKey;
+    const isGithub = input.includes('github.com') || input.includes('githubusercontent.com');
 
-      const bounds = (bbox && Array.isArray(bbox) && bbox.length >= 4)
-        ? convertBBoxToBounds(bbox[0], bbox[1], bbox[2], bbox[3], epsg)
-        : null;
-      if (bounds) {
-        return {
-          bounds,
-          projection: epsg || 4326,
-          width: image.getWidth(),
-          height: image.getHeight(),
-        };
+    // 1. Direct Range Request via geotiff.js (Only for non-GitHub URLs like Firebase Storage that support direct CORS)
+    if (!isGithub) {
+      try {
+        const tiff = await fromUrl(input);
+        const image = await tiff.getImage(0);
+        const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY]
+        const geoKeys = image.getGeoKeys ? image.getGeoKeys() : {};
+        const epsg = geoKeys?.ProjectedCSTypeGeoKey || geoKeys?.GeographicTypeGeoKey;
+
+        const bounds = (bbox && Array.isArray(bbox) && bbox.length >= 4)
+          ? convertBBoxToBounds(bbox[0], bbox[1], bbox[2], bbox[3], epsg)
+          : null;
+        if (bounds) {
+          return {
+            bounds,
+            projection: epsg || 4326,
+            width: image.getWidth(),
+            height: image.getHeight(),
+          };
+        }
+      } catch (directErr) {
+        // Direct Range Request failed, proceed to server fallback
       }
-    } catch (directErr) {
-      // Direct Range Request failed, proceed to server fallback
     }
 
     // 2. Try server-side fast COG header range reader (/api/cog-bounds) if backend is running
