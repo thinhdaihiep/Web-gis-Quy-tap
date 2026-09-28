@@ -15,6 +15,7 @@ interface MapOverlayProps {
   onLocateUser?: () => void;
   isLocating?: boolean;
   zoomLevel?: number | null;
+  currentRole?: 'admin' | 'editor' | 'guest';
 }
 
 export const MapOverlay: React.FC<MapOverlayProps> = ({
@@ -29,6 +30,7 @@ export const MapOverlay: React.FC<MapOverlayProps> = ({
   onZoomOut,
   onLocateUser,
   isLocating = false,
+  currentRole = 'guest',
 }) => {
   return (
     <div className="absolute top-4 right-4 z-[500] flex flex-col items-end gap-2 pointer-events-auto">
@@ -93,29 +95,42 @@ export const MapOverlay: React.FC<MapOverlayProps> = ({
 
           {/* Combobox chọn lớp Raster */}
           <div className="flex items-center gap-1 flex-1 min-w-0">
-            {rasterLayers.length > 0 ? (
-              <select
-                value={activeRasterLayerId || ''}
-                onChange={(e) => onRasterChange && onRasterChange(e.target.value)}
-                disabled={!isRasterVisible && rasterLayers.length === 0}
-                className={`text-xs border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium w-full truncate cursor-pointer transition ${
-                  isRasterVisible
-                    ? 'bg-slate-50 text-slate-800 border-slate-300'
-                    : 'bg-slate-100 text-slate-500 border-slate-200'
-                }`}
-                title="Chọn lớp bản đồ raster"
-              >
-                {rasterLayers.map((layer) => (
-                  <option key={layer.id} value={layer.id}>
-                    {layer.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <span className="text-[11px] text-slate-400 px-2 py-1 bg-slate-50 rounded font-medium truncate w-full text-center">
-                Chưa có lớp raster
-              </span>
-            )}
+            {(() => {
+              const canAccessFirebase = currentRole === 'admin' || currentRole === 'editor';
+              const accessibleLayers = rasterLayers.filter((l) => {
+                if (l.enabled === false) return false;
+                const isFirebase = l.source === 'firebase' || (!l.githubReleaseUrl && !!l.storagePath);
+                if (isFirebase && !canAccessFirebase) return false;
+                return true;
+              });
+
+              if (accessibleLayers.length > 0) {
+                return (
+                  <select
+                    value={activeRasterLayerId || ''}
+                    onChange={(e) => onRasterChange && onRasterChange(e.target.value)}
+                    disabled={!isRasterVisible && accessibleLayers.length === 0}
+                    className={`text-xs border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium w-full truncate cursor-pointer transition ${
+                      isRasterVisible
+                        ? 'bg-slate-50 text-slate-800 border-slate-300'
+                        : 'bg-slate-100 text-slate-500 border-slate-200'
+                    }`}
+                    title="Chọn lớp bản đồ raster"
+                  >
+                    {accessibleLayers.map((layer) => (
+                      <option key={layer.id} value={layer.id}>
+                        {layer.name}
+                      </option>
+                    ))}
+                  </select>
+                );
+              }
+              return (
+                <span className="text-[11px] text-slate-400 px-2 py-1 bg-slate-50 rounded font-medium truncate w-full text-center">
+                  Chưa có lớp raster
+                </span>
+              );
+            })()}
           </div>
         </div>
       </div>

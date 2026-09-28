@@ -502,7 +502,7 @@ export const Footer: React.FC<FooterProps> = ({
             'Tỷ lệ 1:5.000'
           )}
         </span>
-        <span className="truncate">© 2026 Ban Bản đồ/Phòng Tác chiến QK5</span>
+        <span className="truncate">© 2026 Ban Bản đồ/Phòng Tác chiến/Bộ Tham mưu/Quân khu 5</span>
       </div>
     </footer>
   );

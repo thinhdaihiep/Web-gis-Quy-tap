@@ -253,5 +253,6 @@ export interface RasterLayer {
   maxZoom?: number;
   bounds?: LatLngBoundsBox | [[number, number], [number, number]] | null;
   isActive?: boolean;
+  enabled?: boolean; // Admin kiểm soát cho phép truy cập ở combo raster ngoài bản đồ
 }
 

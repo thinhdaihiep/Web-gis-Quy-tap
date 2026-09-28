@@ -17,9 +17,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ statusText = 'Đang 
       <div className="w-full max-w-xl flex justify-between items-center text-[9px] sm:text-[10px] uppercase font-mono tracking-widest text-slate-500 pt-2 border-b border-slate-800/80 pb-3">
         <span className="flex items-center gap-1.5 text-red-500 font-bold whitespace-nowrap">
           <ShieldCheck className="w-3.5 h-3.5" />
-          Hệ thống GIS QK5
+          Hệ thống WebGIS và CSDL tìm kiếm, quy tập mộ liệt sĩ trên địa bàn Quân khu 5
         </span>
-        <span className="text-slate-400 whitespace-nowrap">Bảo mật / Nội bộ</span>
       </div>
 
       {/* Main Content Card */}
@@ -72,10 +71,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ statusText = 'Đang 
       {/* Copyright Footer */}
       <div className="text-center space-y-1 pb-2 w-full flex flex-col items-center justify-center opacity-70 hover:opacity-100 transition-opacity">
         <p className="text-[9px] sm:text-[11px] font-medium text-slate-500 tracking-widest uppercase whitespace-nowrap">
-          &copy; 2026 Ban Bản đồ / Phòng Tác chiến Quân khu 5
-        </p>
-        <p className="text-[8px] sm:text-[10px] text-slate-600 font-mono whitespace-nowrap uppercase tracking-widest">
-          Hệ thống GIS Chuyên ngành
+          &copy; 2026 Ban Bản đồ/Phòng Tác chiến/Bộ Tham mưu/Quân khu 5
         </p>
       </div>
     </div>

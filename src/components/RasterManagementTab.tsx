@@ -16,6 +16,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Layers,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { parseGeoTiffMetadata } from '../utils/geotiffLoader';
 import { fetchGitHubReleaseAssets } from '../utils/githubRelease';
@@ -91,6 +93,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
           files,
           bounds: data.bounds || null,
           opacity: data.opacity ?? 1.0,
+          enabled: data.enabled !== false,
           githubReleaseUrl: data.githubReleaseUrl || '',
           storagePath: data.storagePath || '',
           createdAt: data.createdAt || new Date().toISOString(),
@@ -397,6 +400,24 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
     }
   };
 
+  // Handle Toggle Enabled/Disabled Layer
+  const handleToggleEnabled = async (layer: RasterLayer) => {
+    const nextState = layer.enabled === false ? true : false;
+    try {
+      await updateDoc(doc(db, 'raster_layers', layer.id), {
+        enabled: nextState,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const updated = layers.map((l) => (l.id === layer.id ? { ...l, enabled: nextState } : l));
+      setLayers(updated);
+      if (onLayersChange) onLayersChange(updated);
+    } catch (err: any) {
+      console.error('Error toggling raster layer visibility:', err);
+      setErrorMessage('Không thể cập nhật trạng thái hiển thị lớp raster.');
+    }
+  };
+
   // Handle Rename Layer
   const handleSaveRename = async (layerId: string) => {
     const trimmed = editingName.trim();
@@ -570,17 +591,24 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
             const totalSize = (layer.files || []).reduce((acc, f) => acc + (f.fileSize || 0), 0);
             const isFirebase = layer.source === 'firebase' || (!layer.githubReleaseUrl && !!layer.storagePath);
             const hasBounds = !!layer.bounds;
+            const isEnabled = layer.enabled !== false;
 
             return (
               <div
                 key={layer.id}
-                className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-center justify-between gap-3 hover:border-slate-300 transition-colors shadow-2xs"
+                className={`bg-white border rounded-lg p-2.5 flex items-center justify-between gap-3 hover:border-slate-300 transition-colors shadow-2xs ${
+                  isEnabled ? 'border-slate-200' : 'border-slate-200 bg-slate-50/60 opacity-75'
+                }`}
               >
                 {/* Left: Source Icon & Info */}
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <div
                     className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                      isFirebase ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-800'
+                      !isEnabled
+                        ? 'bg-slate-100 text-slate-400'
+                        : isFirebase
+                        ? 'bg-blue-50 text-blue-600'
+                        : 'bg-slate-100 text-slate-800'
                     }`}
                     title={isFirebase ? 'Firebase Storage' : 'GitHub Release'}
                   >
@@ -617,7 +645,12 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                     </div>
                   ) : (
                     <div className="min-w-0">
-                      <div className="text-xs font-semibold text-slate-800 truncate" title={layer.name}>
+                      <div
+                        className={`text-xs font-semibold truncate ${
+                          isEnabled ? 'text-slate-800' : 'text-slate-500 line-through decoration-slate-400'
+                        }`}
+                        title={layer.name}
+                      >
                         {layer.name}
                       </div>
                       <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
@@ -628,6 +661,12 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                         <span className={hasBounds ? 'text-emerald-600' : 'text-amber-500'}>
                           {hasBounds ? 'Đã có BBox' : 'Chưa có BBox'}
                         </span>
+                        {!isEnabled && (
+                          <>
+                            <span>•</span>
+                            <span className="text-red-500 font-medium">Đã ẩn</span>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -636,6 +675,17 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                 {/* Right: Actions */}
                 {!isEditing && (
                   <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => handleToggleEnabled(layer)}
+                      className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                        isEnabled
+                          ? 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                          : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+                      }`}
+                      title={isEnabled ? 'Hiện trên bản đồ (Bấm để ẩn)' : 'Đang ẩn trên bản đồ (Bấm để hiện)'}
+                    >
+                      {isEnabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                    </button>
                     <button
                       onClick={() => handleRescanLayer(layer)}
                       disabled={isRefreshing}

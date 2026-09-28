@@ -604,8 +604,13 @@ export async function loadRasterLayersFromFirestore(): Promise<RasterLayer[]> {
         id: docSnap.id,
         name: data.name || 'Bản đồ nền',
         type: data.type || 'COG',
+        source: data.source,
+        storagePath: data.storagePath,
+        githubReleaseUrl: data.githubReleaseUrl,
+        bounds: data.bounds || null,
         files: files,
         opacity: data.opacity ?? 1.0,
+        enabled: data.enabled !== false, // Mặc định là true nếu chưa set
         createdAt: data.createdAt || new Date().toISOString(),
         updatedAt: data.updatedAt,
       });
@@ -616,3 +621,21 @@ export async function loadRasterLayersFromFirestore(): Promise<RasterLayer[]> {
     return [];
   }
 }
+
+/**
+ * Update enabled state for a raster layer
+ */
+export async function updateRasterLayerEnabled(layerId: string, enabled: boolean): Promise<boolean> {
+  try {
+    const docRef = doc(db, 'raster_layers', layerId);
+    await updateDoc(docRef, {
+      enabled,
+      updatedAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (error) {
+    console.error('Lỗi khi cập nhật trạng thái hiển thị raster layer:', error);
+    return false;
+  }
+}
+

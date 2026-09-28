@@ -984,9 +984,13 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         return;
       }
 
-      const targetLayers = rasterLayers.filter(
-        (layer) => layer && (!activeRasterLayerId || layer.id === activeRasterLayerId)
-      );
+      const canAccessFirebase = currentRole === 'admin' || currentRole === 'editor';
+      const targetLayers = rasterLayers.filter((layer) => {
+        if (!layer || layer.enabled === false) return false;
+        const isFirebase = layer.source === 'firebase' || (!layer.githubReleaseUrl && !!layer.storagePath);
+        if (isFirebase && !canAccessFirebase) return false;
+        return !activeRasterLayerId || layer.id === activeRasterLayerId;
+      });
 
       const activeLayer = targetLayers.length > 0 ? targetLayers[0] : null;
       const activeLayerName = activeLayer?.name || 'Bản đồ Raster';

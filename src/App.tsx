@@ -181,6 +181,39 @@ export default function App() {
       setInteractionMode('hand');
     }
   }, [effectiveRole, interactionMode]);
+
+  // Ngăn chặn và bảo vệ chi phí Firebase: Nếu người dùng là khách mà activeRasterLayerId thuộc nguồn Firebase, tự động fallback
+  useEffect(() => {
+    if (rasterLayers.length === 0) return;
+    const canAccessFirebase = effectiveRole === 'admin' || effectiveRole === 'editor';
+    const accessibleLayers = rasterLayers.filter((l) => {
+      if (l.enabled === false) return false;
+      const isFirebase = l.source === 'firebase' || (!l.githubReleaseUrl && !!l.storagePath);
+      if (isFirebase && !canAccessFirebase) return false;
+      return true;
+    });
+
+    if (activeRasterLayerId) {
+      const currentActive = rasterLayers.find((l) => l.id === activeRasterLayerId);
+      const isFirebase = currentActive && (currentActive.source === 'firebase' || (!currentActive.githubReleaseUrl && !!currentActive.storagePath));
+      const isEnabled = currentActive && currentActive.enabled !== false;
+
+      if (!isEnabled || (isFirebase && !canAccessFirebase)) {
+        if (accessibleLayers.length > 0) {
+          setActiveRasterLayerId(accessibleLayers[0].id);
+          try {
+            localStorage.setItem('webgis_active_raster_id', accessibleLayers[0].id);
+          } catch (_) {}
+        } else {
+          setActiveRasterLayerId(null);
+          setIsRasterVisible(false);
+          try {
+            localStorage.removeItem('webgis_active_raster_id');
+          } catch (_) {}
+        }
+      }
+    }
+  }, [effectiveRole, rasterLayers, activeRasterLayerId]);
   const [activeDrawMode, setActiveDrawMode] = useState<DrawToolMode>('select');
   const [editingFeature, setEditingFeature] = useState<Partial<GeoJsonFeatureItem> | null>(null);
   const [isFeatureEditModalOpen, setIsFeatureEditModalOpen] = useState<boolean>(false);
@@ -205,20 +238,28 @@ export default function App() {
 
   const handleRasterLayersUpdated = (newLayers: RasterLayer[]) => {
     setRasterLayers(newLayers);
-    if (newLayers.length > 0) {
+    const canAccessFirebase = effectiveRole === 'admin' || effectiveRole === 'editor';
+    const accessibleLayers = newLayers.filter((l) => {
+      if (l.enabled === false) return false;
+      const isFirebase = l.source === 'firebase' || (!l.githubReleaseUrl && !!l.storagePath);
+      if (isFirebase && !canAccessFirebase) return false;
+      return true;
+    });
+
+    if (accessibleLayers.length > 0) {
       let targetId: string | null = null;
       try {
         const savedId = localStorage.getItem('webgis_active_raster_id');
-        if (savedId && newLayers.some((l) => l.id === savedId)) {
+        if (savedId && accessibleLayers.some((l) => l.id === savedId)) {
           targetId = savedId;
         }
       } catch (_) {}
 
       if (!targetId) {
-        if (activeRasterLayerId && newLayers.some((l) => l.id === activeRasterLayerId)) {
+        if (activeRasterLayerId && accessibleLayers.some((l) => l.id === activeRasterLayerId)) {
           targetId = activeRasterLayerId;
         } else {
-          targetId = newLayers[0].id;
+          targetId = accessibleLayers[0].id;
         }
       }
 
@@ -229,6 +270,9 @@ export default function App() {
     } else {
       setActiveRasterLayerId(null);
       setIsRasterVisible(false);
+      try {
+        localStorage.removeItem('webgis_active_raster_id');
+      } catch (_) {}
     }
   };
 
@@ -475,7 +519,27 @@ export default function App() {
         const dbRasterLayers = await loadRasterLayersFromFirestore();
         if (dbRasterLayers && dbRasterLayers.length > 0) {
           setRasterLayers(dbRasterLayers);
-          setActiveRasterLayerId(dbRasterLayers[0].id);
+          const canAccessFirebase = effectiveRole === 'admin' || effectiveRole === 'editor';
+          const accessibleLayers = dbRasterLayers.filter((l) => {
+            if (l.enabled === false) return false;
+            const isFirebase = l.source === 'firebase' || (!l.githubReleaseUrl && !!l.storagePath);
+            if (isFirebase && !canAccessFirebase) return false;
+            return true;
+          });
+
+          if (accessibleLayers.length > 0) {
+            let chosenId = accessibleLayers[0].id;
+            try {
+              const savedId = localStorage.getItem('webgis_active_raster_id');
+              if (savedId && accessibleLayers.some((l) => l.id === savedId)) {
+                chosenId = savedId;
+              }
+            } catch (_) {}
+            setActiveRasterLayerId(chosenId);
+          } else {
+            setActiveRasterLayerId(null);
+            setIsRasterVisible(false);
+          }
         }
 
         setSplashStatusText('Đang nạp và định vị bản đồ...');
@@ -1596,8 +1660,20 @@ export default function App() {
             isRasterVisible={isRasterVisible}
             onToggleRasterVisibility={(visible) => {
               setIsRasterVisible(visible);
-              if (visible && !activeRasterLayerId && rasterLayers.length > 0) {
-                setActiveRasterLayerId(rasterLayers[0].id);
+              if (visible && !activeRasterLayerId) {
+                const canAccessFirebase = effectiveRole === 'admin' || effectiveRole === 'editor';
+                const accessibleLayers = rasterLayers.filter((l) => {
+                  if (l.enabled === false) return false;
+                  const isFirebase = l.source === 'firebase' || (!l.githubReleaseUrl && !!l.storagePath);
+                  if (isFirebase && !canAccessFirebase) return false;
+                  return true;
+                });
+                if (accessibleLayers.length > 0) {
+                  setActiveRasterLayerId(accessibleLayers[0].id);
+                  try {
+                    localStorage.setItem('webgis_active_raster_id', accessibleLayers[0].id);
+                  } catch (_) {}
+                }
               }
             }}
             rasterLayers={rasterLayers}
@@ -1613,6 +1689,7 @@ export default function App() {
             onLocateUser={handleLocateUser}
             isLocating={isLocating}
             zoomLevel={zoomLevel}
+            currentRole={effectiveRole}
           />
 
           {/* Raster Loading Status - Leaflet Control Style (Bottom Left, above Coordinate Bar) */}
