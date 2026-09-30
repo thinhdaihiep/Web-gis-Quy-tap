@@ -44,7 +44,7 @@ export const Header: React.FC<HeaderProps> = ({
             Bản đồ tìm kiếm & quy tập mộ Liệt sĩ
           </h1>
           <p className="text-[10px] text-slate-400 hidden lg:block">
-            Ban chỉ đạo tìm kiếm và quy tập mộ liệt sĩ Quân khu 5
+            Hệ thống CSDL GIS Quân khu 5
           </p>
         </div>
 

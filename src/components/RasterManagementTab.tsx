@@ -6,8 +6,10 @@ import { RasterLayer, RasterFileItem, LatLngBoundsBox, RasterLoadingStatus, comp
 import {
   Cloud,
   Cat,
+  Github as GithubCat,
   Plus,
   RefreshCw,
+  RotateCcw,
   Pencil,
   Trash2,
   Check,
@@ -334,7 +336,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   };
 
   // Handle rescan & reindex bounding boxes for a layer
-  const handleRescanLayer = async (layer: RasterLayer) => {
+  const handleRescanLayer = async (layer: RasterLayer, fullScan: boolean = false) => {
     setErrorMessage(null);
     setSuccessMessage(null);
     setRefreshingLayerId(layer.id);
@@ -345,18 +347,18 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       if (layer.source === 'firebase' || (!layer.githubReleaseUrl && layer.storagePath)) {
         const targetPath = layer.storagePath || layer.name;
-        const result = await scanFirebaseStorage(targetPath, layer.files);
+        const result = await scanFirebaseStorage(targetPath, fullScan ? [] : layer.files);
         updatedFiles = result.files;
         combinedBounds = result.combinedBounds || (layer.bounds as LatLngBoundsBox) || null;
       } else if (layer.githubReleaseUrl) {
-        const result = await scanGithubRelease(layer.githubReleaseUrl, layer.files);
+        const result = await scanGithubRelease(layer.githubReleaseUrl, fullScan ? [] : layer.files);
         updatedFiles = result.files;
         combinedBounds = result.combinedBounds || (layer.bounds as LatLngBoundsBox) || null;
       } else {
         // Fallback for custom files: re-inspect BBoxes
         const boundsList: (LatLngBoundsBox | null)[] = [];
         for (const file of layer.files) {
-          let b = file.bounds ? (file.bounds as LatLngBoundsBox) : null;
+          let b = fullScan ? null : (file.bounds as LatLngBoundsBox | null);
           try {
             const info = await parseGeoTiffMetadata(file.url);
             if (info && info.bounds) {
@@ -687,12 +689,24 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                       {isEnabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                     </button>
                     <button
-                      onClick={() => handleRescanLayer(layer)}
+                      onClick={() => handleRescanLayer(layer, false)}
                       disabled={isRefreshing}
                       className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                      title="Quét lại dữ liệu"
+                      title="Quét cập nhật (Giữ nguyên BBox hiện có)"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm('Xác nhận quét lại toàn bộ (Reset)? Thao tác này sẽ xóa mọi BBox cũ và quét lại từ đầu.')) {
+                          handleRescanLayer(layer, true);
+                        }
+                      }}
+                      disabled={isRefreshing}
+                      className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                      title="Quét mới toàn bộ (Reset BBox)"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => {
