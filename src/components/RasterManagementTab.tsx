@@ -651,9 +651,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                         className={`text-xs font-semibold truncate ${
                           isEnabled ? 'text-slate-800' : 'text-slate-500 line-through decoration-slate-400'
                         }`}
-                        title={layer.name}
+                        title={layer.name.startsWith('.') ? layer.name.substring(1) : layer.name}
                       >
-                        {layer.name}
+                        {layer.name.startsWith('.') ? layer.name.substring(1) : layer.name}
                       </div>
                       <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
                         <span>{layer.files?.length || 0} tệp</span>

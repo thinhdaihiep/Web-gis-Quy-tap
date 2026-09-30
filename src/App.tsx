@@ -31,7 +31,7 @@ import {
   getStoredUser
 } from './firebaseService';
 import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
-import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, CheckCircle2, Layers } from 'lucide-react';
+import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, CheckCircle2, Layers, Loader2 } from 'lucide-react';
 
 function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: any } {
   if (!featOrGeom) return { type: 'Point', coordinates: [0, 0] };
@@ -1697,6 +1697,33 @@ export default function App() {
             const fileStatuses = rasterToastData.fileStatuses || [];
             // Lọc chính xác các tệp raster đang nằm trong khung nhìn (viewport)
             const visibleFileStatuses = fileStatuses.filter(fs => fs.inViewport);
+
+            // Hàm chuẩn hóa tên file để so sánh (bỏ đuôi .tif/.tiff/... và khoảng trắng, không phân biệt hoa thường)
+            const normalizeRasterName = (name?: string) => {
+              if (!name) return '';
+              const cleaned = name.trim().toLowerCase().split('?')[0].split('#')[0];
+              const base = cleaned.split('/').pop() || cleaned;
+              return base.replace(/\.(tif|tiff|geotiff|cog|png|jpg|jpeg)$/i, '').trim();
+            };
+
+            // Xác định tệp raster nào trong layer hiện tại đang chứa markpoint (cursorLocation || userLocation || targetMarkerLocation)
+            let containingRasterFileName: string | null = null;
+            const activeMarkpoint = cursorLocation || userLocation || targetMarkerLocation;
+
+            if (activeMarkpoint && activeRasterLayerId) {
+              const currentActiveLayer = rasterLayers.find((l) => l.id === activeRasterLayerId);
+              if (currentActiveLayer && Array.isArray(currentActiveLayer.files)) {
+                const { lat, lng } = activeMarkpoint;
+                const matched = currentActiveLayer.files.find((f) => {
+                  const bBox = normalizeBoundsBox(f.bounds);
+                  if (!bBox) return false;
+                  return lat >= bBox.south && lat <= bBox.north && lng >= bBox.west && lng <= bBox.east;
+                });
+                if (matched) {
+                  containingRasterFileName = normalizeRasterName(matched.fileName || (matched as any).name || matched.url);
+                }
+              }
+            }
             
             const isOverallLoading =
               rasterToastData.state === 'loading' &&
@@ -1718,35 +1745,56 @@ export default function App() {
               window.dispatchEvent(new CustomEvent('retry-failed-rasters'));
             };
 
+            // Unified single status icon:
+            // 1. Đang tải: Loader2 animate-spin màu xanh lam
+            // 2. Gặp lỗi: AlertTriangle màu vàng (tam giác chấm than)
+            // 3. Đã tải: CheckCircle2 màu xanh lá
+            let unifiedStatusIcon: React.ReactNode = null;
+            if (isOverallLoading) {
+              unifiedStatusIcon = <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin shrink-0" />;
+            } else if (hasFailedFiles) {
+              unifiedStatusIcon = <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />;
+            } else {
+              unifiedStatusIcon = <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />;
+            }
+
             return (
               <div
-                className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/90 backdrop-blur-[3px] text-slate-700 text-[11px] px-2.5 py-1 flex items-center gap-2.5 rounded-tr-md border-t border-r border-slate-200/80 shadow-xs max-w-[360px] sm:max-w-[480px]"
+                className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/90 backdrop-blur-[3px] text-slate-700 text-[11px] px-2.5 py-1 flex items-center gap-2 rounded-tr-md border-t border-r border-slate-200/80 shadow-xs max-w-[360px] sm:max-w-[480px]"
                 title={displayTitle}
               >
+                {/* Unified status icon */}
+                {unifiedStatusIcon}
+
                 {/* 1. Phần danh sách file trong khung nhìn (ẩn file đang tải nếu trùng, tự động hiện lại khi tải xong) */}
                 <span className="font-medium truncate whitespace-nowrap overflow-hidden flex items-center gap-1.5">
                   {rasterToastData.message && rasterToastData.message.includes('tạm dừng') ? (
-                    <span className="text-amber-600 font-semibold inline-flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                    <span className="text-amber-600 font-semibold inline-flex items-center">
                       {rasterToastData.message}
                     </span>
                   ) : filteredVisibleStatuses.length > 0 ? (
                     filteredVisibleStatuses.map((fs, idx) => {
-                      let statusClasses = 'text-amber-600 font-semibold inline-flex items-center gap-1';
-                      let dotElement = <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 animate-pulse" />;
+                      let statusClasses = 'text-amber-600 font-semibold inline-flex items-center';
+                      let dotColor = 'bg-amber-600';
                       
                       if (fs.state === 'loaded') {
-                        statusClasses = 'text-emerald-600 font-semibold inline-flex items-center gap-1';
-                        dotElement = <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />;
+                        statusClasses = 'text-emerald-600 font-semibold inline-flex items-center';
+                        dotColor = 'bg-emerald-600';
                       } else if (fs.state === 'error') {
-                        statusClasses = 'text-red-600 font-semibold inline-flex items-center gap-1';
-                        dotElement = <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />;
+                        statusClasses = 'text-amber-600 font-semibold inline-flex items-center';
+                        dotColor = 'bg-amber-600';
                       }
+
+                      const isContainingMarkpoint = containingRasterFileName && (
+                        normalizeRasterName(fs.name) === containingRasterFileName
+                      );
 
                       return (
                         <span key={idx} className="inline-flex items-center">
                           <span className={statusClasses}>
-                            {dotElement}
+                            {isContainingMarkpoint && (
+                              <span className={`w-1.5 h-1.5 rounded-full ${dotColor} shrink-0 mr-1`} />
+                            )}
                             {fs.name}
                           </span>
                           {idx < filteredVisibleStatuses.length - 1 ? <span className="text-slate-300 ml-1.5 mr-0.5">|</span> : ''}
@@ -1757,21 +1805,19 @@ export default function App() {
                     // Nếu tất cả ảnh trong khung nhìn đang được tải (đã hiển thị ở phần đang tải bên cạnh)
                     null
                   ) : (
-                    <span className="text-slate-400 font-medium flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0" />
-                      Không có ảnh trong khung nhìn!
+                    <span className="text-slate-400 font-medium flex items-center">
+                      Không có ảnh!
                     </span>
                   )}
                 </span>
                 
-                {/* 2. Phần raster đang tải: hiển thị tên raster màu vàng cam với chấm nhấp nháy (đã bỏ con xoay và số đếm) */}
+                {/* 2. Phần raster đang tải: hiển thị tên raster màu vàng cam */}
                 {isOverallLoading && currentLoadingName && (
                   <div className={`flex items-center gap-1.5 ${filteredVisibleStatuses.length > 0 ? 'pl-2 border-l border-slate-200' : ''}`}>
                     <span
-                      className="text-amber-600 font-bold text-[11px] truncate max-w-[150px] sm:max-w-[200px] inline-flex items-center gap-1.5"
+                      className="text-amber-600 font-bold text-[11px] truncate max-w-[150px] sm:max-w-[200px] inline-flex items-center"
                       title={`Đang tải: ${currentLoadingName}`}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
                       <span className="truncate">{currentLoadingName}</span>
                     </span>
                   </div>
