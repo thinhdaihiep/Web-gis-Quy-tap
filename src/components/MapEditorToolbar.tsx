@@ -76,9 +76,9 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
   }, [selectedFeature?.id]);
 
   return (
-    <div className="absolute top-4 left-4 z-[700] flex items-center gap-1.5 pointer-events-auto">
-      {/* Sleek Floating Icon Toolbar */}
-      <div className="bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-slate-200/90 flex items-center gap-1 text-slate-800">
+    <div className="absolute top-4 left-4 z-[700] flex items-start gap-2 pointer-events-auto">
+      {/* Sleek Vertical Floating Icon Toolbar */}
+      <div className="bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-slate-200/90 flex flex-col items-center gap-1 text-slate-800">
         {/* Mode 1: Kiểu Bàn Tay (Hand) */}
         <button
           type="button"
@@ -113,7 +113,7 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
           </button>
         )}
 
-        <div className="h-4 w-px bg-slate-200 mx-0.5" />
+        <div className="w-5 h-px bg-slate-200 my-0.5" />
 
         {/* Mode 3: Đo khoảng cách */}
         <button
@@ -166,7 +166,7 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
         {/* Chức năng Thêm đối tượng, Xóa, Copy, Cut, Paste chỉ hiển thị ở chế độ Pointer / Edit Mode */}
         {interactionMode === 'pointer' && currentRole !== 'guest' && (
           <>
-            <div className="h-4 w-px bg-slate-200 mx-0.5" />
+            <div className="w-5 h-px bg-slate-200 my-0.5" />
 
             {/* Nút Thêm đối tượng mới (+) */}
             <button
@@ -280,7 +280,7 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
         {/* Save & Discard Actions when selected feature has unsaved edits */}
         {selectedFeature && isUnsaved && !pendingNextFeature && (
           <>
-            <div className="h-4 w-px bg-slate-200 mx-0.5" />
+            <div className="w-5 h-px bg-slate-200 my-0.5" />
 
             {/* Save Button */}
             <button
@@ -309,106 +309,107 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
         )}
       </div>
 
-      {/* Delete Confirmation Badge */}
-      {isConfirmingDelete && selectedFeature && (
-        <div className="bg-slate-900/90 text-white backdrop-blur-md px-2 py-1.5 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200">
-          <Trash2 className="w-4 h-4 text-rose-400 shrink-0 ml-1" />
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setIsConfirmingDelete(false);
-                if (onDeleteSelected) onDeleteSelected();
-              }}
-              className="p-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition cursor-pointer flex items-center justify-center"
-              title="Xác nhận xóa"
-            >
-              <Check className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsConfirmingDelete(false);
-              }}
-              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition cursor-pointer flex items-center justify-center"
-              title="Hủy"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+      {/* Popups fly out to the right of the vertical toolbar */}
+      <div className="flex flex-col gap-2">
+        {/* Delete Confirmation Badge */}
+        {isConfirmingDelete && selectedFeature && (
+          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2 py-1.5 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200">
+            <Trash2 className="w-4 h-4 text-rose-400 shrink-0 ml-1" />
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsConfirmingDelete(false);
+                  if (onDeleteSelected) onDeleteSelected();
+                }}
+                className="p-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition cursor-pointer flex items-center justify-center"
+                title="Xác nhận xóa"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsConfirmingDelete(false);
+                }}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition cursor-pointer flex items-center justify-center"
+                title="Hủy"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Pending Unsaved Changes Confirmation Floating Badge */}
-      {pendingNextFeature && (
-        <div className="bg-slate-900/90 text-white backdrop-blur-md px-2.5 py-1.5 rounded-2xl shadow-xl border border-amber-500/80 flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
-          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 ml-0.5" />
-          <span className="text-xs text-slate-200 font-medium whitespace-nowrap">Lưu sửa đổi?</span>
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                if (onConfirmPendingSave) onConfirmPendingSave();
-              }}
-              className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1 shadow-xs"
-              title="Lưu thay đổi và tiếp tục"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>Có</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (onConfirmPendingDiscard) onConfirmPendingDiscard();
-              }}
-              className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1 shadow-xs"
-              title="Bỏ thay đổi"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Không</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (onCancelPendingNext) onCancelPendingNext();
-              }}
-              className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition cursor-pointer"
-              title="Hủy bỏ (Quay lại sửa)"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+        {/* Pending Unsaved Changes Confirmation Floating Badge */}
+        {pendingNextFeature && (
+          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2.5 py-1.5 rounded-2xl shadow-xl border border-amber-500/80 flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 ml-0.5" />
+            <span className="text-xs text-slate-200 font-medium whitespace-nowrap">Lưu sửa đổi?</span>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  if (onConfirmPendingSave) onConfirmPendingSave();
+                }}
+                className="p-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition cursor-pointer flex items-center justify-center shadow-xs"
+                title="Lưu thay đổi và tiếp tục"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onConfirmPendingDiscard) onConfirmPendingDiscard();
+                }}
+                className="p-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition cursor-pointer flex items-center justify-center shadow-xs"
+                title="Bỏ thay đổi"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onCancelPendingNext) onCancelPendingNext();
+                }}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition cursor-pointer"
+                title="Hủy bỏ (Quay lại sửa)"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Ghost Paste Confirm / Cancel Actions Floating Badge */}
-      {pendingPasteFeature && (
-        <div className="bg-slate-900/90 text-white backdrop-blur-md px-2 py-1.5 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200">
-          <Clipboard className="w-4 h-4 text-emerald-400 shrink-0 ml-1" />
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                if (onConfirmPaste) onConfirmPaste();
-              }}
-              className="p-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition cursor-pointer flex items-center justify-center"
-              title="Xác nhận dán"
-            >
-              <Check className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (onCancelPaste) onCancelPaste();
-              }}
-              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition cursor-pointer flex items-center justify-center"
-              title="Hủy"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+        {/* Ghost Paste Confirm / Cancel Actions Floating Badge */}
+        {pendingPasteFeature && (
+          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2 py-1.5 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200">
+            <Clipboard className="w-4 h-4 text-emerald-400 shrink-0 ml-1" />
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  if (onConfirmPaste) onConfirmPaste();
+                }}
+                className="p-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition cursor-pointer flex items-center justify-center"
+                title="Xác nhận dán"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onCancelPaste) onCancelPaste();
+                }}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition cursor-pointer flex items-center justify-center"
+                title="Hủy"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

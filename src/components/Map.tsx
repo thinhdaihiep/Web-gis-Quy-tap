@@ -361,6 +361,39 @@ function createPointIcon(
   }
 }
 
+// Icon Cache Map: Tái sử dụng instance L.DivIcon theo key loại icon + trạng thái chọn + màu sắc
+const pointIconCache = new Map<string, L.DivIcon>();
+
+function getPointIcon(
+  type: 'search' | 'battle' | 'grave' | 'cemetery' | 'default',
+  isSelected: boolean,
+  color: string = '#10b981'
+): L.DivIcon {
+  const key = `${type}|${isSelected}|${color}`;
+  let icon = pointIconCache.get(key);
+  if (!icon) {
+    icon = createPointIcon(type, isSelected, color);
+    pointIconCache.set(key, icon);
+  }
+  return icon;
+}
+
+// Compute signature of a feature for fast diffing: only values affecting rendering/styling
+function computeFeatureSignature(
+  feat: GeoJsonFeatureItem,
+  isSelected: boolean,
+  color: string,
+  aliasVer: number
+): { signature: string; coordSignature: string } {
+  const coordSignature = typeof feat.coordinates === 'string'
+    ? feat.coordinates
+    : JSON.stringify(feat.coordinates || []);
+  const name = feat.properties?.Ten || feat.properties?.ten || feat.name || '';
+  const rawPhanLoai = feat.properties?.PhanLoai ?? feat.properties?.phanLoai ?? '';
+  const signature = `${coordSignature}|${isSelected}|${color}|${feat.layerId || ''}|${name}|${rawPhanLoai}|${aliasVer}`;
+  return { signature, coordSignature };
+}
+
 export const MapComponent: React.FC<MapProps> = ({
   baseMap,
   layers,
@@ -439,7 +472,7 @@ export const MapComponent: React.FC<MapProps> = ({
     }
   }, []);
 
-  // Feature Layer Cache Ref for fast selection updates
+  // Feature Layer Cache Ref for fast selection & diffing updates
   const featureLayerMapRef = useRef<
     Map<
       string,
@@ -447,6 +480,9 @@ export const MapComponent: React.FC<MapProps> = ({
         feature: GeoJsonFeatureItem;
         layer: L.Layer;
         updateStyle: (isSelected: boolean, mode: MapInteractionMode) => void;
+        signature?: string;
+        coordSignature?: string;
+        parentSubGroup?: L.LayerGroup;
       }
     >
   >(new Map());
@@ -1679,94 +1715,69 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     }
 
     isGeomanEditingRef.current = false;
+    const prevSelectedId = lastSelectedFeatureIdRef.current;
     lastSelectedFeatureIdRef.current = selectedFeatureId || null;
 
-    // Disable Geoman on previous layers safely while still attached to map
-    featureLayerMapRef.current.forEach(({ layer }) => {
-      if (layer) {
-        if ((layer as any).pm) {
-          try {
-            if (typeof (layer as any).pm.disable === 'function') {
-              (layer as any).pm.disable();
-            }
-          } catch (e) {}
-        }
+    // Tắt Geoman trên feature vừa bị bỏ chọn hoặc thay đổi selection (targeted thay vì quét toàn map)
+    if (prevSelectedId && prevSelectedId !== selectedFeatureId) {
+      const prevEntry = featureLayerMapRef.current.get(prevSelectedId);
+      if (prevEntry?.layer && (prevEntry.layer as any).pm) {
         try {
-          if (map.hasLayer(layer)) {
-            map.removeLayer(layer);
+          if (typeof (prevEntry.layer as any).pm.disable === 'function') {
+            (prevEntry.layer as any).pm.disable();
           }
         } catch (e) {}
       }
-    });
-
-    // Safely collect orphan Geoman vertex markers, handles, and temp layers first to avoid mutating map._layers mid-loop
-    const orphanLayers: L.Layer[] = [];
-    map.eachLayer((l: any) => {
-      if (!l || l instanceof L.TileLayer) return;
-      if (
-        l._pmTempLayer ||
-        l.pmMarker ||
-        l._vertexMarker ||
-        l.options?.isGeoman ||
-        l.options?.isFinishMarker ||
-        l.options?.isMiddleMarker ||
-        (l.options &&
-          l.options.className &&
-          typeof l.options.className === 'string' &&
-          (l.options.className.includes('leaflet-pm') ||
-            l.options.className.includes('vertex-marker') ||
-            l.options.className.includes('marker-icon')))
-      ) {
-        orphanLayers.push(l);
-      }
-    });
-
-    orphanLayers.forEach((l) => {
-      try {
-        if (map.hasLayer(l)) {
-          map.removeLayer(l);
-        }
-      } catch (e) {}
-    });
-
-    // Disable global map Geoman modes
-    try {
-      if ((map as any).pm) {
-        if (typeof (map as any).pm.disableGlobalEditMode === 'function') {
-          (map as any).pm.disableGlobalEditMode();
-        }
-        if (typeof (map as any).pm.disableDraw === 'function') {
-          (map as any).pm.disableDraw();
-        }
-      }
-    } catch (e) {}
+    }
 
     if (tempDrawLayerRef.current) {
       tempDrawLayerRef.current.clearLayers();
     }
 
-    if (featureLayersRef.current) {
-      featureLayersRef.current.clearLayers();
-    }
-    featureLayerMapRef.current.clear();
-
-    // Re-create dedicated LayerGroup per layerId for instantaneous 0ms show/hide toggling
-    layerSubGroupsRef.current.forEach((grp) => {
-      try {
-        grp.clearLayers();
-      } catch (e) {}
-    });
-    layerSubGroupsRef.current.clear();
-
+    // Đảm bảo mỗi layerId có 1 LayerGroup trong layerSubGroupsRef
     layers.forEach((l) => {
-      layerSubGroupsRef.current.set(l.id, L.layerGroup());
+      if (!layerSubGroupsRef.current.has(l.id)) {
+        const newGroup = L.layerGroup();
+        layerSubGroupsRef.current.set(l.id, newGroup);
+        if (l.visible && featureLayersRef.current) {
+          featureLayersRef.current.addLayer(newGroup);
+        }
+      }
     });
-    layerSubGroupsRef.current.set('_unassigned_', L.layerGroup());
+    if (!layerSubGroupsRef.current.has('_unassigned_')) {
+      const unassignedGrp = L.layerGroup();
+      layerSubGroupsRef.current.set('_unassigned_', unassignedGrp);
+      if (featureLayersRef.current) {
+        featureLayersRef.current.addLayer(unassignedGrp);
+      }
+    }
 
     // Render ALL features into their respective LayerGroups
     const layerConfigMap = new Map<string, LayerConfig>();
     layers.forEach((l) => layerConfigMap.set(l.id, l));
     const activeFeatures = deduplicateFeaturesList(features.filter(Boolean));
+
+    // DIFFING: 1. Tìm các feature không còn tồn tại để gỡ khỏi bản đồ
+    const nextKeys = new Set(activeFeatures.map(getItemUniqueKey));
+    featureLayerMapRef.current.forEach((entry, key) => {
+      if (!nextKeys.has(key)) {
+        if (entry.layer) {
+          if ((entry.layer as any).pm && typeof (entry.layer as any).pm.disable === 'function') {
+            try { (entry.layer as any).pm.disable(); } catch (e) {}
+          }
+          if (entry.parentSubGroup) {
+            entry.parentSubGroup.removeLayer(entry.layer);
+          }
+          if (featureLayersRef.current && featureLayersRef.current.hasLayer(entry.layer)) {
+            featureLayersRef.current.removeLayer(entry.layer);
+          }
+          if (map.hasLayer(entry.layer)) {
+            map.removeLayer(entry.layer);
+          }
+        }
+        featureLayerMapRef.current.delete(key);
+      }
+    });
 
     const allBounds: L.LatLng[] = [];
 
@@ -1852,6 +1863,47 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
       const isSelected = isFeatureMatch(feat, selectedFeatureId);
 
+      // DIFFING: 2. So sánh signature của feature hiện tại với cache
+      const { signature: newSignature, coordSignature: newCoordSig } = computeFeatureSignature(
+        feat,
+        isSelected,
+        featureColor,
+        aliasVersion
+      );
+
+      const existingEntry = featureLayerMapRef.current.get(featKey);
+      if (existingEntry) {
+        // Trường hợp A: Signature hoàn toàn không đổi -> Không cần làm gì, giữ nguyên 100%
+        if (existingEntry.signature === newSignature) {
+          return;
+        }
+
+        // Trường hợp B: Toạ độ không đổi, chỉ đổi style/chọn -> gọi updateStyle tức thì, không huỷ layer
+        if (existingEntry.coordSignature === newCoordSig) {
+          existingEntry.feature = feat;
+          existingEntry.signature = newSignature;
+          existingEntry.updateStyle(isSelected, (interactionMode || 'hand') as MapInteractionMode);
+          return;
+        }
+
+        // Trường hợp C: Toạ độ hình học thay đổi -> tháo layer cũ ra để tạo lại layer mới
+        if (existingEntry.layer) {
+          if ((existingEntry.layer as any).pm && typeof (existingEntry.layer as any).pm.disable === 'function') {
+            try { (existingEntry.layer as any).pm.disable(); } catch (e) {}
+          }
+          if (existingEntry.parentSubGroup) {
+            existingEntry.parentSubGroup.removeLayer(existingEntry.layer);
+          }
+          if (featureLayersRef.current && featureLayersRef.current.hasLayer(existingEntry.layer)) {
+            featureLayersRef.current.removeLayer(existingEntry.layer);
+          }
+          if (map.hasLayer(existingEntry.layer)) {
+            map.removeLayer(existingEntry.layer);
+          }
+        }
+        featureLayerMapRef.current.delete(featKey);
+      }
+
       const isSearchAreaLayer =
         feat.layerId === 'layer4_khu_vuc_quy_tap' ||
         parentLayer?.id === 'layer4_khu_vuc_quy_tap' ||
@@ -1933,13 +1985,13 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             : 'default';
 
           const pointMarker = L.marker(markerLatLng, {
-            icon: createPointIcon(pointType, isSelected, featureColor),
+            icon: getPointIcon(pointType, isSelected, featureColor),
             draggable: (interactionMode === 'pointer' || interactionMode === 'edit') && isSelected,
             zIndexOffset: isSelected ? 1000 : 0,
           });
 
           const updatePointStyle = (selected: boolean, mode: MapInteractionMode) => {
-            pointMarker.setIcon(createPointIcon(pointType, selected, featureColor));
+            pointMarker.setIcon(getPointIcon(pointType, selected, featureColor));
             if (mode === 'pointer' && selected) {
               if (pointMarker.dragging) {
                 pointMarker.dragging.enable();
@@ -2041,15 +2093,19 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             }
           });
 
+          const targetSubGroup =
+            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
+            layerSubGroupsRef.current.get('_unassigned_');
+
           featureLayerMapRef.current.set(featKey, {
             feature: feat,
             layer: pointMarker,
             updateStyle: updatePointStyle,
+            signature: newSignature,
+            coordSignature: newCoordSig,
+            parentSubGroup: targetSubGroup,
           });
 
-          const targetSubGroup =
-            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
-            layerSubGroupsRef.current.get('_unassigned_');
           targetSubGroup?.addLayer(pointMarker);
 
           // Apply initial style after adding layer to DOM
@@ -2210,15 +2266,19 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             }
           });
 
+          const targetSubGroup =
+            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
+            layerSubGroupsRef.current.get('_unassigned_');
+
           featureLayerMapRef.current.set(featKey, {
             feature: feat,
             layer: polygon,
             updateStyle: updatePolygonStyle,
+            signature: newSignature,
+            coordSignature: newCoordSig,
+            parentSubGroup: targetSubGroup,
           });
 
-          const targetSubGroup =
-            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
-            layerSubGroupsRef.current.get('_unassigned_');
           targetSubGroup?.addLayer(polygon);
 
           // Apply initial style
@@ -2352,15 +2412,19 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             }
           });
 
+          const targetSubGroup =
+            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
+            layerSubGroupsRef.current.get('_unassigned_');
+
           featureLayerMapRef.current.set(featKey, {
             feature: feat,
             layer: polyline,
             updateStyle: updatePolylineStyle,
+            signature: newSignature,
+            coordSignature: newCoordSig,
+            parentSubGroup: targetSubGroup,
           });
 
-          const targetSubGroup =
-            (feat.layerId && layerSubGroupsRef.current.get(feat.layerId)) ||
-            layerSubGroupsRef.current.get('_unassigned_');
           targetSubGroup?.addLayer(polyline);
 
           // Apply initial style
@@ -2371,15 +2435,20 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       }
     });
 
-    // Attach initial visible sub-groups to main featureLayers container
+    // Attach visible sub-groups to main featureLayers container if not already attached
     layers.forEach((l) => {
       const grp = layerSubGroupsRef.current.get(l.id);
-      if (grp && l.visible && featureLayersRef.current) {
-        featureLayersRef.current.addLayer(grp);
+      if (grp && featureLayersRef.current) {
+        const isAttached = featureLayersRef.current.hasLayer(grp);
+        if (l.visible && !isAttached) {
+          featureLayersRef.current.addLayer(grp);
+        } else if (!l.visible && isAttached) {
+          featureLayersRef.current.removeLayer(grp);
+        }
       }
     });
     const unassigned = layerSubGroupsRef.current.get('_unassigned_');
-    if (unassigned && featureLayersRef.current) {
+    if (unassigned && featureLayersRef.current && !featureLayersRef.current.hasLayer(unassigned)) {
       featureLayersRef.current.addLayer(unassigned);
     }
 
