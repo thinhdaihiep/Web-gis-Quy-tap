@@ -2013,25 +2013,26 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             }
           };
 
-          const popupHtml = `
-            <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
-              <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
-                ${parentLayer?.name || 'Vị trí GIS'}
+          pointMarker.bindPopup(() => {
+            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(feat);
+            return `
+              <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
+                <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
+                  ${parentLayer?.name || 'Vị trí GIS'}
+                </div>
+                <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
+                <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
+                ${
+                  phanLoaiBadgeText
+                    ? `<div style="margin-top:4px;"><span style="background-color:${featureColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`
+                    : ''
+                }
+                <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
+                  ${renderPopupProperties(feat, lat, lng, curHiddenKey)}
+                </div>
               </div>
-              <strong style="font-size: 13px; color: #1e3a8a;">${titleName}</strong><br/>
-              <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
-              ${
-                phanLoaiBadgeText
-                  ? `<div style="margin-top:4px;"><span style="background-color:${featureColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`
-                  : ''
-              }
-              <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                ${renderPopupProperties(feat, lat, lng, hiddenKey)}
-              </div>
-            </div>
-          `;
-
-          pointMarker.bindPopup(popupHtml);
+            `;
+          });
 
           if (shouldShowLabel && titleName) {
             pointMarker.bindTooltip(titleName, {
@@ -2196,25 +2197,26 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             }
           };
 
-          const popupHtml = `
-            <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
-              <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
-                ${parentLayer?.name || 'Khu vực GIS'}
+          polygon.bindPopup(() => {
+            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(feat);
+            return `
+              <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
+                <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
+                  ${parentLayer?.name || 'Khu vực GIS'}
+                </div>
+                <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
+                <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
+                ${
+                  phanLoaiBadgeText
+                    ? `<div style="margin-top:4px;"><span style="background-color:${featureColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`
+                    : ''
+                }
+                <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
+                  ${renderPopupProperties(feat, undefined, undefined, curHiddenKey)}
+                </div>
               </div>
-              <strong style="font-size: 13px; color: #1e3a8a;">${titleName}</strong><br/>
-              <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
-              ${
-                phanLoaiBadgeText
-                  ? `<div style="margin-top:4px;"><span style="background-color:${featureColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`
-                  : ''
-              }
-              <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                ${renderPopupProperties(feat, undefined, undefined, hiddenKey)}
-              </div>
-            </div>
-          `;
-
-          polygon.bindPopup(popupHtml);
+            `;
+          });
 
           if (shouldShowLabel && titleName) {
             polygon.bindTooltip(titleName, {
@@ -2356,16 +2358,17 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             }
           };
 
-          const popupHtml = `
-            <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
-              <strong style="font-size: 13px; color: #1e3a8a;">${titleName}</strong><br/>
-              <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                ${renderPopupProperties(feat, undefined, undefined, hiddenKey)}
+          polyline.bindPopup(() => {
+            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(feat);
+            return `
+              <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
+                <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
+                <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
+                  ${renderPopupProperties(feat, undefined, undefined, curHiddenKey)}
+                </div>
               </div>
-            </div>
-          `;
-
-          polyline.bindPopup(popupHtml);
+            `;
+          });
 
           if (shouldShowLabel && titleName) {
             polyline.bindTooltip(titleName, {

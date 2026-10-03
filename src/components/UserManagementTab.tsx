@@ -4,8 +4,8 @@ import {
   Plus,
   Trash2,
   RefreshCw,
-  Eye,
-  EyeOff,
+  KeyRound,
+  Check,
   CheckCircle2,
   AlertCircle,
   Shield,
@@ -23,8 +23,7 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 
-interface UserWithPassword extends AppUser {
-  password?: string;
+interface ManagedUser extends AppUser {
   createdAt?: string;
 }
 
@@ -32,7 +31,7 @@ const CACHE_KEY = 'gis_cached_users';
 
 export const UserManagementTab: React.FC = () => {
   // Load cached users initially for instant render
-  const [users, setUsers] = useState<UserWithPassword[]>(() => {
+  const [users, setUsers] = useState<ManagedUser[]>(() => {
     try {
       const cached = localStorage.getItem(CACHE_KEY);
       if (cached) {
@@ -59,8 +58,10 @@ export const UserManagementTab: React.FC = () => {
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newRole, setNewRole] = useState<UserRole>('editor');
 
-  // Password visibility map
-  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+  // Password reset inline state
+  const [resettingUserId, setResettingUserId] = useState<string | null>(null);
+  const [newResetPassword, setNewResetPassword] = useState('');
+  const [isResetting, setIsResetting] = useState<boolean>(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   const feedbackTimerRef = useRef<any>(null);
@@ -74,8 +75,8 @@ export const UserManagementTab: React.FC = () => {
   };
 
   // Helper to deduplicate and format user list
-  const processRawUsers = (rawList: any[]): UserWithPassword[] => {
-    const map = new Map<string, UserWithPassword>();
+  const processRawUsers = (rawList: any[]): ManagedUser[] => {
+    const map = new Map<string, ManagedUser>();
 
     rawList.forEach((item) => {
       const uname = String(item.username || item.email || '').trim();
@@ -93,7 +94,6 @@ export const UserManagementTab: React.FC = () => {
               : item.displayName || uname,
           photoURL: item.photoURL || '',
           role: (item.role as UserRole) || 'editor',
-          password: item.password || '',
           createdAt: item.createdAt || '',
         });
       }
@@ -106,7 +106,6 @@ export const UserManagementTab: React.FC = () => {
         username: 'admin',
         displayName: 'Bản đồ qk5',
         role: 'admin',
-        password: '123',
       });
     }
 
@@ -250,9 +249,12 @@ export const UserManagementTab: React.FC = () => {
       });
 
       // 3. Optimistic local update
-      const newEntry: UserWithPassword = {
+      const newEntry: ManagedUser = {
         uid: docId,
-        ...newUserDoc,
+        username: cleanUser,
+        displayName: cleanName,
+        role: newRole,
+        createdAt: newUserDoc.createdAt,
       };
       setUsers((prev) => {
         const updated = processRawUsers([...prev, newEntry]);
@@ -325,11 +327,50 @@ export const UserManagementTab: React.FC = () => {
     }
   };
 
-  const toggleShowPassword = (uid: string) => {
-    setShowPasswordMap((prev) => ({
-      ...prev,
-      [uid]: !prev[uid],
-    }));
+  const handleStartResetPassword = (uid: string) => {
+    setResettingUserId(uid);
+    setNewResetPassword('');
+  };
+
+  const handleCancelResetPassword = () => {
+    setResettingUserId(null);
+    setNewResetPassword('');
+  };
+
+  const handleConfirmResetPassword = async (uid: string) => {
+    const cleanPass = newResetPassword.trim();
+    if (!cleanPass) {
+      showFeedbackMessage('error', 'Vui lòng nhập mật khẩu mới');
+      return;
+    }
+
+    setIsResetting(true);
+    try {
+      // 1. Update Firestore directly
+      if (uid !== 'admin_static') {
+        await updateDoc(doc(db, 'users', uid), { password: cleanPass });
+      }
+
+      // 2. Update via server API
+      const res = await fetch(`/api/users/${uid}/password`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: cleanPass }),
+      });
+
+      if (!res.ok && uid !== 'admin_static') {
+        throw new Error('Server password update failed');
+      }
+
+      showFeedbackMessage('success', 'Đã đặt lại mật khẩu mới thành công');
+      setResettingUserId(null);
+      setNewResetPassword('');
+    } catch (err: any) {
+      console.error('Lỗi đặt lại mật khẩu:', err);
+      showFeedbackMessage('error', 'Không thể cập nhật mật khẩu, vui lòng thử lại');
+    } finally {
+      setIsResetting(false);
+    }
   };
 
   return (
@@ -452,9 +493,8 @@ export const UserManagementTab: React.FC = () => {
               onChange={(e) => setNewRole(e.target.value as UserRole)}
               className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
             >
-              <option value="admin">Quản trị viên (Admin)</option>
               <option value="editor">Biên tập viên (Editor)</option>
-              <option value="guest">Khách xem (Guest)</option>
+              <option value="admin">Quản trị viên (Admin)</option>
             </select>
           </div>
 
@@ -475,7 +515,7 @@ export const UserManagementTab: React.FC = () => {
         </form>
       </div>
 
-      {/* User List Table */}
+      {/* User List: Responsive Table for Desktop & 2-Row Card List for Mobile */}
       {loading && users.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400">
           <div className="w-7 h-7 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
@@ -486,92 +526,60 @@ export const UserManagementTab: React.FC = () => {
           Chưa có dữ liệu người dùng.
         </div>
       ) : (
-        <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-          <table className="w-full text-left text-xs text-slate-700">
-            <thead className="bg-slate-800 text-slate-200 text-[11px] uppercase font-bold tracking-wider">
-              <tr>
-                <th className="px-4 py-3">Người dùng</th>
-                <th className="px-4 py-3">Tài khoản</th>
-                <th className="px-4 py-3">Mật khẩu</th>
-                <th className="px-4 py-3">Vai trò</th>
-                <th className="px-4 py-3 text-right">Thao tác</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 bg-white">
-              {users.map((u) => {
-                const isSystemAdmin = u.username.toLowerCase() === 'admin';
-                const showPass = !!showPasswordMap[u.uid];
+        <>
+          {/* MOBILE VIEW (< sm): 2-Row Card Structure */}
+          <div className="block sm:hidden space-y-2.5">
+            {users.map((u) => {
+              const isSystemAdmin = u.username.toLowerCase() === 'admin';
+              const isResettingThis = resettingUserId === u.uid;
 
-                return (
-                  <tr key={u.uid} className="hover:bg-slate-50/80 transition">
-                    {/* Cột 1: Người dùng */}
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <div
-                          className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold uppercase shrink-0 ${
-                            isSystemAdmin
-                              ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                              : u.role === 'editor'
-                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                          }`}
-                        >
-                          {u.displayName ? u.displayName.charAt(0) : u.username.charAt(0)}
-                        </div>
-                        <div>
-                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                            <span>{u.displayName || u.username}</span>
-                            {isSystemAdmin && (
-                              <span className="px-1.5 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-black rounded">
-                                Hệ thống
-                              </span>
-                            )}
-                          </div>
-                          {u.createdAt && (
-                            <div className="text-[10px] text-slate-400">
-                              Tạo: {new Date(u.createdAt).toLocaleDateString('vi-VN')}
-                            </div>
+              return (
+                <div
+                  key={u.uid}
+                  className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs space-y-2.5"
+                >
+                  {/* HÀNG 1: Thông tin người dùng & Tên đăng nhập */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div
+                        className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold uppercase shrink-0 ${
+                          isSystemAdmin
+                            ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                            : u.role === 'admin'
+                            ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                            : 'bg-amber-100 text-amber-800 border border-amber-200'
+                        }`}
+                      >
+                        {u.displayName ? u.displayName.charAt(0) : u.username.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 text-xs truncate flex items-center gap-1.5">
+                          <span className="truncate">{u.displayName || u.username}</span>
+                          {isSystemAdmin && (
+                            <span className="px-1.5 py-0.2 bg-rose-100 text-rose-700 text-[10px] font-black rounded shrink-0">
+                              Hệ thống
+                            </span>
                           )}
                         </div>
+                        <div className="text-[11px] font-mono text-slate-500 truncate">
+                          @{u.username}
+                        </div>
                       </div>
-                    </td>
+                    </div>
 
-                    {/* Cột 2: Tài khoản (Username) */}
-                    <td className="px-4 py-3">
-                      <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-1 rounded">
-                        {u.username}
+                    {u.createdAt && (
+                      <span className="text-[10px] text-slate-400 shrink-0">
+                        {new Date(u.createdAt).toLocaleDateString('vi-VN')}
                       </span>
-                    </td>
+                    )}
+                  </div>
 
-                    {/* Cột 3: Mật khẩu */}
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-slate-700 bg-slate-50 border border-slate-200 px-2 py-1 rounded min-w-[70px] text-center">
-                          {showPass ? (
-                            u.password || (isSystemAdmin ? '123' : '•••')
-                          ) : (
-                            '••••••••'
-                          )}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => toggleShowPassword(u.uid)}
-                          className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition cursor-pointer"
-                          title={showPass ? 'Ẩn mật khẩu' : 'Xem mật khẩu'}
-                        >
-                          {showPass ? (
-                            <EyeOff className="w-3.5 h-3.5" />
-                          ) : (
-                            <Eye className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      </div>
-                    </td>
-
-                    {/* Cột 4: Vai trò */}
-                    <td className="px-4 py-3">
+                  {/* HÀNG 2: Dropdown Phân quyền (bên trái) & Thao tác (bên phải) */}
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                    {/* Phân quyền */}
+                    <div className="shrink-0">
                       {isSystemAdmin ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 font-bold text-xs">
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 font-bold text-[11px]">
                           <Shield className="w-3 h-3 text-rose-600" />
                           <span>Quản trị viên</span>
                         </span>
@@ -582,57 +590,258 @@ export const UserManagementTab: React.FC = () => {
                           className={`text-xs font-bold px-2.5 py-1 rounded-lg border focus:outline-none cursor-pointer ${
                             u.role === 'admin'
                               ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : u.role === 'editor'
-                              ? 'bg-amber-50 text-amber-800 border-amber-200'
-                              : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : 'bg-amber-50 text-amber-800 border-amber-200'
                           }`}
                         >
-                          <option value="admin">Quản trị viên</option>
                           <option value="editor">Biên tập viên</option>
-                          <option value="guest">Khách</option>
+                          <option value="admin">Quản trị viên</option>
                         </select>
                       )}
-                    </td>
+                    </div>
 
-                    {/* Cột 5: Thao tác */}
-                    <td className="px-4 py-3 text-right">
-                      {isSystemAdmin ? (
-                        <span className="text-[11px] text-slate-400 italic">Mặc định</span>
-                      ) : deletingUserId === u.uid ? (
-                        <div className="flex items-center justify-end gap-1.5">
-                          <span className="text-[11px] text-rose-600 font-bold">Xóa?</span>
+                    {/* Thao tác */}
+                    <div className="flex items-center gap-1.5 justify-end">
+                      {isResettingThis ? (
+                        <div className="flex items-center gap-1 animate-in fade-in">
+                          <input
+                            type="text"
+                            value={newResetPassword}
+                            onChange={(e) => setNewResetPassword(e.target.value)}
+                            placeholder="Mật khẩu mới"
+                            className="w-24 px-2 py-1 bg-white border border-blue-400 rounded text-xs font-mono focus:ring-1 focus:ring-blue-500 outline-none"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleConfirmResetPassword(u.uid);
+                              if (e.key === 'Escape') handleCancelResetPassword();
+                            }}
+                          />
                           <button
                             type="button"
-                            onClick={() => handleDeleteUser(u.uid)}
-                            className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded cursor-pointer transition shadow-2xs"
+                            disabled={isResetting}
+                            onClick={() => handleConfirmResetPassword(u.uid)}
+                            className="p-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition cursor-pointer"
+                            title="Lưu"
                           >
-                            Có
+                            <Check className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
-                            onClick={() => setDeletingUserId(null)}
-                            className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-medium rounded cursor-pointer transition"
+                            onClick={handleCancelResetPassword}
+                            className="p-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg transition cursor-pointer"
+                            title="Hủy"
                           >
-                            Hủy
+                            <X className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       ) : (
                         <button
                           type="button"
-                          onClick={() => setDeletingUserId(u.uid)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                          title="Xóa tài khoản"
+                          onClick={() => handleStartResetPassword(u.uid)}
+                          className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 border border-slate-200 rounded-lg transition cursor-pointer"
+                          title="Đặt lại mật khẩu"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <KeyRound className="w-3.5 h-3.5" />
                         </button>
                       )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+
+                      {!isSystemAdmin && (
+                        deletingUserId === u.uid ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUser(u.uid)}
+                              className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg cursor-pointer"
+                            >
+                              Có
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeletingUserId(null)}
+                              className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-medium rounded-lg cursor-pointer"
+                            >
+                              Hủy
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingUserId(u.uid)}
+                            className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition cursor-pointer"
+                            title="Xóa tài khoản"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* DESKTOP VIEW (>= sm): Compact 4-Column Table */}
+          <div className="hidden sm:block border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+            <table className="w-full text-left text-xs text-slate-700">
+              <thead className="bg-slate-800 text-slate-200 text-[11px] uppercase font-bold tracking-wider">
+                <tr>
+                  <th className="px-4 py-3">Người dùng</th>
+                  <th className="px-4 py-3">Tài khoản</th>
+                  <th className="px-4 py-3">Vai trò</th>
+                  <th className="px-4 py-3 text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 bg-white">
+                {users.map((u) => {
+                  const isSystemAdmin = u.username.toLowerCase() === 'admin';
+                  const isResettingThis = resettingUserId === u.uid;
+
+                  return (
+                    <tr key={u.uid} className="hover:bg-slate-50/80 transition">
+                      {/* Cột 1: Người dùng */}
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold uppercase shrink-0 ${
+                              isSystemAdmin
+                                ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                                : u.role === 'admin'
+                                ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                                : 'bg-amber-100 text-amber-800 border border-amber-200'
+                            }`}
+                          >
+                            {u.displayName ? u.displayName.charAt(0) : u.username.charAt(0)}
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                              <span>{u.displayName || u.username}</span>
+                              {isSystemAdmin && (
+                                <span className="px-1.5 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-black rounded">
+                                  Hệ thống
+                                </span>
+                              )}
+                            </div>
+                            {u.createdAt && (
+                              <div className="text-[10px] text-slate-400">
+                                Tạo: {new Date(u.createdAt).toLocaleDateString('vi-VN')}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Cột 2: Tài khoản (Username) */}
+                      <td className="px-4 py-3">
+                        <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-1 rounded">
+                          {u.username}
+                        </span>
+                      </td>
+
+                      {/* Cột 3: Vai trò */}
+                      <td className="px-4 py-3">
+                        {isSystemAdmin ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 font-bold text-xs">
+                            <Shield className="w-3 h-3 text-rose-600" />
+                            <span>Quản trị viên</span>
+                          </span>
+                        ) : (
+                          <select
+                            value={u.role}
+                            onChange={(e) => handleRoleChange(u.uid, e.target.value as UserRole)}
+                            className={`text-xs font-bold px-2.5 py-1 rounded-lg border focus:outline-none cursor-pointer ${
+                              u.role === 'admin'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : 'bg-amber-50 text-amber-800 border-amber-200'
+                            }`}
+                          >
+                            <option value="editor">Biên tập viên</option>
+                            <option value="admin">Quản trị viên</option>
+                          </select>
+                        )}
+                      </td>
+
+                      {/* Cột 4: Thao tác (KeyRound + Trash2) */}
+                      <td className="px-4 py-3 text-right">
+                        {isResettingThis ? (
+                          <div className="flex items-center justify-end gap-1.5 animate-in fade-in">
+                            <input
+                              type="text"
+                              value={newResetPassword}
+                              onChange={(e) => setNewResetPassword(e.target.value)}
+                              placeholder="Mật khẩu mới"
+                              className="w-28 px-2 py-1 bg-white border border-blue-400 rounded text-xs font-mono focus:ring-1 focus:ring-blue-500 outline-none"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleConfirmResetPassword(u.uid);
+                                if (e.key === 'Escape') handleCancelResetPassword();
+                              }}
+                            />
+                            <button
+                              type="button"
+                              disabled={isResetting}
+                              onClick={() => handleConfirmResetPassword(u.uid)}
+                              className="p-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition cursor-pointer disabled:bg-blue-300"
+                              title="Lưu mật khẩu mới"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCancelResetPassword}
+                              className="p-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg transition cursor-pointer"
+                              title="Hủy"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : deletingUserId === u.uid ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <span className="text-[11px] text-rose-600 font-bold">Xóa?</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUser(u.uid)}
+                              className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded cursor-pointer transition shadow-2xs"
+                            >
+                              Có
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeletingUserId(null)}
+                              className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-medium rounded cursor-pointer transition"
+                            >
+                              Hủy
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleStartResetPassword(u.uid)}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
+                              title="Đặt lại mật khẩu"
+                            >
+                              <KeyRound className="w-3.5 h-3.5" />
+                            </button>
+                            {!isSystemAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => setDeletingUserId(u.uid)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                                title="Xóa tài khoản"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );

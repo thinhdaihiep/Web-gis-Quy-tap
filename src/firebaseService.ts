@@ -60,28 +60,24 @@ export const signInWithCredentials = async (username: string, password: string):
       console.warn('Direct Firestore login failed, falling back to server API:', fsErr);
     }
 
-    // 2. Fallback: Query via Server API /api/users
+    // 2. Fallback: Query via Server API /api/login
     try {
-      const res = await fetch('/api/users');
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: cleanUser, password: cleanPass }),
+      });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data.users)) {
-          const matched = data.users.find(
-            (u: any) =>
-              (String(u.username || '').trim().toLowerCase() === cleanUser ||
-                String(u.email || '').trim().toLowerCase() === cleanUser) &&
-              String(u.password || '').trim() === cleanPass
-          );
-          if (matched) {
-            const user: AppUser = {
-              uid: matched.uid || `user_${matched.username}`,
-              username: matched.username,
-              displayName: matched.displayName || matched.username,
-              role: (matched.role as UserRole) || 'editor',
-            };
-            localStorage.setItem('gis_user_session', JSON.stringify(user));
-            return user;
-          }
+        if (data.success && data.user) {
+          const user: AppUser = {
+            uid: data.user.uid || `user_${data.user.username}`,
+            username: data.user.username,
+            displayName: data.user.displayName || data.user.username,
+            role: (data.user.role as UserRole) || 'editor',
+          };
+          localStorage.setItem('gis_user_session', JSON.stringify(user));
+          return user;
         }
       }
     } catch (apiErr) {

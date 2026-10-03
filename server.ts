@@ -118,7 +118,6 @@ async function startServer() {
               unameLower === 'admin' && (data.displayName === 'Quản trị viên' || !data.displayName)
                 ? 'Bản đồ qk5'
                 : data.displayName || uname,
-            password: data.password || '',
             photoURL: data.photoURL || '',
             role: data.role || 'editor',
             createdAt: data.createdAt || '',
@@ -139,6 +138,58 @@ async function startServer() {
     } catch (err: any) {
       console.error('[API /api/users] Error:', err);
       res.status(500).json({ error: err.message || 'Failed to fetch users' });
+    }
+  });
+
+  // Secure Server-side Login endpoint
+  app.post('/api/login', async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { username, password } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ error: 'Username and password are required' });
+      }
+      const cleanUser = String(username).trim().toLowerCase();
+      const cleanPass = String(password).trim();
+
+      if (cleanUser === 'admin' && (cleanPass === '123' || cleanPass === 'admin')) {
+        return res.json({
+          success: true,
+          user: {
+            uid: 'admin_static',
+            username: 'admin',
+            displayName: 'Bản đồ qk5',
+            role: 'admin',
+          },
+        });
+      }
+
+      const snap = await getDocs(collection(serverDb, 'users'));
+      let matchedUser: any = null;
+
+      snap.forEach((docSnap) => {
+        const data = docSnap.data();
+        const uname = (data.username || data.email || '').trim().toLowerCase();
+        if ((uname === cleanUser || docSnap.id === `user_${cleanUser}`) && String(data.password || '').trim() === cleanPass) {
+          matchedUser = {
+            uid: docSnap.id,
+            username: data.username || cleanUser,
+            displayName: data.displayName || data.username || cleanUser,
+            role: data.role || 'editor',
+          };
+        }
+      });
+
+      if (matchedUser) {
+        return res.json({ success: true, user: matchedUser });
+      }
+
+      return res.status(401).json({ error: 'Invalid credentials' });
+    } catch (err: any) {
+      console.error('[API /api/login] Error:', err);
+      res.status(500).json({ error: err.message || 'Login failed' });
     }
   });
 
@@ -183,6 +234,24 @@ async function startServer() {
     } catch (err: any) {
       console.error('[API PATCH /api/users/:uid/role] Error:', err);
       res.status(500).json({ error: err.message || 'Failed to update role' });
+    }
+  });
+
+  app.patch('/api/users/:uid/password', async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { uid } = req.params;
+      const { password } = req.body;
+      if (!password) {
+        return res.status(400).json({ error: 'Password is required' });
+      }
+      await updateDoc(doc(serverDb, 'users', uid), { password: String(password).trim() });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API PATCH /api/users/:uid/password] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to update password' });
     }
   });
 
