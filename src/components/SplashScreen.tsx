@@ -29,9 +29,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
       </div>
 
       {/* Top Header */}
-      <header className="relative z-10 w-full max-w-xl flex items-center justify-center text-center text-[10px] sm:text-xs font-mono tracking-widest text-slate-400 pt-1 pb-3 border-b border-slate-800/80 px-2">
-        <div className="flex items-center text-red-500 font-bold tracking-wider">
-          <span className="whitespace-normal leading-tight">Ban chỉ đạo tìm kiếm và quy tập mộ liệt sĩ Quân khu 5</span>
+      <header className="relative z-10 w-full max-w-xl flex items-center justify-center text-center font-sans pt-1 pb-3 border-b border-slate-800/80 px-2">
+        <div className="flex items-center text-red-500 font-bold tracking-tight sm:tracking-wide text-[11px] sm:text-xs md:text-sm">
+          <span className="whitespace-normal leading-tight text-center">Ban chỉ đạo tìm kiếm và quy tập mộ liệt sĩ Quân khu 5</span>
         </div>
       </header>
 
