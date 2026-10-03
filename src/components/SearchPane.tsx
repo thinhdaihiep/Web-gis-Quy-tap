@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, X, ChevronRight } from 'lucide-react';
+import { List } from 'react-window';
 import { LayerConfig, GeoJsonFeatureItem } from '../types';
 import { getFieldAlias, isFeatureMatch } from '../fieldAlias';
 import { formatDateForDisplay } from '../utils/dateFormatter';
@@ -113,6 +114,31 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
     });
   }, [features, appliedQuery, hasSearched, selectedLayerFilter]);
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [listDimensions, setListDimensions] = useState<{ width: number; height: number }>({ width: 320, height: 400 });
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const updateSize = () => {
+      if (containerRef.current) {
+        const { clientWidth, clientHeight } = containerRef.current;
+        if (clientWidth > 0 && clientHeight > 0) {
+          setListDimensions({ width: clientWidth, height: clientHeight });
+        }
+      }
+    };
+
+    updateSize();
+    const observer = new ResizeObserver(() => {
+      updateSize();
+    });
+    observer.observe(containerRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [isOpen, hasSearched, filteredFeatures.length]);
+
   if (!isOpen) return null;
 
   return (
@@ -214,7 +240,7 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
       )}
 
       {/* Results List or Empty Prompt */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
+      <div ref={containerRef} className="flex-1 overflow-hidden p-2 custom-scrollbar">
         {!hasSearched ? (
           <div className="p-8 text-center text-slate-400 text-xs flex flex-col items-center gap-2">
             <Search className="w-8 h-8 stroke-1 text-slate-500 opacity-50" />
@@ -233,54 +259,78 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
             </button>
           </div>
         ) : (
-          filteredFeatures.map((feat, idx) => {
-            const displayName = getFeatureDisplayName(feat);
-            const isSelected = isFeatureMatch(feat, selectedFeatureId);
-            const layerObj = layers.find((l) => l.id === feat.layerId);
-            const layerName = layerObj?.name || 'Lớp dữ liệu';
+          <List
+            className="custom-scrollbar"
+            defaultHeight={Math.max(listDimensions.height - 16, 120)}
+            overscanCount={80}
+            rowCount={filteredFeatures.length}
+            rowHeight={74}
+            rowProps={{
+              features: filteredFeatures,
+              selectedFeatureId,
+              layers,
+              onSingleClickFeature,
+            }}
+            rowComponent={({ index, style, features, selectedFeatureId, layers, onSingleClickFeature }) => {
+              const feat = features[index];
+              if (!feat) return null;
 
-            // Extract a few summary details from properties
-            const props = feat.properties || {};
-            const subInfo =
-              props['QueQuan'] ||
-              props['que_quan'] ||
-              props['DiaDanh'] ||
-              props['DonVi'] ||
-              props['NghiaTrang'] ||
-              props['Huyen'] ||
-              props['Tinh'] ||
-              null;
+              const displayName = getFeatureDisplayName(feat);
+              const isSelected = isFeatureMatch(feat, selectedFeatureId);
+              const layerObj = layers.find((l: any) => l.id === feat.layerId);
+              const layerName = layerObj?.name || 'Lớp dữ liệu';
 
-            return (
-              <div
-                key={`${feat.layerId || 'layer'}_${feat.id}_${idx}`}
-                onClick={() => onSingleClickFeature(feat)}
-                className={`p-2.5 rounded-xl border transition cursor-pointer select-none flex flex-col gap-1.5 ${
-                  isSelected
-                    ? 'bg-blue-900/50 border-blue-500 text-white shadow-md shadow-blue-950/40'
-                    : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700/60 hover:border-slate-600 text-slate-200'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className={`text-xs font-bold truncate ${isSelected ? 'text-blue-300' : 'text-slate-100'}`}>
-                    {displayName}
-                  </h3>
-                  <ChevronRight className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-blue-400' : 'text-slate-500'}`} />
+              // Extract a few summary details from properties
+              const props = feat.properties || {};
+              const subInfo =
+                props['QueQuan'] ||
+                props['que_quan'] ||
+                props['DiaDanh'] ||
+                props['DonVi'] ||
+                props['NghiaTrang'] ||
+                props['Huyen'] ||
+                props['Tinh'] ||
+                null;
+
+              return (
+                <div
+                  style={{
+                    ...style,
+                    top: (typeof style.top === 'number' ? style.top : parseFloat(String(style.top))) + 'px',
+                    height: (typeof style.height === 'number' ? style.height - 6 : parseFloat(String(style.height)) - 6) + 'px',
+                  }}
+                  className="pr-1"
+                >
+                  <div
+                    onClick={() => onSingleClickFeature(feat)}
+                    className={`h-full p-2.5 rounded-xl border transition cursor-pointer select-none flex flex-col justify-between ${
+                      isSelected
+                        ? 'bg-blue-900/50 border-blue-500 text-white shadow-md shadow-blue-950/40'
+                        : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700/60 hover:border-slate-600 text-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className={`text-xs font-bold truncate ${isSelected ? 'text-blue-300' : 'text-slate-100'}`}>
+                        {displayName}
+                      </h3>
+                      <ChevronRight className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-blue-400' : 'text-slate-500'}`} />
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-700/40 pt-1">
+                      <span className="text-[10px] text-blue-400 font-medium truncate max-w-[130px]">
+                        {layerName}
+                      </span>
+                      {subInfo && (
+                        <span className="truncate max-w-[150px] text-slate-300 italic">
+                          {String(subInfo)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-
-                <div className="flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-700/40 pt-1">
-                  <span className="text-[10px] text-blue-400 font-medium truncate max-w-[130px]">
-                    {layerName}
-                  </span>
-                  {subInfo && (
-                    <span className="truncate max-w-[170px] text-slate-300 italic">
-                      {String(subInfo)}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })
+              );
+            }}
+          />
         )}
       </div>
     </div>
