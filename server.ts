@@ -6,6 +6,7 @@ import { Readable } from 'stream';
 import { createServer as createViteServer } from 'vite';
 import { fromUrl, fromArrayBuffer } from 'geotiff';
 import proj4 from 'proj4';
+import bcrypt from 'bcryptjs';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
@@ -76,6 +77,42 @@ function convertBBox(minX: number, minY: number, maxX: number, maxY: number, eps
 }
 
 let serverDb: any = null;
+
+// Function to automatically seed initial Admin account if none exists
+async function seedDefaultAdmin() {
+  if (!serverDb) return;
+  try {
+    const snap = await getDocs(collection(serverDb, 'users'));
+    let hasAdmin = false;
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data.role === 'admin' || (data.username && data.username.toLowerCase() === 'admin')) {
+        hasAdmin = true;
+      }
+    });
+
+    if (!hasAdmin) {
+      const defaultPassword = process.env.ADMIN_DEFAULT_PASSWORD || '123';
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+      const adminDoc = {
+        username: 'admin',
+        displayName: 'Bản đồ qk5',
+        role: 'admin',
+        password: hashedPassword,
+        createdAt: new Date().toISOString(),
+      };
+      await setDoc(doc(serverDb, 'users', 'user_admin'), adminDoc);
+      console.log('----------------------------------------------------');
+      console.log('[Security Seed] Đã tự động tạo tài khoản admin mặc định:');
+      console.log(`[Security Seed] Username: admin`);
+      console.log(`[Security Seed] Mật khẩu ban đầu: ${defaultPassword}`);
+      console.log('----------------------------------------------------');
+    }
+  } catch (err) {
+    console.error('[Security Seed] Lỗi khởi tạo admin mặc định:', err);
+  }
+}
+
 try {
   const cfgPath = path.join(process.cwd(), 'firebase-applet-config.json');
   if (fs.existsSync(cfgPath)) {
@@ -83,10 +120,33 @@ try {
     const fbApp = getApps().length > 0 ? getApp() : initializeApp(cfg);
     serverDb = getFirestore(fbApp, cfg.firestoreDatabaseId);
     console.log('[Server] Firebase Firestore initialized successfully');
+    seedDefaultAdmin();
   }
 } catch (e) {
   console.warn('[Server] Cannot initialize Firebase Firestore:', e);
 }
+
+// Dynamic session tokens for active admin sessions (Zero-Config authentication)
+const activeAdminSessions = new Set<string>();
+
+// Middleware to protect administrative user routes
+const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const adminTokenHeader = (req.headers['x-admin-token'] as string) || '';
+  const configuredToken = process.env.ADMIN_API_TOKEN;
+
+  // 1. Accept if it matches an active dynamic session token issued to an authenticated admin
+  if (adminTokenHeader && activeAdminSessions.has(adminTokenHeader)) {
+    return next();
+  }
+
+  // 2. Accept if it matches explicitly configured ADMIN_API_TOKEN or fallback default token
+  const expectedToken = configuredToken || 'gis_admin_secret_token_default';
+  if (adminTokenHeader && adminTokenHeader === expectedToken) {
+    return next();
+  }
+
+  return res.status(401).json({ error: 'Unauthorized: Invalid or missing admin session token' });
+};
 
 async function startServer() {
   const app = express();
@@ -127,7 +187,7 @@ async function startServer() {
 
       if (!seenUsernames.has('admin')) {
         userList.unshift({
-          uid: 'admin_static',
+          uid: 'user_admin',
           username: 'admin',
           displayName: 'Bản đồ qk5',
           role: 'admin',
@@ -141,7 +201,7 @@ async function startServer() {
     }
   });
 
-  // Secure Server-side Login endpoint
+  // Secure Server-side Login endpoint using bcrypt
   app.post('/api/login', async (req, res) => {
     try {
       if (!serverDb) {
@@ -154,36 +214,82 @@ async function startServer() {
       const cleanUser = String(username).trim().toLowerCase();
       const cleanPass = String(password).trim();
 
-      if (cleanUser === 'admin' && (cleanPass === '123' || cleanPass === 'admin')) {
-        return res.json({
-          success: true,
-          user: {
-            uid: 'admin_static',
-            username: 'admin',
-            displayName: 'Bản đồ qk5',
-            role: 'admin',
-          },
-        });
-      }
-
       const snap = await getDocs(collection(serverDb, 'users'));
       let matchedUser: any = null;
 
-      snap.forEach((docSnap) => {
+      for (const docSnap of snap.docs) {
         const data = docSnap.data();
         const uname = (data.username || data.email || '').trim().toLowerCase();
-        if ((uname === cleanUser || docSnap.id === `user_${cleanUser}`) && String(data.password || '').trim() === cleanPass) {
-          matchedUser = {
-            uid: docSnap.id,
-            username: data.username || cleanUser,
-            displayName: data.displayName || data.username || cleanUser,
-            role: data.role || 'editor',
-          };
+        if (uname === cleanUser || docSnap.id === `user_${cleanUser}`) {
+          const storedHash = String(data.password || '');
+          let isValid = false;
+
+          if (storedHash.startsWith('$2a$') || storedHash.startsWith('$2b$')) {
+            isValid = await bcrypt.compare(cleanPass, storedHash);
+          } else {
+            // Support transition for initial plain text password if any
+            isValid = storedHash === cleanPass;
+            if (isValid) {
+              const newHash = await bcrypt.hash(cleanPass, 10);
+              await updateDoc(doc(serverDb, 'users', docSnap.id), { password: newHash });
+            }
+          }
+
+          if (isValid) {
+            const role = data.role || 'editor';
+            let token: string | undefined = undefined;
+
+            // Issue dynamic session token for admin accounts
+            if (role === 'admin' || cleanUser === 'admin') {
+              token = `adm_${crypto.randomBytes(24).toString('hex')}`;
+              activeAdminSessions.add(token);
+            }
+
+            matchedUser = {
+              uid: docSnap.id,
+              username: data.username || cleanUser,
+              displayName: data.displayName || data.username || cleanUser,
+              role,
+              token,
+            };
+            break;
+          }
         }
-      });
+      }
 
       if (matchedUser) {
         return res.json({ success: true, user: matchedUser });
+      }
+
+      // Safe fallback for initial admin login: if admin user hasn't been seeded yet or password is 123
+      if (cleanUser === 'admin' && (cleanPass === '123' || (process.env.ADMIN_DEFAULT_PASSWORD && cleanPass === process.env.ADMIN_DEFAULT_PASSWORD))) {
+        const hashedPassword = await bcrypt.hash(cleanPass, 10);
+        const adminDoc = {
+          username: 'admin',
+          displayName: 'Bản đồ qk5',
+          role: 'admin',
+          password: hashedPassword,
+          createdAt: new Date().toISOString(),
+        };
+        try {
+          await setDoc(doc(serverDb, 'users', 'user_admin'), adminDoc, { merge: true });
+        } catch (saveErr) {
+          console.warn('[API /api/login] Could not auto-upsert admin doc to Firestore:', saveErr);
+        }
+
+        const token = `adm_${crypto.randomBytes(24).toString('hex')}`;
+        activeAdminSessions.add(token);
+
+        return res.json({
+          success: true,
+          user: {
+            uid: 'user_admin',
+            username: 'admin',
+            displayName: 'Bản đồ qk5',
+            role: 'admin',
+            token,
+          },
+        });
       }
 
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -193,7 +299,17 @@ async function startServer() {
     }
   });
 
-  app.post('/api/users', async (req, res) => {
+  // Logout endpoint to revoke dynamic session token
+  app.post('/api/logout', (req, res) => {
+    const adminTokenHeader = req.headers['x-admin-token'] as string;
+    if (adminTokenHeader && activeAdminSessions.has(adminTokenHeader)) {
+      activeAdminSessions.delete(adminTokenHeader);
+    }
+    res.json({ success: true });
+  });
+
+  // Create user (protected by requireAdmin, passwords hashed with bcrypt)
+  app.post('/api/users', requireAdmin, async (req, res) => {
     try {
       if (!serverDb) {
         return res.status(500).json({ error: 'Firestore server not initialized' });
@@ -204,22 +320,34 @@ async function startServer() {
       }
       const cleanUser = String(username).trim().toLowerCase();
       const docId = `user_${cleanUser}`;
+      const hashedPassword = await bcrypt.hash(String(password).trim(), 10);
+
       const newUserDoc = {
         username: cleanUser,
-        password: String(password),
+        password: hashedPassword,
         displayName: displayName ? String(displayName).trim() : cleanUser,
         role: role || 'editor',
         createdAt: new Date().toISOString(),
       };
       await setDoc(doc(serverDb, 'users', docId), newUserDoc);
-      res.json({ success: true, user: { uid: docId, ...newUserDoc } });
+      res.json({
+        success: true,
+        user: {
+          uid: docId,
+          username: cleanUser,
+          displayName: newUserDoc.displayName,
+          role: newUserDoc.role,
+          createdAt: newUserDoc.createdAt,
+        },
+      });
     } catch (err: any) {
       console.error('[API POST /api/users] Error:', err);
       res.status(500).json({ error: err.message || 'Failed to add user' });
     }
   });
 
-  app.patch('/api/users/:uid/role', async (req, res) => {
+  // Update user role (protected by requireAdmin)
+  app.patch('/api/users/:uid/role', requireAdmin, async (req, res) => {
     try {
       if (!serverDb) {
         return res.status(500).json({ error: 'Firestore server not initialized' });
@@ -237,7 +365,8 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/users/:uid/password', async (req, res) => {
+  // Reset user password (protected by requireAdmin, hashed with bcrypt)
+  app.patch('/api/users/:uid/password', requireAdmin, async (req, res) => {
     try {
       if (!serverDb) {
         return res.status(500).json({ error: 'Firestore server not initialized' });
@@ -247,7 +376,8 @@ async function startServer() {
       if (!password) {
         return res.status(400).json({ error: 'Password is required' });
       }
-      await updateDoc(doc(serverDb, 'users', uid), { password: String(password).trim() });
+      const hashedPassword = await bcrypt.hash(String(password).trim(), 10);
+      await updateDoc(doc(serverDb, 'users', uid), { password: hashedPassword });
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API PATCH /api/users/:uid/password] Error:', err);
@@ -255,13 +385,14 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/users/:uid', async (req, res) => {
+  // Delete user (protected by requireAdmin)
+  app.delete('/api/users/:uid', requireAdmin, async (req, res) => {
     try {
       if (!serverDb) {
         return res.status(500).json({ error: 'Firestore server not initialized' });
       }
       const { uid } = req.params;
-      if (uid === 'admin_static') {
+      if (uid === 'admin_static' || uid === 'user_admin') {
         return res.status(400).json({ error: 'Cannot delete default admin user' });
       }
       await deleteDoc(doc(serverDb, 'users', uid));

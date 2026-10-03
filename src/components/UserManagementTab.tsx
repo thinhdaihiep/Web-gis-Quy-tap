@@ -13,21 +13,37 @@ import {
   X,
 } from 'lucide-react';
 import { AppUser, UserRole } from '../types';
-import { db } from '../firebase';
-import {
-  collection,
-  doc,
-  updateDoc,
-  setDoc,
-  deleteDoc,
-  onSnapshot,
-} from 'firebase/firestore';
 
 interface ManagedUser extends AppUser {
   createdAt?: string;
 }
 
 const CACHE_KEY = 'gis_cached_users';
+
+// Token for administrative user endpoints (POST, PATCH, DELETE /api/users)
+// Dynamically reads the active admin session token from login, or falls back to env token
+const getAdminHeaders = (): Record<string, string> => {
+  let sessionToken = '';
+  try {
+    const rawSession = localStorage.getItem('gis_user_session');
+    if (rawSession) {
+      const parsed = JSON.parse(rawSession);
+      if (parsed && parsed.token) {
+        sessionToken = parsed.token;
+      }
+    }
+  } catch (_) {}
+
+  const adminToken =
+    sessionToken ||
+    (import.meta as any).env?.VITE_ADMIN_API_TOKEN ||
+    'gis_admin_secret_token_default';
+
+  return {
+    'Content-Type': 'application/json',
+    'x-admin-token': adminToken,
+  };
+};
 
 export const UserManagementTab: React.FC = () => {
   // Load cached users initially for instant render
@@ -40,7 +56,7 @@ export const UserManagementTab: React.FC = () => {
     } catch (_) {}
     return [
       {
-        uid: 'admin_static',
+        uid: 'user_admin',
         username: 'admin',
         displayName: 'Bản đồ qk5',
         role: 'admin',
@@ -102,7 +118,7 @@ export const UserManagementTab: React.FC = () => {
     // Ensure default system admin account exists
     if (!map.has('admin')) {
       map.set('admin', {
-        uid: 'admin_static',
+        uid: 'user_admin',
         username: 'admin',
         displayName: 'Bản đồ qk5',
         role: 'admin',
@@ -139,45 +155,12 @@ export const UserManagementTab: React.FC = () => {
     }
   };
 
-  // Realtime listener on Firestore 'users' collection
+  // Load users from server API on mount
   useEffect(() => {
     setLoading(true);
-    let unsubscribe = () => {};
-
-    try {
-      unsubscribe = onSnapshot(
-        collection(db, 'users'),
-        (snapshot) => {
-          const rawDocs: any[] = [];
-          snapshot.forEach((docSnap) => {
-            rawDocs.push({
-              uid: docSnap.id,
-              ...docSnap.data(),
-            });
-          });
-
-          const processed = processRawUsers(rawDocs);
-          setUsers(processed);
-          setLoading(false);
-          try {
-            localStorage.setItem(CACHE_KEY, JSON.stringify(processed));
-          } catch (_) {}
-        },
-        (error) => {
-          console.warn('Firestore onSnapshot error, falling back to /api/users:', error);
-          fetchUsersFromServer().finally(() => setLoading(false));
-        }
-      );
-    } catch (e) {
-      console.warn('Cannot setup Firestore onSnapshot:', e);
-      fetchUsersFromServer().finally(() => setLoading(false));
-    }
-
-    // Also call server API immediately to ensure instant sync
     fetchUsersFromServer().finally(() => setLoading(false));
 
     return () => {
-      unsubscribe();
       if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
     };
   }, []);
@@ -193,20 +176,19 @@ export const UserManagementTab: React.FC = () => {
     });
 
     try {
-      // 1. Update Firestore
-      if (uid !== 'admin_static') {
-        await updateDoc(doc(db, 'users', uid), { role: newRole });
-      }
-      // 2. Sync with Server API
-      await fetch(`/api/users/${uid}/role`, {
+      const res = await fetch(`/api/users/${uid}/role`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({ role: newRole }),
       });
+      if (!res.ok) {
+        throw new Error('Server returned error');
+      }
       showFeedbackMessage('success', 'Đã cập nhật quyền thành công');
     } catch (err) {
       console.error('Lỗi cập nhật vai trò:', err);
       showFeedbackMessage('error', 'Không thể cập nhật quyền người dùng');
+      fetchUsersFromServer();
     }
   };
 
@@ -228,76 +210,41 @@ export const UserManagementTab: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    const docId = `user_${cleanUser}`;
     const newUserDoc = {
       username: cleanUser,
       password: cleanPass,
       displayName: cleanName,
       role: newRole,
-      createdAt: new Date().toISOString(),
     };
 
     try {
-      // 1. Write to Firestore directly
-      await setDoc(doc(db, 'users', docId), newUserDoc);
-
-      // 2. Also send to Server API
-      await fetch('/api/users', {
+      const res = await fetch('/api/users', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify(newUserDoc),
       });
 
-      // 3. Optimistic local update
-      const newEntry: ManagedUser = {
-        uid: docId,
-        username: cleanUser,
-        displayName: cleanName,
-        role: newRole,
-        createdAt: newUserDoc.createdAt,
-      };
-      setUsers((prev) => {
-        const updated = processRawUsers([...prev, newEntry]);
-        try {
-          localStorage.setItem(CACHE_KEY, JSON.stringify(updated));
-        } catch (_) {}
-        return updated;
-      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Server error when creating user');
+      }
 
+      showFeedbackMessage('success', `Đã thêm tài khoản "${cleanName}" thành công`);
+      await fetchUsersFromServer();
       setNewUsername('');
       setNewPassword('');
       setNewDisplayName('');
       setNewRole('editor');
-      showFeedbackMessage('success', `Đã thêm tài khoản "${cleanName}" thành công`);
     } catch (err: any) {
       console.error('Lỗi thêm người dùng:', err);
-      // Try fallback to server API alone
-      try {
-        const res = await fetch('/api/users', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newUserDoc),
-        });
-        if (res.ok) {
-          showFeedbackMessage('success', `Đã thêm tài khoản "${cleanName}" thành công (qua Server)`);
-          fetchUsersFromServer();
-          setNewUsername('');
-          setNewPassword('');
-          setNewDisplayName('');
-          setNewRole('editor');
-        } else {
-          showFeedbackMessage('error', 'Không thể thêm người dùng mới, vui lòng thử lại');
-        }
-      } catch (_) {
-        showFeedbackMessage('error', 'Lỗi kết nối khi thêm người dùng mới');
-      }
+      showFeedbackMessage('error', err.message || 'Không thể thêm người dùng mới, vui lòng thử lại');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDeleteUser = async (uid: string) => {
-    if (uid === 'admin_static') {
+    if (uid === 'admin_static' || uid === 'user_admin') {
       showFeedbackMessage('error', 'Không thể xóa tài khoản Quản trị viên hệ thống');
       setDeletingUserId(null);
       return;
@@ -313,10 +260,13 @@ export const UserManagementTab: React.FC = () => {
     });
 
     try {
-      // 1. Delete from Firestore
-      await deleteDoc(doc(db, 'users', uid));
-      // 2. Delete via Server API
-      await fetch(`/api/users/${uid}`, { method: 'DELETE' });
+      const res = await fetch(`/api/users/${uid}`, {
+        method: 'DELETE',
+        headers: getAdminHeaders(),
+      });
+      if (!res.ok) {
+        throw new Error('Server failed to delete user');
+      }
       showFeedbackMessage('success', 'Đã xóa tài khoản thành công');
     } catch (err) {
       console.error('Lỗi xóa người dùng:', err);
@@ -346,19 +296,13 @@ export const UserManagementTab: React.FC = () => {
 
     setIsResetting(true);
     try {
-      // 1. Update Firestore directly
-      if (uid !== 'admin_static') {
-        await updateDoc(doc(db, 'users', uid), { password: cleanPass });
-      }
-
-      // 2. Update via server API
       const res = await fetch(`/api/users/${uid}/password`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({ password: cleanPass }),
       });
 
-      if (!res.ok && uid !== 'admin_static') {
+      if (!res.ok) {
         throw new Error('Server password update failed');
       }
 

@@ -1,4 +1,4 @@
-import { doc, setDoc, getDoc, getDocs, collection, writeBatch, deleteDoc, query, where } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, collection, writeBatch, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole, RasterLayer, RasterFileItem } from './types';
 import { deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
@@ -14,59 +14,16 @@ export const signInWithCredentials = async (username: string, password: string):
     const cleanUser = username.trim().toLowerCase();
     const cleanPass = password.trim();
 
-    // Default admin account
-    if (cleanUser === 'admin' && (cleanPass === '123' || cleanPass === 'admin')) {
-      const adminUser: AppUser = {
-        uid: 'admin_static',
-        username: 'admin',
-        displayName: 'Bản đồ qk5',
-        role: 'admin',
-      };
-      localStorage.setItem('gis_user_session', JSON.stringify(adminUser));
-      return adminUser;
-    }
+    if (!cleanUser || !cleanPass) return null;
 
-    // 1. Try Firestore Client Query
-    try {
-      let q = query(
-        collection(db, 'users'),
-        where('username', '==', cleanUser),
-        where('password', '==', cleanPass)
-      );
-      let snapshot = await getDocs(q);
-
-      if (snapshot.empty && username.trim() !== cleanUser) {
-        q = query(
-          collection(db, 'users'),
-          where('username', '==', username.trim()),
-          where('password', '==', cleanPass)
-        );
-        snapshot = await getDocs(q);
-      }
-
-      if (!snapshot.empty) {
-        const docSnap = snapshot.docs[0];
-        const data = docSnap.data();
-        const user: AppUser = {
-          uid: docSnap.id,
-          username: data.username,
-          displayName: data.displayName || data.username,
-          role: (data.role as UserRole) || 'editor',
-        };
-        localStorage.setItem('gis_user_session', JSON.stringify(user));
-        return user;
-      }
-    } catch (fsErr) {
-      console.warn('Direct Firestore login failed, falling back to server API:', fsErr);
-    }
-
-    // 2. Fallback: Query via Server API /api/login
+    // 1. Single secure path: Call server-side /api/login
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: cleanUser, password: cleanPass }),
       });
+
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.user) {
@@ -75,38 +32,25 @@ export const signInWithCredentials = async (username: string, password: string):
             username: data.user.username,
             displayName: data.user.displayName || data.user.username,
             role: (data.user.role as UserRole) || 'editor',
+            token: data.user.token,
           };
           localStorage.setItem('gis_user_session', JSON.stringify(user));
           return user;
         }
       }
     } catch (apiErr) {
-      console.warn('Server API login fallback failed:', apiErr);
-    }
-
-    // 3. Fallback: Cached users in localStorage (Offline support)
-    try {
-      const cached = localStorage.getItem('gis_cached_users');
-      if (cached) {
-        const list = JSON.parse(cached);
-        const matched = list.find(
-          (u: any) =>
-            (String(u.username || '').trim().toLowerCase() === cleanUser ||
-              String(u.email || '').trim().toLowerCase() === cleanUser) &&
-            String(u.password || '').trim() === cleanPass
-        );
-        if (matched) {
-          const user: AppUser = {
-            uid: matched.uid || `user_${matched.username}`,
-            username: matched.username,
-            displayName: matched.displayName || matched.username,
-            role: (matched.role as UserRole) || 'editor',
-          };
-          localStorage.setItem('gis_user_session', JSON.stringify(user));
-          return user;
+      console.warn('Server login request failed (possible network issue):', apiErr);
+      // Offline fallback: Check cached user session if network is completely down
+      try {
+        const cachedSession = localStorage.getItem('gis_user_session');
+        if (cachedSession) {
+          const sessionUser = JSON.parse(cachedSession) as AppUser;
+          if (sessionUser && sessionUser.username.toLowerCase() === cleanUser) {
+            return sessionUser;
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
     return null;
   } catch (error) {
@@ -116,6 +60,18 @@ export const signInWithCredentials = async (username: string, password: string):
 };
 
 export const signOutUser = (): void => {
+  try {
+    const stored = localStorage.getItem('gis_user_session');
+    if (stored) {
+      const parsed: AppUser = JSON.parse(stored);
+      if (parsed.token) {
+        fetch('/api/logout', {
+          method: 'POST',
+          headers: { 'x-admin-token': parsed.token },
+        }).catch(() => {});
+      }
+    }
+  } catch (_) {}
   localStorage.removeItem('gis_user_session');
 };
 

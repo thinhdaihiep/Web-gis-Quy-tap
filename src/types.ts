@@ -7,6 +7,7 @@ export interface AppUser {
   displayName: string | null;
   photoURL?: string | null;
   role: UserRole;
+  token?: string;
 }
 
 
