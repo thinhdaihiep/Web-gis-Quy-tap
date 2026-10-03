@@ -1435,6 +1435,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     };
 
     let debounceTimer: any = null;
+    let moveRafId: number | null = null;
     const debouncedEvaluateRasters = () => {
       // Run the instant check first to update visible file statuses in real-time
       evaluateRasters(true);
@@ -1517,9 +1518,14 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     // Evaluate initially
     evaluateRasters();
 
-    // Re-evaluate on map movements with instant response while moving
+    // Re-evaluate on map movements with instant response throttled to 1 call per animation frame
     const handleMapMoveInstant = () => {
-      evaluateRasters(true);
+      if (moveRafId !== null) return;
+      moveRafId = requestAnimationFrame(() => {
+        moveRafId = null;
+        if (!isActive) return;
+        evaluateRasters(true);
+      });
     };
     
     map.on('move', handleMapMoveInstant);
@@ -1533,6 +1539,10 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       isActive = false;
       if (debounceTimer) clearTimeout(debounceTimer);
       if (bufferDebounceTimer) clearTimeout(bufferDebounceTimer);
+      if (moveRafId !== null) {
+        cancelAnimationFrame(moveRafId);
+        moveRafId = null;
+      }
       window.removeEventListener('clear-raster-cache', handleClearRasterCacheEvent);
       window.removeEventListener('retry-failed-rasters', handleRetryFailedRastersEvent);
       window.removeEventListener('pause-raster-loading', handlePauseRasterLoadingEvent);
