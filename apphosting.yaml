@@ -15,3 +15,7 @@ scripts:
 env:
   - variable: NODE_ENV
     value: production
+  - variable: GitHub_Access
+    secret: GitHub_Access
+  - variable: ADMIN_API_TOKEN
+    secret: admin_api_token

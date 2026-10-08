@@ -57,6 +57,7 @@ export const TRAN_DANH_LICH_SU_SCHEMA: FieldDefinition[] = [
   { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
   { name: 'GhiChu', alias: 'Ghi chú', type: 'String', length: 255 },
   { name: 'BenTa', alias: 'Bên ta', type: 'String', length: 255 },
+  { name: 'HoSo', alias: 'Hồ sơ', type: 'String', length: 500 },
 ];
 
 /**

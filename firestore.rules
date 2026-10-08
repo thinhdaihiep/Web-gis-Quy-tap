@@ -1,14 +1,69 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Explicitly block direct client access to users collection
+    // 1. Strictly block all direct access to users collection (passwords/credentials handled securely on backend)
     match /users/{userId} {
       allow read, write: if false;
     }
 
-    // Default open access for map layers, settings, and other app collections
+    // Helper functions for validating data payloads
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    function isValidFeature(data) {
+      return ('id' in data && data.id is string && data.id.size() <= 128)
+        && (!('layerId' in data) || (data.layerId is string && data.layerId.size() <= 128))
+        && (!('type' in data) || (data.type is string && data.type.size() <= 64))
+        && (!('coordinates' in data) || (data.coordinates is string && data.coordinates.size() <= 2097152) || data.coordinates is list)
+        && (!('properties' in data) || data.properties is map);
+    }
+
+    function isValidChunk(data) {
+      return (!('payloadJson' in data) || (data.payloadJson is string && data.payloadJson.size() <= 2097152))
+        && (!('chunkIndex' in data) || data.chunkIndex is int)
+        && (!('itemCount' in data) || data.itemCount is int);
+    }
+
+    // 2. Map Features collection: individual feature objects
+    match /map_features/{featureId} {
+      allow read: if true;
+      allow create, update: if isValidId(featureId) && isValidFeature(request.resource.data);
+      allow delete: if isValidId(featureId);
+    }
+
+    // 3. Layer Chunks collection: batched layers
+    match /layer_chunks/{chunkId} {
+      allow read: if true;
+      allow create, update: if isValidId(chunkId) && isValidChunk(request.resource.data);
+      allow delete: if isValidId(chunkId);
+    }
+
+    // 4. App settings: custom layer names, aliases, configuration
+    match /app_settings/{settingId} {
+      allow read: if true;
+      allow create, update: if isValidId(settingId) && request.resource.data.size() <= 200;
+      allow delete: if isValidId(settingId);
+    }
+
+    // 5. Raster layers metadata
+    match /raster_layers/{rasterId} {
+      allow read: if true;
+      allow create, update: if isValidId(rasterId);
+      allow delete: if isValidId(rasterId);
+    }
+
+    // 6. Admin notifications
+    match /notifications/{notificationId} {
+      allow read, write: if isValidId(notificationId);
+    }
+
+    // 7. Global default deny for any other collections
     match /{document=**} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if false;
     }
   }
 }
+
+

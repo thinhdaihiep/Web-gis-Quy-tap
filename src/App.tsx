@@ -14,6 +14,7 @@ import { DatabaseManagementModal } from './components/DatabaseManagementModal';
 import { NotificationModal } from './components/NotificationModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
+import { PdfViewerModal } from './components/PdfViewerModal';
 
 import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode, RasterLayer, RasterLoadingStatus, LatLngBoundsBox, normalizeBoundsBox } from './types';
 import {
@@ -218,6 +219,15 @@ export default function App() {
   const [editingFeature, setEditingFeature] = useState<Partial<GeoJsonFeatureItem> | null>(null);
   const [isFeatureEditModalOpen, setIsFeatureEditModalOpen] = useState<boolean>(false);
   const [isAddFeatureModalOpen, setIsAddFeatureModalOpen] = useState<boolean>(false);
+  const [pdfViewerState, setPdfViewerState] = useState<{
+    isOpen: boolean;
+    url: string | null;
+    title?: string;
+  }>({
+    isOpen: false,
+    url: null,
+    title: undefined,
+  });
   const [drawingPointsCount, setDrawingPointsCount] = useState<number>(0);
   const drawingVerticesRef = useRef<[number, number][]>([]);
 
@@ -1651,6 +1661,9 @@ export default function App() {
             drawingVerticesRef={drawingVerticesRef}
             onRasterStatusChange={setRasterStatus}
             onMapRenderedReady={() => setIsMapRendered(true)}
+            onOpenPdfViewer={(url, title) => {
+              setPdfViewerState({ isOpen: true, url, title: title || 'Hồ sơ trận đánh' });
+            }}
           />
 
           {/* Map Overlay Controls (Top Right 3 BaseMaps Switcher & Raster Checkbox/Combo & Zoom & GPS Locate) */}
@@ -1858,6 +1871,9 @@ export default function App() {
               setIsAttributePaneOpen(false);
             }}
             onReload={handleReloadFeature}
+            onOpenPdfViewer={(url, title) => {
+              setPdfViewerState({ isOpen: true, url, title: title || 'Hồ sơ trận đánh' });
+            }}
             onClose={() => setIsAttributePaneOpen(false)}
           />
         )}
@@ -1894,6 +1910,9 @@ export default function App() {
           currentUser={user}
           onSave={handleSaveFeature}
           onDelete={handleDeleteFeature}
+          onOpenPdfViewer={(url, title) => {
+            setPdfViewerState({ isOpen: true, url, title: title || 'Hồ sơ trận đánh' });
+          }}
           onClose={() => {
             setIsFeatureEditModalOpen(false);
             setEditingFeature(null);
@@ -1935,6 +1954,16 @@ export default function App() {
         <NotificationModal
           isOpen={isNotificationModalOpen}
           onClose={() => setIsNotificationModalOpen(false)}
+        />
+      )}
+
+      {/* PDF Dossier In-App Viewer Modal */}
+      {pdfViewerState.isOpen && (
+        <PdfViewerModal
+          isOpen={pdfViewerState.isOpen}
+          fileUrl={pdfViewerState.url}
+          title={pdfViewerState.title}
+          onClose={() => setPdfViewerState({ isOpen: false, url: null, title: undefined })}
         />
       )}
 

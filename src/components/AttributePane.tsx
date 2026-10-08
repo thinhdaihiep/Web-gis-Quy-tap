@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GeoJsonFeatureItem, LayerConfig, UserRole, PHAN_LOAI_COLORS, AppUser } from '../types';
 import {
   X,
@@ -9,6 +9,10 @@ import {
   Lock,
   RotateCw,
   Calendar,
+  FileText,
+  Upload,
+  ExternalLink,
+  Loader2,
 } from 'lucide-react';
 import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
@@ -22,6 +26,7 @@ interface AttributePaneProps {
   onSave: (feature: GeoJsonFeatureItem) => void;
   onDelete?: (featureId: string) => void;
   onReload?: (featureId: string) => Promise<void>;
+  onOpenPdfViewer?: (url: string, title?: string) => void;
   onClose: () => void;
 }
 
@@ -39,6 +44,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   onSave,
   onDelete,
   onReload,
+  onOpenPdfViewer,
   onClose,
 }) => {
   const [name, setName] = useState<string>('');
@@ -47,6 +53,8 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   const [propRows, setPropRows] = useState<EditablePropertyRow[]>([]);
   const [showRawFieldName, setShowRawFieldName] = useState<boolean>(false);
   const [isReloading, setIsReloading] = useState<boolean>(false);
+  const [isUploadingDossier, setIsUploadingDossier] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Resizable pane width state
   const [paneWidth, setPaneWidth] = useState<number>(380);
@@ -219,6 +227,82 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
     );
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+      alert('Vui lòng chọn file định dạng PDF.');
+      return;
+    }
+
+    setIsUploadingDossier(true);
+    try {
+      // Read file as base64
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64Data = reader.result as string;
+          const objectIdVal =
+            feature.properties?.OBJECTID ??
+            feature.properties?.objectid ??
+            feature.code ??
+            feature.id;
+
+          const res = await fetch('/api/battles/upload-hoso', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: file.name,
+              fileBase64: base64Data,
+              objectId: objectIdVal,
+              battleName: name || feature.name || 'TranDanh',
+            }),
+          });
+
+          const data = await res.json();
+          if (res.ok && data.url) {
+            handleValueChange('HoSo', data.url);
+          } else {
+            alert(data.error || 'Tải hồ sơ lên GitHub thất bại.');
+          }
+        } catch (uploadErr: any) {
+          alert('Lỗi kết nối khi tải hồ sơ: ' + (uploadErr?.message || uploadErr));
+        } finally {
+          setIsUploadingDossier(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      alert('Lỗi đọc file: ' + (err?.message || err));
+      setIsUploadingDossier(false);
+    }
+  };
+
+  const handleDeleteDossier = async () => {
+    const hoSoRow = propRows.find((r) => r.rawKey === 'HoSo' || r.rawKey.toLowerCase() === 'hoso');
+    const curUrl = hoSoRow?.value || '';
+
+    if (!window.confirm('Bạn có chắc chắn muốn xóa hồ sơ trận đánh này không?')) {
+      return;
+    }
+
+    if (curUrl) {
+      try {
+        await fetch('/api/battles/delete-hoso', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileUrl: curUrl }),
+        });
+      } catch (e) {
+        console.warn('Lỗi khi gọi API xóa file trên GitHub:', e);
+      }
+    }
+
+    handleValueChange('HoSo', '');
+  };
+
   const handleSubmit = () => {
     if (!name.trim()) {
       alert('Vui lòng nhập Tên đối tượng');
@@ -352,15 +436,25 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
               {/* Row: Tên đối tượng */}
               <tr className="hover:bg-slate-50 transition">
                 <td className="py-2 px-2.5 border-r border-slate-200 font-bold bg-slate-50 text-slate-700 text-[11px]">
-                  Tên đối tượng <span className="text-red-500">*</span>
+                  Tên đối tượng {currentRole !== 'guest' && <span className="text-red-500">*</span>}
                 </td>
                 <td className="py-1.5 px-2">
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-bold text-slate-900 focus:ring-1 focus:ring-blue-500 outline-none"
-                  />
+                  {currentRole === 'guest' ? (
+                    <input
+                      type="text"
+                      disabled
+                      value={name}
+                      className="w-full px-2 py-1 rounded border border-slate-200 text-xs font-bold text-slate-700 bg-slate-100 cursor-not-allowed select-all"
+                      title="Bạn không có quyền chỉnh sửa tên đối tượng"
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-bold text-slate-900 focus:ring-1 focus:ring-blue-500 outline-none"
+                    />
+                  )}
                 </td>
               </tr>
 
@@ -394,9 +488,14 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
                   </td>
                   <td className="py-1.5 px-2">
                     <select
+                      disabled={currentRole === 'guest'}
                       value={phanLoai}
                       onChange={(e) => setPhanLoai(Number(e.target.value))}
-                      className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-semibold text-slate-800 bg-white focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer"
+                      className={`w-full px-2 py-1 rounded border text-xs font-semibold ${
+                        currentRole === 'guest'
+                          ? 'border-slate-200 text-slate-600 bg-slate-100 cursor-not-allowed opacity-90'
+                          : 'border-slate-300 text-slate-800 bg-white focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer'
+                      }`}
                     >
                       {Object.entries(PHAN_LOAI_COLORS).map(([k, v]) => (
                         <option key={k} value={k}>
@@ -419,16 +518,92 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
                 .map((row) => {
                 const locked = isLockedField(row.rawKey, row.aliasLabel);
                 const isDate = isDateField(row.rawKey, row.aliasLabel);
+                const isHoSo = row.rawKey.toLowerCase() === 'hoso';
                 const displayKey = showRawFieldName ? row.rawKey : row.aliasLabel;
                 return (
                   <tr key={row.rawKey} className="hover:bg-slate-50 transition">
                     <td className="py-2 px-2.5 border-r border-slate-200 font-bold bg-slate-50 text-slate-700 text-[11px] flex items-center gap-1.5">
                       {locked && <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
                       {isDate && <Calendar className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
+                      {isHoSo && <FileText className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
                       <span className="truncate" title={displayKey}>{displayKey}</span>
                     </td>
                     <td className="py-1.5 px-2">
-                      {locked || currentRole === 'guest' ? (
+                      {isHoSo ? (
+                        <div className="flex flex-col gap-1.5">
+                          {/* File input hidden */}
+                          <input
+                            type="file"
+                            ref={fileInputRef}
+                            accept=".pdf,application/pdf"
+                            onChange={handleFileUpload}
+                            className="hidden"
+                          />
+
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {/* Nút Xem hồ sơ (nếu HoSo not null) */}
+                            {row.value && row.value.trim() !== '' ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onOpenPdfViewer) {
+                                    onOpenPdfViewer(row.value, name || feature.name || 'Hồ sơ trận đánh');
+                                  } else {
+                                    window.open(row.value, '_blank');
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-2xs cursor-pointer"
+                                title="Xem hồ sơ trận đánh"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                <span>Xem</span>
+                              </button>
+                            ) : null}
+
+                            {/* Nút Thêm/Thay hồ sơ (cho Editor/Admin) */}
+                            {currentRole !== 'guest' && (
+                              <button
+                                type="button"
+                                disabled={isUploadingDossier}
+                                onClick={() => fileInputRef.current?.click()}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition cursor-pointer disabled:opacity-50"
+                                title="Tải lên file hồ sơ PDF lên GitHub Release"
+                              >
+                                {isUploadingDossier ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                                    <span>Đang tải...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Upload className="w-3.5 h-3.5 text-slate-600" />
+                                    <span>{row.value ? 'Đổi file' : 'Tải lên PDF'}</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
+
+                            {/* Nút Xóa hồ sơ */}
+                            {currentRole !== 'guest' && row.value && row.value.trim() !== '' && (
+                              <button
+                                type="button"
+                                onClick={handleDeleteDossier}
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                                title="Xóa hồ sơ này"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Link URL / Tên file hiển thị nhỏ gọn */}
+                          {row.value && (
+                            <div className="text-[10px] text-slate-500 truncate max-w-full font-mono bg-slate-50 p-1 rounded border border-slate-200" title={row.value}>
+                              {decodeURIComponent(row.value.split('/').pop() || row.value)}
+                            </div>
+                          )}
+                        </div>
+                      ) : locked || currentRole === 'guest' ? (
                         <input
                           type="text"
                           disabled

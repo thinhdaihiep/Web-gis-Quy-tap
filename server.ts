@@ -126,22 +126,108 @@ try {
   console.warn('[Server] Cannot initialize Firebase Firestore:', e);
 }
 
-// Dynamic session tokens for active admin sessions (Zero-Config authentication)
+// Dynamic session tokens for active admin and editor sessions (Zero-Config authentication)
+interface ActiveSession {
+  username: string;
+  role: 'admin' | 'editor';
+}
+const activeSessions = new Map<string, ActiveSession>();
 const activeAdminSessions = new Set<string>();
 
-// Middleware to protect administrative user routes
-const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const adminTokenHeader = (req.headers['x-admin-token'] as string) || '';
-  const configuredToken = process.env.ADMIN_API_TOKEN;
+const getSecretToken = (): string => {
+  return process.env.ADMIN_API_TOKEN || process.env.admin_api_token || 'Bando@qk5';
+};
 
-  // 1. Accept if it matches an active dynamic session token issued to an authenticated admin
-  if (adminTokenHeader && activeAdminSessions.has(adminTokenHeader)) {
+// Cryptographic token helper to ensure user session survives server restarts
+const createSignedToken = (username: string, role: 'admin' | 'editor'): string => {
+  const secret = getSecretToken();
+  const timestamp = Date.now();
+  const payload = `v1:${role}:${username}:${timestamp}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
+  return `${payload}:${sig}`;
+};
+
+const verifySignedToken = (token: string): ActiveSession | null => {
+  if (!token || !token.startsWith('v1:')) return null;
+  const parts = token.split(':');
+  if (parts.length !== 5) return null;
+  const [version, role, username, timestampStr, sig] = parts;
+  if (version !== 'v1' || (role !== 'admin' && role !== 'editor')) return null;
+
+  const timestamp = parseInt(timestampStr, 10);
+  if (isNaN(timestamp)) return null;
+
+  // Max session lifetime: 30 days
+  const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  if (Date.now() - timestamp > MAX_AGE_MS) return null;
+
+  const secret = getSecretToken();
+  const payload = `v1:${role}:${username}:${timestampStr}`;
+  const expectedSig = crypto.createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
+
+  if (sig === expectedSig) {
+    return { username, role: role as 'admin' | 'editor' };
+  }
+  return null;
+};
+
+// Middleware to verify editor or admin session
+const requireEditorOrAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = (req.headers['x-session-token'] || req.headers['x-admin-token']) as string;
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized: Thiếu mã phiên đăng nhập' });
+  }
+
+  // 1. In-memory session check
+  const session = activeSessions.get(token);
+  if (session && (session.role === 'admin' || session.role === 'editor')) {
+    (req as any).user = session;
     return next();
   }
 
-  // 2. Accept if it matches explicitly configured ADMIN_API_TOKEN or fallback default token
-  const expectedToken = configuredToken || 'gis_admin_secret_token_default';
-  if (adminTokenHeader && adminTokenHeader === expectedToken) {
+  // 2. Cryptographically signed token check (survives server reboots)
+  const verified = verifySignedToken(token);
+  if (verified) {
+    activeSessions.set(token, verified);
+    if (verified.role === 'admin') activeAdminSessions.add(token);
+    (req as any).user = verified;
+    return next();
+  }
+
+  // 3. Static admin token check (from secrets/env or Bando@qk5)
+  const configuredToken = getSecretToken();
+  if (token === configuredToken || token === 'Bando@qk5' || activeAdminSessions.has(token)) {
+    (req as any).user = { username: 'admin', role: 'admin' };
+    return next();
+  }
+
+  return res.status(403).json({ error: 'Forbidden: Bạn không có quyền ghi dữ liệu' });
+};
+
+// Middleware to protect administrative user routes
+const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const adminTokenHeader = ((req.headers['x-admin-token'] || req.headers['x-session-token']) as string) || '';
+  if (!adminTokenHeader) {
+    return res.status(401).json({ error: 'Unauthorized: Thiếu token quản trị' });
+  }
+
+  // 1. In-memory session check
+  const session = activeSessions.get(adminTokenHeader);
+  if (session && session.role === 'admin') {
+    return next();
+  }
+
+  // 2. Cryptographically signed token check
+  const verified = verifySignedToken(adminTokenHeader);
+  if (verified && verified.role === 'admin') {
+    activeSessions.set(adminTokenHeader, verified);
+    activeAdminSessions.add(adminTokenHeader);
+    return next();
+  }
+
+  // 3. Static admin token check
+  const configuredToken = getSecretToken();
+  if (adminTokenHeader === configuredToken || adminTokenHeader === 'Bando@qk5' || activeAdminSessions.has(adminTokenHeader)) {
     return next();
   }
 
@@ -152,7 +238,290 @@ async function startServer() {
   const app = express();
   const PORT = process.env.NODE_ENV === 'production' && process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
+
+  // ==========================================
+  // GITHUB RELEASE BATTLE DOSSIER (HỒ SƠ TRẬN ĐÁNH) APIS
+  // ==========================================
+  const GITHUB_REPO_OWNER = 'thinhdaihiep';
+  const GITHUB_REPO_NAME = 'Web-gis-Quy-tap';
+  const GITHUB_RELEASE_TAG = 'TranDanh';
+
+  const getEffectiveGitHubToken = () => {
+    return (
+      process.env.GitHub_Access ||
+      process.env.GITHUB_ACCESS ||
+      process.env.GITHUB_TOKEN ||
+      process.env.GH_TOKEN ||
+      ''
+    ).trim();
+  };
+
+  // Helper to get or create GitHub release by tag
+  async function getOrCreateGitHubRelease(token: string) {
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'WebGIS-App/1.0',
+    };
+
+    // 1. Try to get release
+    const getRes = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/tags/${GITHUB_RELEASE_TAG}`,
+      { headers }
+    );
+
+    if (getRes.ok) {
+      return await getRes.json();
+    }
+
+    // 2. If 404, create the release
+    if (getRes.status === 404) {
+      const createRes = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`,
+        {
+          method: 'POST',
+          headers: {
+            ...headers,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tag_name: GITHUB_RELEASE_TAG,
+            name: 'Hồ sơ tài liệu các trận đánh lịch sử',
+            body: 'Kho lưu trữ tài liệu hồ sơ trận đánh (PDF) tự động tải lên từ hệ thống WebGIS.',
+            draft: false,
+            prerelease: false,
+          }),
+        }
+      );
+
+      if (createRes.ok) {
+        return await createRes.json();
+      }
+      const errText = await createRes.text();
+      throw new Error(`Không thể khởi tạo GitHub Release: ${createRes.status} ${errText}`);
+    }
+
+    const errText = await getRes.text();
+    throw new Error(`Không thể truy cập GitHub Release: ${getRes.status} ${errText}`);
+  }
+
+  // Upload battle dossier PDF to GitHub Release
+  app.post('/api/battles/upload-hoso', async (req, res) => {
+    try {
+      const token = getEffectiveGitHubToken();
+      if (!token) {
+        return res.status(500).json({
+          error: 'Chưa cấu hình mã GitHub_Access trong biến môi trường / Secrets của máy chủ.',
+        });
+      }
+
+      const { fileName, fileBase64, objectId, battleName } = req.body;
+      if (!fileBase64) {
+        return res.status(400).json({ error: 'Thiếu nội dung file base64' });
+      }
+
+      // Format standard filename: [OBJECTID].[Ten].pdf
+      let targetFileName = fileName || 'hoso.pdf';
+      if (objectId !== undefined && objectId !== null && battleName) {
+        // Sanitize Ten for safe URL/Filename
+        const sanitizedName = String(battleName)
+          .replace(/[\\/:*?"<>|#]/g, '_')
+          .trim();
+        targetFileName = `${objectId}.${sanitizedName}.pdf`;
+      } else if (!targetFileName.toLowerCase().endsWith('.pdf')) {
+        targetFileName += '.pdf';
+      }
+
+      // Convert base64 to Buffer
+      const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
+      const fileBuffer = Buffer.from(cleanBase64, 'base64');
+
+      // 1. Get or create release
+      const release = await getOrCreateGitHubRelease(token);
+      const releaseId = release.id;
+      const uploadUrlTemplate = release.upload_url; // e.g. "https://uploads.github.com/repos/.../assets{?name,label}"
+      const uploadBaseUrl = uploadUrlTemplate.replace(/\{.*?\}$/, '');
+
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'WebGIS-App/1.0',
+      };
+
+      // 2. Check if asset already exists with the same filename, delete it first to overwrite
+      if (Array.isArray(release.assets)) {
+        const existingAsset = release.assets.find(
+          (a: any) => a.name.toLowerCase() === targetFileName.toLowerCase()
+        );
+        if (existingAsset && existingAsset.id) {
+          try {
+            await fetch(
+              `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/assets/${existingAsset.id}`,
+              {
+                method: 'DELETE',
+                headers,
+              }
+            );
+          } catch (delErr) {
+            console.warn('Lỗi khi xóa asset cũ trước khi ghi đè:', delErr);
+          }
+        }
+      }
+
+      // 3. Upload new asset
+      const uploadUrl = `${uploadBaseUrl}?name=${encodeURIComponent(targetFileName)}`;
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/pdf',
+          'Content-Length': String(fileBuffer.length),
+        },
+        body: fileBuffer,
+      });
+
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text();
+        return res.status(uploadRes.status).json({
+          error: `Tải file lên GitHub Release thất bại: ${uploadRes.status} ${errText}`,
+        });
+      }
+
+      const assetData = await uploadRes.json();
+      const directDownloadUrl =
+        assetData.browser_download_url ||
+        `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/download/${GITHUB_RELEASE_TAG}/${encodeURIComponent(targetFileName)}`;
+
+      res.json({
+        success: true,
+        fileName: targetFileName,
+        url: directDownloadUrl,
+        assetId: assetData.id,
+      });
+    } catch (err: any) {
+      console.error('[API POST /api/battles/upload-hoso] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi khi upload hồ sơ trận đánh lên GitHub' });
+    }
+  });
+
+  // Delete battle dossier PDF from GitHub Release
+  app.post('/api/battles/delete-hoso', async (req, res) => {
+    try {
+      const token = getEffectiveGitHubToken();
+      const { fileUrl, fileName } = req.body;
+
+      if (!fileUrl && !fileName) {
+        return res.status(400).json({ error: 'Thiếu thông tin URL hoặc tên file cần xóa' });
+      }
+
+      // If token not provided, simply acknowledge so client can clear HoSo property
+      if (!token) {
+        return res.json({ success: true, message: 'Đã xóa liên kết hồ sơ trên hệ thống' });
+      }
+
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'WebGIS-App/1.0',
+      };
+
+      // Extract target file name
+      let targetName = fileName;
+      if (!targetName && fileUrl) {
+        const parts = fileUrl.split('/');
+        targetName = decodeURIComponent(parts[parts.length - 1]);
+      }
+
+      const releaseRes = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/tags/${GITHUB_RELEASE_TAG}`,
+        { headers }
+      );
+
+      if (releaseRes.ok) {
+        const release = await releaseRes.json();
+        if (Array.isArray(release.assets)) {
+          const matched = release.assets.find(
+            (a: any) => a.name.toLowerCase() === (targetName || '').toLowerCase()
+          );
+          if (matched && matched.id) {
+            await fetch(
+              `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/assets/${matched.id}`,
+              {
+                method: 'DELETE',
+                headers,
+              }
+            );
+          }
+        }
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/battles/delete-hoso] Error:', err);
+      // Even if GitHub asset delete has error, allow user to clear the HoSo property
+      res.json({ success: true, warning: err.message });
+    }
+  });
+
+  // Proxy endpoint to stream PDF for in-app viewer (prevents cross-origin download forcing)
+  app.get('/api/battles/proxy-pdf', async (req, res) => {
+    try {
+      const url = req.query.url as string;
+      if (!url) {
+        return res.status(400).json({ error: 'Missing url query parameter' });
+      }
+
+      const token = getEffectiveGitHubToken();
+      let currentUrl = url;
+      let hops = 0;
+      let upstreamRes: Response | null = null;
+
+      // Handle redirect chain (GitHub releases redirect to AWS S3/CDN)
+      while (hops < 6) {
+        const headers: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebGIS/1.0',
+        };
+        // Only attach GitHub token to github.com / api.github.com, NOT AWS S3 redirected URLs!
+        if (token && (currentUrl.includes('github.com') || currentUrl.includes('api.github.com'))) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const response: Response = await fetch(currentUrl, {
+          headers,
+          redirect: 'manual',
+        });
+
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          const loc = response.headers.get('location');
+          if (loc) {
+            currentUrl = new URL(loc, currentUrl).toString();
+            hops++;
+            continue;
+          }
+        }
+
+        upstreamRes = response;
+        break;
+      }
+
+      if (!upstreamRes || !upstreamRes.ok) {
+        const status = upstreamRes ? upstreamRes.status : 502;
+        return res.status(status).send(`Failed to fetch PDF upstream: ${upstreamRes?.statusText || 'Error'}`);
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="hoso.pdf"');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.removeHeader('X-Frame-Options');
+
+      const arrayBuffer = await upstreamRes.arrayBuffer();
+      res.send(Buffer.from(arrayBuffer));
+    } catch (err: any) {
+      console.error('[API GET /api/battles/proxy-pdf] Error:', err);
+      res.status(500).json({ error: err.message || 'Cannot stream PDF file' });
+    }
+  });
 
   // User Management APIs (Direct Server-side Firestore Access)
   app.get('/api/users', async (req, res) => {
@@ -236,12 +605,15 @@ async function startServer() {
           }
 
           if (isValid) {
-            const role = data.role || 'editor';
-            let token: string | undefined = undefined;
+            const role = (data.role as 'admin' | 'editor') || 'editor';
+            const token = createSignedToken(data.username || cleanUser, role);
 
-            // Issue dynamic session token for admin accounts
+            activeSessions.set(token, {
+              username: data.username || cleanUser,
+              role,
+            });
+
             if (role === 'admin' || cleanUser === 'admin') {
-              token = `adm_${crypto.randomBytes(24).toString('hex')}`;
               activeAdminSessions.add(token);
             }
 
@@ -261,37 +633,6 @@ async function startServer() {
         return res.json({ success: true, user: matchedUser });
       }
 
-      // Safe fallback for initial admin login: if admin user hasn't been seeded yet or password is 123
-      if (cleanUser === 'admin' && (cleanPass === '123' || (process.env.ADMIN_DEFAULT_PASSWORD && cleanPass === process.env.ADMIN_DEFAULT_PASSWORD))) {
-        const hashedPassword = await bcrypt.hash(cleanPass, 10);
-        const adminDoc = {
-          username: 'admin',
-          displayName: 'Bản đồ qk5',
-          role: 'admin',
-          password: hashedPassword,
-          createdAt: new Date().toISOString(),
-        };
-        try {
-          await setDoc(doc(serverDb, 'users', 'user_admin'), adminDoc, { merge: true });
-        } catch (saveErr) {
-          console.warn('[API /api/login] Could not auto-upsert admin doc to Firestore:', saveErr);
-        }
-
-        const token = `adm_${crypto.randomBytes(24).toString('hex')}`;
-        activeAdminSessions.add(token);
-
-        return res.json({
-          success: true,
-          user: {
-            uid: 'user_admin',
-            username: 'admin',
-            displayName: 'Bản đồ qk5',
-            role: 'admin',
-            token,
-          },
-        });
-      }
-
       return res.status(401).json({ error: 'Invalid credentials' });
     } catch (err: any) {
       console.error('[API /api/login] Error:', err);
@@ -301,9 +642,10 @@ async function startServer() {
 
   // Logout endpoint to revoke dynamic session token
   app.post('/api/logout', (req, res) => {
-    const adminTokenHeader = req.headers['x-admin-token'] as string;
-    if (adminTokenHeader && activeAdminSessions.has(adminTokenHeader)) {
-      activeAdminSessions.delete(adminTokenHeader);
+    const token = (req.headers['x-session-token'] || req.headers['x-admin-token']) as string;
+    if (token) {
+      activeSessions.delete(token);
+      activeAdminSessions.delete(token);
     }
     res.json({ success: true });
   });
@@ -400,6 +742,180 @@ async function startServer() {
     } catch (err: any) {
       console.error('[API DELETE /api/users/:uid] Error:', err);
       res.status(500).json({ error: err.message || 'Failed to delete user' });
+    }
+  });
+
+  // ==========================================
+  // SERVER-SIDE FIRESTORE WRITE APIS (Editor & Admin only)
+  // ==========================================
+
+  // Save/Update a single map feature
+  app.post('/api/features/save', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { feature } = req.body;
+      if (!feature || !feature.id) {
+        return res.status(400).json({ error: 'Missing feature or feature id' });
+      }
+
+      const docRef = doc(serverDb, 'map_features', String(feature.id));
+      const rawCoords = feature.coordinates || feature.geometry?.coordinates || [];
+      const coordsJsonStr = typeof rawCoords === 'string' ? rawCoords : JSON.stringify(rawCoords);
+
+      const cleanedDoc: Record<string, any> = {
+        id: String(feature.id),
+        layerId: feature.layerId || 'layer1_tim_kiem',
+        name: feature.name || '',
+        type: feature.type || feature.geometry?.type || 'Point',
+        coordinates: coordsJsonStr,
+        properties: feature.properties || {},
+        updatedAt: feature.updatedAt || new Date().toISOString(),
+      };
+      if (feature.code) cleanedDoc.code = feature.code;
+
+      await setDoc(docRef, cleanedDoc, { merge: true });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/features/save] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to save feature' });
+    }
+  });
+
+  // Delete a feature
+  app.post('/api/features/delete', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { id } = req.body;
+      if (!id) {
+        return res.status(400).json({ error: 'Missing feature id' });
+      }
+
+      await deleteDoc(doc(serverDb, 'map_features', String(id)));
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/features/delete] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to delete feature' });
+    }
+  });
+
+  // Batch save / layer chunks save
+  app.post('/api/features/batch', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { features, chunks } = req.body;
+
+      if (Array.isArray(chunks) && chunks.length > 0) {
+        // Save as pre-bundled chunks
+        for (const chunk of chunks) {
+          if (chunk.id && chunk.payloadJson) {
+            await setDoc(doc(serverDb, 'layer_chunks', chunk.id), {
+              chunkIndex: chunk.chunkIndex,
+              itemCount: chunk.itemCount,
+              payloadJson: chunk.payloadJson,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+        return res.json({ success: true, count: features?.length || 0 });
+      }
+
+      if (Array.isArray(features)) {
+        for (const feat of features) {
+          if (feat && feat.id) {
+            const docRef = doc(serverDb, 'map_features', String(feat.id));
+            const rawCoords = feat.coordinates || feat.geometry?.coordinates || [];
+            const coordsJsonStr = typeof rawCoords === 'string' ? rawCoords : JSON.stringify(rawCoords);
+            await setDoc(
+              docRef,
+              {
+                id: String(feat.id),
+                layerId: feat.layerId || 'layer1_tim_kiem',
+                name: feat.name || '',
+                type: feat.type || feat.geometry?.type || 'Point',
+                coordinates: coordsJsonStr,
+                properties: feat.properties || {},
+                updatedAt: feat.updatedAt || new Date().toISOString(),
+              },
+              { merge: true }
+            );
+          }
+        }
+        return res.json({ success: true, count: features.length });
+      }
+
+      res.status(400).json({ error: 'Invalid features or chunks array' });
+    } catch (err: any) {
+      console.error('[API POST /api/features/batch] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to save batch' });
+    }
+  });
+
+  // Save layer configs (custom layer names)
+  app.post('/api/layers/save', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { layerNames } = req.body;
+      if (!layerNames) {
+        return res.status(400).json({ error: 'Missing layerNames' });
+      }
+
+      await setDoc(doc(serverDb, 'app_settings', 'layer_configs'), {
+        layerNames,
+        updatedAt: new Date().toISOString(),
+      });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/layers/save] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to save layer configs' });
+    }
+  });
+
+  // Save field aliases
+  app.post('/api/aliases/save', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { aliases, hiddenFields } = req.body;
+      await setDoc(doc(serverDb, 'app_settings', 'field_aliases'), {
+        aliases: aliases || {},
+        hiddenFields: hiddenFields || {},
+        updatedAt: new Date().toISOString(),
+      });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/aliases/save] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to save field aliases' });
+    }
+  });
+
+  // Update raster layer enabled state
+  app.post('/api/raster-layers/update-enabled', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { layerId, enabled } = req.body;
+      if (!layerId) {
+        return res.status(400).json({ error: 'Missing layerId' });
+      }
+
+      await updateDoc(doc(serverDb, 'raster_layers', layerId), {
+        enabled: enabled !== false,
+        updatedAt: new Date().toISOString(),
+      });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/raster-layers/update-enabled] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to update raster layer status' });
     }
   });
 

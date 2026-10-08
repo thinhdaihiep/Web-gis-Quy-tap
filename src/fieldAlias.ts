@@ -56,6 +56,7 @@ export const DEFAULT_FIELD_ALIASES: Record<string, string> = {
   CongTrinh: 'Công trình lịch sử',
   GhiChu: 'Ghi chú',
   MoTa: 'Mô tả',
+  HoSo: 'Hồ sơ',
 
   // 9. Mộ liệt sĩ & Nghĩa trang
   ThongTin: 'Thông tin',

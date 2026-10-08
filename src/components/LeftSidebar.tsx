@@ -230,9 +230,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
               {isSearchArea && (
                 <div className="pt-1 border-t border-slate-200/80 space-y-1">
-                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    Chi tiết theo Phân loại:
-                  </div>
                   <div className="space-y-1 text-[10.5px]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5 truncate">

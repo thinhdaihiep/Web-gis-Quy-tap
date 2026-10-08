@@ -6,7 +6,6 @@ import { RasterLayer, RasterFileItem, LatLngBoundsBox, RasterLoadingStatus, comp
 import {
   Cloud,
   Cat,
-  Github as GithubCat,
   Plus,
   RefreshCw,
   RotateCcw,

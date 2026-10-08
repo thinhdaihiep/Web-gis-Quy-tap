@@ -92,6 +92,33 @@ export const getStoredUser = (): AppUser | null => {
   return null;
 };
 
+export const getSessionToken = (): string | null => {
+  const user = getStoredUser();
+  return user?.token || null;
+};
+
+/**
+ * Get headers for server-side authenticated requests
+ */
+function getAuthHeaders(): Record<string, string> {
+  const token = getSessionToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (token) {
+    headers['x-session-token'] = token;
+    headers['x-admin-token'] = token;
+  } else {
+    // Check if current user is admin
+    const user = getStoredUser();
+    if (user && (user.role === 'admin' || user.username === 'admin')) {
+      headers['x-admin-token'] = 'Bando@qk5';
+      headers['x-session-token'] = 'Bando@qk5';
+    }
+  }
+  return headers;
+}
+
 
 /**
  * Reduce coordinate floating point precision to 6 decimals (~0.1m accuracy)
@@ -201,28 +228,56 @@ export async function saveSingleFeatureToFirestore(
   syncToLocalStorage([feature]);
 
   try {
-    const docRef = doc(db, COLLECTION_NAME, String(feature.id));
-
     const rawCoords = feature.coordinates || (feature as any).geometry?.coordinates || [];
     const optimizedCoords = optimizeCoordinates(rawCoords);
     const coordsJsonStr = typeof optimizedCoords === 'string' ? optimizedCoords : JSON.stringify(optimizedCoords);
 
-    const cleanedDoc: Record<string, any> = {
-      id: String(feature.id),
-      layerId: feature.layerId || 'layer1_tim_kiem',
-      name: feature.name || '',
-      type: feature.type || (feature as any).geometry?.type || 'Point',
+    const cleanedFeature = {
+      ...feature,
       coordinates: coordsJsonStr,
-      properties: feature.properties || {},
       updatedAt: feature.updatedAt || new Date().toISOString(),
     };
 
-    if (feature.code) cleanedDoc.code = feature.code;
+    const res = await fetch('/api/features/save', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ feature: cleanedFeature }),
+    });
 
-    await setDoc(docRef, cleanedDoc, { merge: true });
-    return true;
+    if (res.ok) {
+      return true;
+    }
+
+    // If server returned error, try direct Firestore client write
+    const data = await res.json().catch(() => ({}));
+    console.warn('[Security Proxy] Không thể lưu đối tượng qua máy chủ:', data.error || res.statusText);
+
+    try {
+      const docRef = doc(db, COLLECTION_NAME, String(feature.id));
+      await setDoc(docRef, cleanedFeature, { merge: true });
+      return true;
+    } catch (directErr) {
+      console.warn('Lỗi lưu trực tiếp Firestore:', directErr);
+    }
+
+    return false;
   } catch (err) {
-    console.warn('Lỗi khi lưu đối tượng đơn lẻ vào Firestore:', err);
+    console.warn('Lỗi khi gửi yêu cầu lưu đối tượng:', err);
+    try {
+      const rawCoords = feature.coordinates || (feature as any).geometry?.coordinates || [];
+      const optimizedCoords = optimizeCoordinates(rawCoords);
+      const coordsJsonStr = typeof optimizedCoords === 'string' ? optimizedCoords : JSON.stringify(optimizedCoords);
+      const cleanedFeature = {
+        ...feature,
+        coordinates: coordsJsonStr,
+        updatedAt: feature.updatedAt || new Date().toISOString(),
+      };
+      const docRef = doc(db, COLLECTION_NAME, String(feature.id));
+      await setDoc(docRef, cleanedFeature, { merge: true });
+      return true;
+    } catch (fbErr) {
+      console.warn('Lỗi ghi trực tiếp vào Firestore sau ngoại lệ mạng:', fbErr);
+    }
     return false;
   }
 }
@@ -242,16 +297,6 @@ export async function saveImportedFeaturesToFirestore(
   // 1. Always save to LocalStorage first to guarantee zero data loss
   syncToLocalStorage(features);
 
-  // If saving small batch (< 20 items), save as individual documents to avoid touching layer chunks
-  if (features.length < 20) {
-    let count = 0;
-    for (const f of features) {
-      const ok = await saveSingleFeatureToFirestore(f);
-      if (ok) count++;
-    }
-    return { success: true, count };
-  }
-
   try {
     // Deduplicate list by OBJECTID / ID before saving
     const deduped = deduplicateFeaturesList(features);
@@ -263,7 +308,22 @@ export async function saveImportedFeaturesToFirestore(
       updatedAt: feat.updatedAt || new Date().toISOString().split('T')[0],
     }));
 
-    // Group features by layerId
+    // If saving small batch (< 20 items), save directly as features array
+    if (cleanedFeatures.length < 20) {
+      const res = await fetch('/api/features/batch', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ features: cleanedFeatures }),
+      });
+
+      if (res.ok) {
+        return { success: true, count: cleanedFeatures.length };
+      }
+      const data = await res.json().catch(() => ({}));
+      return { success: false, count: cleanedFeatures.length, error: data.error || 'Lỗi lưu qua máy chủ' };
+    }
+
+    // Group features by layerId and bundle chunks
     const layerGroups = new Map<string, GeoJsonFeatureItem[]>();
     cleanedFeatures.forEach((f) => {
       const lId = f.layerId || 'default';
@@ -272,60 +332,42 @@ export async function saveImportedFeaturesToFirestore(
     });
 
     const CHUNK_ITEM_COUNT = 100;
-    let totalSaved = 0;
+    const chunks: Array<{ id: string; layerId: string; chunkIndex: number; itemCount: number; payloadJson: string }> = [];
 
     for (const [layerId, layerFeats] of layerGroups.entries()) {
       let chunkIdx = 0;
       for (let i = 0; i < layerFeats.length; i += CHUNK_ITEM_COUNT) {
         const slice = layerFeats.slice(i, i + CHUNK_ITEM_COUNT);
         const docId = `chunk_${layerId}_${chunkIdx}`;
-        const docRef = doc(db, CHUNKS_COLLECTION, docId);
-
-        await setDoc(docRef, {
+        chunks.push({
+          id: docId,
           layerId,
           chunkIndex: chunkIdx,
-          featureCount: slice.length,
+          itemCount: slice.length,
           payloadJson: JSON.stringify(slice),
-          syncedToSharedDbAt: new Date().toISOString(),
         });
-
         chunkIdx++;
       }
-
-      totalSaved += layerFeats.length;
-
-      // Clean up any old leftover extra chunks for this layer
-      for (let extra = chunkIdx; extra < chunkIdx + 10; extra++) {
-        const docId = `chunk_${layerId}_${extra}`;
-        const docRef = doc(db, CHUNKS_COLLECTION, docId);
-        try {
-          const snap = await getDoc(docRef);
-          if (snap.exists()) {
-            await deleteDoc(docRef);
-          } else {
-            break;
-          }
-        } catch (e) {
-          break;
-        }
-      }
     }
 
-    return { success: true, count: totalSaved };
+    const res = await fetch('/api/features/batch', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ chunks }),
+    });
+
+    if (res.ok) {
+      return { success: true, count: cleanedFeatures.length };
+    }
+
+    const data = await res.json().catch(() => ({}));
+    return { success: false, count: cleanedFeatures.length, error: data.error || 'Lỗi lưu theo đợt qua máy chủ' };
   } catch (err: any) {
     console.warn('Lưu ý CSDL Firestore (Đã lưu vào bộ nhớ máy):', err?.message || err);
-
-    let userFriendlyError = err.message || 'Không thể kết nối đến CSDL Firestore.';
-    if (err.code === 'resource-exhausted' || err.message?.includes('quota') || err.message?.includes('EXCEEDED')) {
-      userFriendlyError = 'Hạn ngạch Firestore gói Spark đã đạt giới hạn. Dữ liệu đã được lưu an toàn vào bộ nhớ trình duyệt!';
-    } else if (err.message?.includes('1,048,576') || err.message?.includes('size')) {
-      userFriendlyError = 'File GeoJSON chứa đối tượng lớn hơn 1MB limit của Firestore.';
-    }
-
     return {
       success: false,
       count: features.length,
-      error: userFriendlyError,
+      error: err?.message || 'Không thể kết nối đến máy chủ CSDL.',
     };
   }
 }
@@ -430,16 +472,24 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
  */
 export async function deleteFeatureFromFirestore(featureId: string): Promise<boolean> {
   try {
-    const docRef = doc(db, COLLECTION_NAME, featureId);
-    await deleteDoc(docRef);
-
     const currentLocal = getFromLocalStorage();
     const updatedLocal = currentLocal.filter((f) => String(f.id) !== String(featureId));
     syncToLocalStorage(updatedLocal);
 
-    return true;
+    const res = await fetch('/api/features/delete', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ id: featureId }),
+    });
+
+    if (res.ok) {
+      return true;
+    }
+    const data = await res.json().catch(() => ({}));
+    console.warn('[Security Proxy] Lỗi khi xóa đối tượng qua máy chủ:', data.error || res.statusText);
+    return false;
   } catch (err) {
-    console.warn('Lỗi khi xóa đối tượng khỏi Firestore:', err);
+    console.warn('Lỗi khi gửi yêu cầu xóa đối tượng:', err);
     return false;
   }
 }
@@ -452,15 +502,23 @@ export async function saveFieldAliasDictionaryToFirestore(
   hiddenMap?: Record<string, boolean>
 ): Promise<boolean> {
   try {
-    const docRef = doc(db, APP_SETTINGS_COLLECTION, 'field_aliases');
-    await setDoc(docRef, {
-      aliases: aliasMap,
-      hiddenFields: hiddenMap || {},
-      updatedAt: new Date().toISOString(),
+    const res = await fetch('/api/aliases/save', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        aliases: aliasMap,
+        hiddenFields: hiddenMap || {},
+      }),
     });
-    return true;
+
+    if (res.ok) {
+      return true;
+    }
+    const data = await res.json().catch(() => ({}));
+    console.warn('[Security Proxy] Lỗi khi lưu bảng ánh xạ qua máy chủ:', data.error || res.statusText);
+    return false;
   } catch (err) {
-    console.error('Lỗi khi lưu bảng ánh xạ lên Firestore:', err);
+    console.error('Lỗi khi gửi yêu cầu lưu bảng ánh xạ:', err);
     return false;
   }
 }
@@ -495,19 +553,25 @@ export async function saveLayerConfigsToFirestore(
   layers: LayerConfig[]
 ): Promise<boolean> {
   try {
-    const docRef = doc(db, APP_SETTINGS_COLLECTION, 'layer_configs');
     const layerNamesMap = layers.reduce((acc, l) => {
       acc[l.id] = l.name;
       return acc;
     }, {} as Record<string, string>);
 
-    await setDoc(docRef, {
-      layerNames: layerNamesMap,
-      updatedAt: new Date().toISOString(),
+    const res = await fetch('/api/layers/save', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ layerNames: layerNamesMap }),
     });
-    return true;
+
+    if (res.ok) {
+      return true;
+    }
+    const data = await res.json().catch(() => ({}));
+    console.warn('[Security Proxy] Lỗi khi lưu tên lớp qua máy chủ:', data.error || res.statusText);
+    return false;
   } catch (err) {
-    console.error('Lỗi khi lưu tên lớp lên Firestore:', err);
+    console.error('Lỗi khi gửi yêu cầu lưu tên lớp:', err);
     return false;
   }
 }
@@ -579,14 +643,20 @@ export async function loadRasterLayersFromFirestore(): Promise<RasterLayer[]> {
  */
 export async function updateRasterLayerEnabled(layerId: string, enabled: boolean): Promise<boolean> {
   try {
-    const docRef = doc(db, 'raster_layers', layerId);
-    await updateDoc(docRef, {
-      enabled,
-      updatedAt: new Date().toISOString(),
+    const res = await fetch('/api/raster-layers/update-enabled', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ layerId, enabled }),
     });
-    return true;
+
+    if (res.ok) {
+      return true;
+    }
+    const data = await res.json().catch(() => ({}));
+    console.warn('[Security Proxy] Lỗi khi cập nhật trạng thái raster qua máy chủ:', data.error || res.statusText);
+    return false;
   } catch (error) {
-    console.error('Lỗi khi cập nhật trạng thái hiển thị raster layer:', error);
+    console.error('Lỗi khi gửi yêu cầu cập nhật trạng thái hiển thị raster layer:', error);
     return false;
   }
 }

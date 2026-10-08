@@ -65,6 +65,7 @@ interface MapProps {
   drawingVerticesRef?: React.MutableRefObject<[number, number][]>;
   onRasterStatusChange?: (status: RasterLoadingStatus) => void;
   onMapRenderedReady?: () => void;
+  onOpenPdfViewer?: (url: string, title?: string) => void;
 }
 
 function getFeatureName(feat: GeoJsonFeatureItem): { name: string; hiddenKey: string | null } {
@@ -127,6 +128,7 @@ function renderPopupProperties(
       cleanKey === 'objectid' ||
       cleanKey === 'id' ||
       cleanKey === 'fid' ||
+      cleanKey === 'hoso' ||
       k === hiddenKey ||
       isFieldHidden(k)
     ) {
@@ -138,6 +140,7 @@ function renderPopupProperties(
       return;
     }
     if (alias === 'Tọa độ') hasToaDo = true;
+
     const formattedVal = formatDateForDisplay(v, k, alias);
     const valStr = formattedVal !== '' ? formattedVal : (v !== null && v !== undefined && String(v).trim() !== '' ? String(v) : '---');
     validItems.push({ key: k, alias, value: valStr });
@@ -418,8 +421,28 @@ export const MapComponent: React.FC<MapProps> = ({
   drawingVerticesRef,
   onRasterStatusChange,
   onMapRenderedReady,
+  onOpenPdfViewer,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
+
+  // Expose global viewer handler for Leaflet popup HTML strings
+  useEffect(() => {
+    (window as any).__openGisPdfViewer = (encodedUrl: string) => {
+      try {
+        const decoded = decodeURIComponent(encodedUrl);
+        if (onOpenPdfViewer) {
+          onOpenPdfViewer(decoded);
+        } else {
+          window.open(decoded, '_blank');
+        }
+      } catch (e) {
+        window.open(encodedUrl, '_blank');
+      }
+    };
+    return () => {
+      delete (window as any).__openGisPdfViewer;
+    };
+  }, [onOpenPdfViewer]);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const baseLayersRef = useRef<Record<BaseMapType, L.TileLayer> | null>(null);
   const featureLayersRef = useRef<L.LayerGroup | null>(null);
@@ -1863,11 +1886,37 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       const rawPhanLoai = feat.properties?.PhanLoai ?? feat.properties?.phanLoai;
       const phanLoaiNum = Number(rawPhanLoai);
 
-      if (rawPhanLoai !== undefined && rawPhanLoai !== null && PHAN_LOAI_COLORS[phanLoaiNum]) {
+      const isSearchAreaLayer =
+        feat.layerId === 'layer4_khu_vuc_quy_tap' ||
+        parentLayer?.id === 'layer4_khu_vuc_quy_tap' ||
+        parentLayer?.name?.toLowerCase().includes('tìm kiếm') ||
+        parentLayer?.name?.toLowerCase().includes('quy tập') ||
+        parentLayer?.name?.toLowerCase().includes('khu vực');
+
+      const isBattleLayer =
+        feat.layerId === 'layer2_tran_danh' ||
+        parentLayer?.id === 'layer2_tran_danh' ||
+        parentLayer?.name?.toLowerCase().includes('trận đánh') ||
+        parentLayer?.name?.toLowerCase().includes('tran danh');
+
+      const isGraveLayer =
+        feat.layerId === 'layer1_mo_liet_si' ||
+        parentLayer?.id === 'layer1_mo_liet_si' ||
+        parentLayer?.name?.toLowerCase().includes('mộ') ||
+        parentLayer?.name?.toLowerCase().includes('mo');
+
+      const isCemeteryLayer =
+        feat.layerId === 'layer3_nghia_trang' ||
+        parentLayer?.id === 'layer3_nghia_trang' ||
+        parentLayer?.name?.toLowerCase().includes('nghĩa trang') ||
+        parentLayer?.name?.toLowerCase().includes('nghia trang');
+
+      // CHỈ áp dụng màu phân loại và huy hiệu quy tập cho lớp Khu vực tìm kiếm quy tập (layer4), tuyệt đối không gán cho Trận đánh hay Mộ liệt sĩ
+      if (isSearchAreaLayer && rawPhanLoai !== undefined && rawPhanLoai !== null && PHAN_LOAI_COLORS[phanLoaiNum]) {
         featureColor = PHAN_LOAI_COLORS[phanLoaiNum].color;
       }
 
-      const phanLoaiBadgeText = PHAN_LOAI_COLORS[phanLoaiNum]
+      const phanLoaiBadgeText = (isSearchAreaLayer && PHAN_LOAI_COLORS[phanLoaiNum])
         ? PHAN_LOAI_COLORS[phanLoaiNum].label
         : null;
 
@@ -1913,31 +1962,6 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         }
         featureLayerMapRef.current.delete(featKey);
       }
-
-      const isSearchAreaLayer =
-        feat.layerId === 'layer4_khu_vuc_quy_tap' ||
-        parentLayer?.id === 'layer4_khu_vuc_quy_tap' ||
-        parentLayer?.name?.toLowerCase().includes('tìm kiếm') ||
-        parentLayer?.name?.toLowerCase().includes('quy tập') ||
-        parentLayer?.name?.toLowerCase().includes('khu vực');
-
-      const isBattleLayer =
-        feat.layerId === 'layer2_tran_danh' ||
-        parentLayer?.id === 'layer2_tran_danh' ||
-        parentLayer?.name?.toLowerCase().includes('trận đánh') ||
-        parentLayer?.name?.toLowerCase().includes('tran danh');
-
-      const isGraveLayer =
-        feat.layerId === 'layer1_mo_liet_si' ||
-        parentLayer?.id === 'layer1_mo_liet_si' ||
-        parentLayer?.name?.toLowerCase().includes('mộ') ||
-        parentLayer?.name?.toLowerCase().includes('mo');
-
-      const isCemeteryLayer =
-        feat.layerId === 'layer3_nghia_trang' ||
-        parentLayer?.id === 'layer3_nghia_trang' ||
-        parentLayer?.name?.toLowerCase().includes('nghĩa trang') ||
-        parentLayer?.name?.toLowerCase().includes('nghia trang');
 
       const shouldShowLabel = isBattleLayer;
 
@@ -2025,13 +2049,24 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
           pointMarker.bindPopup(() => {
             const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(feat);
+            const hoSoUrl = feat.properties?.HoSo || feat.properties?.hoso || feat.properties?.HOSO;
+            const hoSoButtonHtml = hoSoUrl && String(hoSoUrl).trim() !== ''
+              ? `<button type="button" onclick="if(window.__openGisPdfViewer){window.__openGisPdfViewer('${encodeURIComponent(String(hoSoUrl).trim())}')}else{window.open('${String(hoSoUrl).trim()}','_blank')}" style="cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; background-color: #2563eb; color: #ffffff; border: none; border-radius: 4px; font-weight: bold; font-size: 10px; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                  <span>Xem hồ sơ</span>
+                </button>`
+              : '';
+
             return `
-              <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
+              <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 210px;">
                 <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
                   ${parentLayer?.name || 'Vị trí GIS'}
                 </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
-                <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px;">
+                  <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
+                  ${hoSoButtonHtml}
+                </div>
                 ${
                   phanLoaiBadgeText
                     ? `<div style="margin-top:4px;"><span style="background-color:${featureColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`
@@ -2209,13 +2244,24 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
           polygon.bindPopup(() => {
             const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(feat);
+            const hoSoUrl = feat.properties?.HoSo || feat.properties?.hoso || feat.properties?.HOSO;
+            const hoSoButtonHtml = hoSoUrl && String(hoSoUrl).trim() !== ''
+              ? `<button type="button" onclick="if(window.__openGisPdfViewer){window.__openGisPdfViewer('${encodeURIComponent(String(hoSoUrl).trim())}')}else{window.open('${String(hoSoUrl).trim()}','_blank')}" style="cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; background-color: #2563eb; color: #ffffff; border: none; border-radius: 4px; font-weight: bold; font-size: 10px; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                  <span>Xem hồ sơ</span>
+                </button>`
+              : '';
+
             return `
-              <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
+              <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 210px;">
                 <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
                   ${parentLayer?.name || 'Khu vực GIS'}
                 </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
-                <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px;">
+                  <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
+                  ${hoSoButtonHtml}
+                </div>
                 ${
                   phanLoaiBadgeText
                     ? `<div style="margin-top:4px;"><span style="background-color:${featureColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`

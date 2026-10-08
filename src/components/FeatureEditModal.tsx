@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GeoJsonFeatureItem, LayerConfig, PHAN_LOAI_COLORS, UserRole, AppUser } from '../types';
 import {
   X,
@@ -9,6 +9,10 @@ import {
   Table,
   Layers,
   Calendar,
+  FileText,
+  Upload,
+  ExternalLink,
+  Loader2,
 } from 'lucide-react';
 import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
@@ -21,6 +25,7 @@ interface FeatureEditModalProps {
   currentUser?: AppUser | null;
   onSave: (feature: GeoJsonFeatureItem) => void;
   onDelete?: (featureId: string) => void;
+  onOpenPdfViewer?: (url: string, title?: string) => void;
   onClose: () => void;
 }
 
@@ -38,6 +43,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   currentUser,
   onSave,
   onDelete,
+  onOpenPdfViewer,
   onClose,
 }) => {
   const [name, setName] = useState<string>('');
@@ -47,6 +53,8 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   const [donVi, setDonVi] = useState<string>('');
   const [ghiChu, setGhiChu] = useState<string>('');
   const [editorNotes, setEditorNotes] = useState<string>('');
+  const [isUploadingDossier, setIsUploadingDossier] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Custom attributes table rows
   const [customRows, setCustomRows] = useState<AttributeRow[]>([]);
@@ -144,6 +152,94 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   const handleUpdateRow = (id: string, field: 'key' | 'value', val: string) => {
     setCustomRows((prev) =>
       prev.map((r) => (r.id === id ? { ...r, [field]: val } : r))
+    );
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+      alert('Vui lòng chọn file định dạng PDF.');
+      return;
+    }
+
+    setIsUploadingDossier(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64Data = reader.result as string;
+          const objectIdVal =
+            feature.properties?.OBJECTID ??
+            feature.properties?.objectid ??
+            feature.code ??
+            feature.id;
+
+          const res = await fetch('/api/battles/upload-hoso', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: file.name,
+              fileBase64: base64Data,
+              objectId: objectIdVal,
+              battleName: name || feature.name || 'TranDanh',
+            }),
+          });
+
+          const data = await res.json();
+          if (res.ok && data.url) {
+            setCustomRows((prev) => {
+              const existingIdx = prev.findIndex((r) => r.key.toLowerCase() === 'hoso');
+              if (existingIdx !== -1) {
+                return prev.map((r, i) => (i === existingIdx ? { ...r, value: data.url } : r));
+              } else {
+                return [
+                  ...prev,
+                  {
+                    id: `row-${Date.now()}`,
+                    key: 'HoSo',
+                    value: data.url,
+                  },
+                ];
+              }
+            });
+          } else {
+            alert(data.error || 'Tải hồ sơ lên GitHub thất bại.');
+          }
+        } catch (uploadErr: any) {
+          alert('Lỗi kết nối khi tải hồ sơ: ' + (uploadErr?.message || uploadErr));
+        } finally {
+          setIsUploadingDossier(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      alert('Lỗi đọc file: ' + (err?.message || err));
+      setIsUploadingDossier(false);
+    }
+  };
+
+  const handleDeleteDossier = async (rowId: string, fileUrl: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn xóa hồ sơ trận đánh này không?')) {
+      return;
+    }
+
+    if (fileUrl) {
+      try {
+        await fetch('/api/battles/delete-hoso', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileUrl }),
+        });
+      } catch (e) {
+        console.warn('Lỗi khi gọi API xóa file trên GitHub:', e);
+      }
+    }
+
+    setCustomRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, value: '' } : r))
     );
   };
 
@@ -362,11 +458,13 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                 {customRows.map((row) => {
                   const alias = getFieldAlias(row.key);
                   const isDate = isDateField(row.key, alias || row.key);
+                  const isHoSo = row.key.toLowerCase() === 'hoso';
                   return (
                     <tr key={row.id} className="hover:bg-slate-50/80 transition group">
                       <td className="py-1.5 px-3 border-r border-slate-200 bg-slate-50">
                         <div className="flex items-center gap-1">
                           {isDate && <Calendar className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
+                          {isHoSo && <FileText className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
                           <input
                             type="text"
                             value={row.key}
@@ -383,7 +481,77 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                       </td>
 
                       <td className="py-1.5 px-3 flex items-center gap-2">
-                        {isDate ? (
+                        {isHoSo ? (
+                          <div className="flex-1 flex flex-col gap-1.5">
+                            <input
+                              type="file"
+                              ref={fileInputRef}
+                              accept=".pdf,application/pdf"
+                              onChange={handleFileUpload}
+                              className="hidden"
+                            />
+
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {/* Nút Xem hồ sơ (nếu có link) */}
+                              {row.value && row.value.trim() !== '' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (onOpenPdfViewer) {
+                                      onOpenPdfViewer(row.value, name || feature.name || 'Hồ sơ trận đánh');
+                                    } else {
+                                      window.open(row.value, '_blank');
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-2xs cursor-pointer"
+                                  title="Xem hồ sơ trận đánh"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                  <span>Xem</span>
+                                </button>
+                              ) : null}
+
+                              {/* Nút Tải lên / Thay đổi hồ sơ */}
+                              <button
+                                type="button"
+                                disabled={isUploadingDossier}
+                                onClick={() => fileInputRef.current?.click()}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition cursor-pointer disabled:opacity-50"
+                                title="Tải lên file hồ sơ PDF lên GitHub Release"
+                              >
+                                {isUploadingDossier ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                                    <span>Đang tải...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Upload className="w-3.5 h-3.5 text-slate-600" />
+                                    <span>{row.value ? 'Đổi file' : 'Tải lên PDF'}</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {/* Nút Xóa hồ sơ */}
+                              {row.value && row.value.trim() !== '' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteDossier(row.id, row.value)}
+                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                                  title="Xóa hồ sơ này"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+
+                            {row.value && (
+                              <div className="text-[10px] text-slate-500 truncate max-w-full font-mono bg-slate-50 p-1 rounded border border-slate-200" title={row.value}>
+                                {decodeURIComponent(row.value.split('/').pop() || row.value)}
+                              </div>
+                            )}
+                          </div>
+                        ) : isDate ? (
                           <div className="flex-1 flex items-center gap-1.5">
                             <input
                               type="text"
