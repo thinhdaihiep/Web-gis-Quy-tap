@@ -42,16 +42,16 @@ export const Header: React.FC<HeaderProps> = ({
           ★
         </div>
         <div className="min-w-0 flex-1">
-          <h1 className="text-[11px] sm:text-xs md:text-sm font-bold uppercase tracking-wide text-slate-100 truncate">
+          <h1 className="text-[11px] sm:text-xs md:text-sm font-bold uppercase tracking-wide text-slate-100 truncate leading-tight">
             Bản đồ tìm kiếm & quy tập mộ Liệt sĩ
           </h1>
           <button
             type="button"
             onClick={onOpenWebsiteInfoModal}
-            className="text-[10px] text-slate-400 hidden lg:flex items-center gap-1 hover:text-white transition-colors duration-150 underline-offset-2 hover:underline cursor-pointer group text-left max-w-full truncate"
-            title="Xem thông tin trang web"
+            className="text-[9px] sm:text-[10px] text-slate-400 flex items-center hover:text-white transition-colors duration-150 underline-offset-2 hover:underline cursor-pointer group text-left max-w-full min-w-0 truncate leading-tight mt-0.5"
+            title="Xem thông tin trang web (Ban Bản đồ/Phòng Tác chiến/Bộ Tham mưu/Quân khu 5)"
           >
-            <span className="truncate">Ban Bản đồ/Phòng Tác chiến/Bộ Tham mưu/Quân khu 5</span>
+            <span className="truncate block min-w-0">Ban Bản đồ/Phòng Tác chiến/Bộ Tham mưu/Quân khu 5</span>
           </button>
         </div>
 
