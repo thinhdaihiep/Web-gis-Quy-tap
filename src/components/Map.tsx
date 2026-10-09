@@ -396,7 +396,9 @@ function computeFeatureSignature(
     : JSON.stringify(feat.coordinates || []);
   const name = feat.properties?.Ten || feat.properties?.ten || feat.name || '';
   const rawPhanLoai = feat.properties?.PhanLoai ?? feat.properties?.phanLoai ?? '';
-  const signature = `${coordSignature}|${isSelected}|${color}|${feat.layerId || ''}|${name}|${rawPhanLoai}|${aliasVer}`;
+  const hoSo = feat.properties?.HoSo || feat.properties?.hoso || '';
+  const updatedAt = feat.updatedAt || '';
+  const signature = `${coordSignature}|${isSelected}|${color}|${feat.layerId || ''}|${name}|${rawPhanLoai}|${aliasVer}|${hoSo}|${updatedAt}`;
   return { signature, coordSignature };
 }
 
@@ -1835,6 +1837,9 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           L.DomEvent.stopPropagation(e);
         }
 
+        const fk = getItemUniqueKey(featItem);
+        const currentFeat = featureLayerMapRef.current.get(fk)?.feature || featItem;
+
         const layerBounds = typeof (layer as any).getBounds === 'function' ? (layer as any).getBounds() : null;
         const layerCenter = typeof (layer as any).getLatLng === 'function'
           ? (layer as any).getLatLng()
@@ -1858,18 +1863,17 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           onCursorMoveRef.current({ lat: center.lat, lng: center.lng });
         }
 
-        const fk = getItemUniqueKey(featItem);
         featureLayerMapRef.current.forEach((entry, k) => {
           entry.updateStyle(k === fk, interactionModeRef.current);
         });
         prevSelectedFeatureIdRef.current = fk;
 
         if (interactionModeRef.current === 'measure_area_feature') {
-          handleMeasureFeaturePolygon(featItem);
+          handleMeasureFeaturePolygon(currentFeat);
         }
 
         if (onFeatureSelectRef.current) {
-          onFeatureSelectRef.current(featItem);
+          onFeatureSelectRef.current(currentFeat);
         }
       };
 
@@ -2054,8 +2058,9 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           };
 
           pointMarker.bindPopup(() => {
-            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(feat);
-            const hoSoUrl = feat.properties?.HoSo || feat.properties?.hoso || feat.properties?.HOSO;
+            const currentFeat = featureLayerMapRef.current.get(featKey)?.feature || feat;
+            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(currentFeat);
+            const hoSoUrl = currentFeat.properties?.HoSo || currentFeat.properties?.hoso || currentFeat.properties?.HOSO;
             const hoSoButtonHtml = hoSoUrl && String(hoSoUrl).trim() !== ''
               ? `<button type="button" onclick="if(window.__openGisPdfViewer){window.__openGisPdfViewer('${encodeURIComponent(String(hoSoUrl).trim())}')}else{window.open('${String(hoSoUrl).trim()}','_blank')}" style="cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; background-color: #2563eb; color: #ffffff; border: none; border-radius: 4px; font-weight: bold; font-size: 10px; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
@@ -2070,7 +2075,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px;">
-                  <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
+                  <span style="color: #64748b; font-size: 11px;">Mã số: <b>${currentFeat.code || currentFeat.id}</b></span>
                   ${hoSoButtonHtml}
                 </div>
                 ${
@@ -2079,7 +2084,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                     : ''
                 }
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(feat, lat, lng, curHiddenKey)}
+                  ${renderPopupProperties(currentFeat, lat, lng, curHiddenKey)}
                 </div>
               </div>
             `;
@@ -2124,13 +2129,14 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             else if (e) L.DomEvent.stopPropagation(e);
 
             const fk = getItemUniqueKey(feat);
+            const currentFeat = featureLayerMapRef.current.get(fk)?.feature || feat;
             featureLayerMapRef.current.forEach((entry, k) => {
               entry.updateStyle(k === fk, interactionModeRef.current);
             });
             prevSelectedFeatureIdRef.current = fk;
 
             if (onFeatureSelectRef.current) {
-              onFeatureSelectRef.current(feat);
+              onFeatureSelectRef.current(currentFeat);
             }
 
             if (onCursorMoveRef.current) {
@@ -2249,8 +2255,9 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           };
 
           polygon.bindPopup(() => {
-            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(feat);
-            const hoSoUrl = feat.properties?.HoSo || feat.properties?.hoso || feat.properties?.HOSO;
+            const currentFeat = featureLayerMapRef.current.get(featKey)?.feature || feat;
+            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(currentFeat);
+            const hoSoUrl = currentFeat.properties?.HoSo || currentFeat.properties?.hoso || currentFeat.properties?.HOSO;
             const hoSoButtonHtml = hoSoUrl && String(hoSoUrl).trim() !== ''
               ? `<button type="button" onclick="if(window.__openGisPdfViewer){window.__openGisPdfViewer('${encodeURIComponent(String(hoSoUrl).trim())}')}else{window.open('${String(hoSoUrl).trim()}','_blank')}" style="cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; background-color: #2563eb; color: #ffffff; border: none; border-radius: 4px; font-weight: bold; font-size: 10px; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
@@ -2265,7 +2272,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px;">
-                  <span style="color: #64748b; font-size: 11px;">Mã số: <b>${feat.code || feat.id}</b></span>
+                  <span style="color: #64748b; font-size: 11px;">Mã số: <b>${currentFeat.code || currentFeat.id}</b></span>
                   ${hoSoButtonHtml}
                 </div>
                 ${
@@ -2274,7 +2281,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                     : ''
                 }
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(feat, undefined, undefined, curHiddenKey)}
+                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey)}
                 </div>
               </div>
             `;
@@ -2299,13 +2306,14 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             else if (e) L.DomEvent.stopPropagation(e);
 
             const fk = getItemUniqueKey(feat);
+            const currentFeat = featureLayerMapRef.current.get(fk)?.feature || feat;
             featureLayerMapRef.current.forEach((entry, k) => {
               entry.updateStyle(k === fk, interactionModeRef.current);
             });
             prevSelectedFeatureIdRef.current = fk;
 
             if (onFeatureSelectRef.current) {
-              onFeatureSelectRef.current(feat);
+              onFeatureSelectRef.current(currentFeat);
             }
 
             const polyBounds = polygon.getBounds();
@@ -2317,7 +2325,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             if (interactionModeRef.current === 'measure_area_feature') {
               polygon.closePopup();
               setTimeout(() => polygon.closePopup(), 0);
-              handleMeasureFeaturePolygon(feat);
+              handleMeasureFeaturePolygon(currentFeat);
             } else if (interactionModeRef.current === 'hand') {
               const targetPopupLatLng = center || e.latlng;
               polygon.openPopup(targetPopupLatLng);
@@ -2421,12 +2429,13 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
           };
 
           polyline.bindPopup(() => {
-            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(feat);
+            const currentFeat = featureLayerMapRef.current.get(featKey)?.feature || feat;
+            const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(currentFeat);
             return `
               <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(feat, undefined, undefined, curHiddenKey)}
+                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey)}
                 </div>
               </div>
             `;
@@ -2451,13 +2460,14 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             else if (e) L.DomEvent.stopPropagation(e);
 
             const fk = getItemUniqueKey(feat);
+            const currentFeat = featureLayerMapRef.current.get(fk)?.feature || feat;
             featureLayerMapRef.current.forEach((entry, k) => {
               entry.updateStyle(k === fk, interactionModeRef.current);
             });
             prevSelectedFeatureIdRef.current = fk;
 
             if (onFeatureSelectRef.current) {
-              onFeatureSelectRef.current(feat);
+              onFeatureSelectRef.current(currentFeat);
             }
 
             const lineBounds = polyline.getBounds();

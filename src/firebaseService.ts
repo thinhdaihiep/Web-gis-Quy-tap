@@ -254,7 +254,7 @@ export async function saveSingleFeatureToFirestore(
 
     try {
       const docRef = doc(db, COLLECTION_NAME, String(feature.id));
-      await setDoc(docRef, cleanedFeature, { merge: true });
+      await setDoc(docRef, cleanedFeature);
       return true;
     } catch (directErr) {
       console.warn('Lỗi lưu trực tiếp Firestore:', directErr);
@@ -273,7 +273,7 @@ export async function saveSingleFeatureToFirestore(
         updatedAt: feature.updatedAt || new Date().toISOString(),
       };
       const docRef = doc(db, COLLECTION_NAME, String(feature.id));
-      await setDoc(docRef, cleanedFeature, { merge: true });
+      await setDoc(docRef, cleanedFeature);
       return true;
     } catch (fbErr) {
       console.warn('Lỗi ghi trực tiếp vào Firestore sau ngoại lệ mạng:', fbErr);

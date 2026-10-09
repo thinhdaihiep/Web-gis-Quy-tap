@@ -13,6 +13,7 @@ import {
   Upload,
   ExternalLink,
   Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
@@ -54,6 +55,8 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   const [showRawFieldName, setShowRawFieldName] = useState<boolean>(false);
   const [isReloading, setIsReloading] = useState<boolean>(false);
   const [isUploadingDossier, setIsUploadingDossier] = useState<boolean>(false);
+  const [isDeletingDossier, setIsDeletingDossier] = useState<boolean>(false);
+  const [confirmDeleteDossier, setConfirmDeleteDossier] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Resizable pane width state
@@ -266,8 +269,42 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
           const data = await res.json();
           if (res.ok && data.url) {
             handleValueChange('HoSo', data.url);
+            
+            // Tự động đồng bộ và lưu ngay vào đối tượng
+            const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+            const updatedProps: Record<string, any> = {
+              ...(feature.properties || {}),
+              Ten: name.trim() || feature.name || '',
+              PhanLoai: phanLoai,
+              NguoiSua: currentUpdater,
+              CapNhat: new Date().toISOString(),
+            };
+            delete updatedProps['hoso'];
+            delete updatedProps['HOSO'];
+            delete updatedProps['ho_so'];
+            updatedProps['HoSo'] = data.url;
+
+            propRows.forEach((row) => {
+              if (row.rawKey.toLowerCase() !== 'hoso') {
+                const origVal = feature.properties?.[row.rawKey];
+                if (isDateField(row.rawKey, row.aliasLabel)) {
+                  updatedProps[row.rawKey] = parseDateInputToStorageValue(row.value, origVal, row.rawKey);
+                } else {
+                  updatedProps[row.rawKey] = row.value;
+                }
+              }
+            });
+
+            const updatedFeature: GeoJsonFeatureItem = {
+              ...feature,
+              layerId: selectedLayerId,
+              name: (name.trim() || feature.name || '').trim(),
+              properties: updatedProps,
+              updatedAt: new Date().toISOString(),
+            };
+            onSave(updatedFeature);
           } else {
-            alert(data.error || 'Tải hồ sơ lên GitHub thất bại.');
+            alert(data.error || 'Tải hồ sơ lên Server thất bại.');
           }
         } catch (uploadErr: any) {
           alert('Lỗi kết nối khi tải hồ sơ: ' + (uploadErr?.message || uploadErr));
@@ -287,9 +324,8 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
     const hoSoRow = propRows.find((r) => r.rawKey === 'HoSo' || r.rawKey.toLowerCase() === 'hoso');
     const curUrl = hoSoRow?.value || '';
 
-    if (!window.confirm('Bạn có chắc chắn muốn xóa hồ sơ trận đánh này không?')) {
-      return;
-    }
+    setConfirmDeleteDossier(false);
+    setIsDeletingDossier(true);
 
     const objectIdVal =
       feature.properties?.OBJECTID ??
@@ -306,11 +342,46 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
           body: JSON.stringify({ fileUrl: curUrl, objectId: objectIdVal }),
         });
       } catch (e) {
-        console.warn('Lỗi khi gọi API xóa file trên GitHub:', e);
+        console.warn('Lỗi khi gọi API xóa file trên Server:', e);
       }
     }
 
     handleValueChange('HoSo', '');
+
+    // Tự động đồng bộ và lưu ngay vào đối tượng
+    const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+    const updatedProps: Record<string, any> = {
+      ...(feature.properties || {}),
+      Ten: name.trim() || feature.name || '',
+      PhanLoai: phanLoai,
+      NguoiSua: currentUpdater,
+      CapNhat: new Date().toISOString(),
+    };
+    delete updatedProps['hoso'];
+    delete updatedProps['HOSO'];
+    delete updatedProps['ho_so'];
+    delete updatedProps['HoSo'];
+
+    propRows.forEach((row) => {
+      if (row.rawKey.toLowerCase() !== 'hoso') {
+        const origVal = feature.properties?.[row.rawKey];
+        if (isDateField(row.rawKey, row.aliasLabel)) {
+          updatedProps[row.rawKey] = parseDateInputToStorageValue(row.value, origVal, row.rawKey);
+        } else {
+          updatedProps[row.rawKey] = row.value;
+        }
+      }
+    });
+
+    const updatedFeature: GeoJsonFeatureItem = {
+      ...feature,
+      layerId: selectedLayerId,
+      name: (name.trim() || feature.name || '').trim(),
+      properties: updatedProps,
+      updatedAt: new Date().toISOString(),
+    };
+    onSave(updatedFeature);
+    setIsDeletingDossier(false);
   };
 
   const handleSubmit = () => {
@@ -329,12 +400,24 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       CapNhat: new Date().toISOString(),
     };
 
+    delete properties['hoso'];
+    delete properties['HOSO'];
+    delete properties['ho_so'];
+
     propRows.forEach((row) => {
-      const origVal = feature.properties?.[row.rawKey];
-      if (isDateField(row.rawKey, row.aliasLabel)) {
-        properties[row.rawKey] = parseDateInputToStorageValue(row.value, origVal, row.rawKey);
+      if (row.rawKey.toLowerCase() === 'hoso') {
+        if (row.value && row.value.trim()) {
+          properties['HoSo'] = row.value.trim();
+        } else {
+          delete properties['HoSo'];
+        }
       } else {
-        properties[row.rawKey] = row.value;
+        const origVal = feature.properties?.[row.rawKey];
+        if (isDateField(row.rawKey, row.aliasLabel)) {
+          properties[row.rawKey] = parseDateInputToStorageValue(row.value, origVal, row.rawKey);
+        } else {
+          properties[row.rawKey] = row.value;
+        }
       }
     });
 
@@ -540,7 +623,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
                     </td>
                     <td className="py-1.5 px-2">
                       {isHoSo ? (
-                        <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-1.5">
                           {/* File input hidden */}
                           <input
                             type="file"
@@ -550,9 +633,9 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
                             className="hidden"
                           />
 
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {/* Nút Xem hồ sơ (nếu HoSo not null) */}
-                            {row.value && row.value.trim() !== '' ? (
+                          {row.value && row.value.trim() !== '' ? (
+                            <>
+                              {/* 1. Icon Xem hồ sơ */}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -562,56 +645,75 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
                                     window.open(row.value, '_blank');
                                   }
                                 }}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-2xs cursor-pointer"
-                                title="Xem hồ sơ trận đánh"
+                                className="p-1.5 text-blue-600 hover:text-white hover:bg-blue-600 rounded-lg border border-blue-200 transition cursor-pointer shadow-2xs"
+                                title="Xem hồ sơ"
                               >
                                 <ExternalLink className="w-3.5 h-3.5" />
-                                <span>Xem</span>
                               </button>
-                            ) : null}
 
-                            {/* Nút Thêm/Thay hồ sơ (cho Editor/Admin) */}
-                            {currentRole !== 'guest' && (
-                              <button
-                                type="button"
-                                disabled={isUploadingDossier}
-                                onClick={() => fileInputRef.current?.click()}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition cursor-pointer disabled:opacity-50"
-                                title="Tải lên file hồ sơ PDF lên GitHub Release"
-                              >
-                                {isUploadingDossier ? (
-                                  <>
+                              {/* 2. Icon Đổi hồ sơ */}
+                              {currentRole !== 'guest' && (
+                                <button
+                                  type="button"
+                                  disabled={isUploadingDossier || isDeletingDossier}
+                                  onClick={() => fileInputRef.current?.click()}
+                                  className="p-1.5 text-slate-700 hover:text-slate-900 hover:bg-slate-200 border border-slate-300 rounded-lg transition cursor-pointer disabled:opacity-50"
+                                  title="Đổi file"
+                                >
+                                  {isUploadingDossier ? (
                                     <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                                    <span>Đang tải...</span>
-                                  </>
-                                ) : (
-                                  <>
+                                  ) : (
                                     <Upload className="w-3.5 h-3.5 text-slate-600" />
-                                    <span>{row.value ? 'Đổi file' : 'Tải lên PDF'}</span>
-                                  </>
-                                )}
-                              </button>
-                            )}
+                                  )}
+                                </button>
+                              )}
 
-                            {/* Nút Xóa hồ sơ */}
-                            {currentRole !== 'guest' && row.value && row.value.trim() !== '' && (
-                              <button
-                                type="button"
-                                onClick={handleDeleteDossier}
-                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                                title="Xóa hồ sơ này"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* Link URL / Tên file hiển thị nhỏ gọn */}
-                          {row.value && (
-                            <div className="text-[10px] text-slate-500 truncate max-w-full font-mono bg-slate-50 p-1 rounded border border-slate-200" title={row.value}>
-                              {decodeURIComponent(row.value.split('/').pop() || row.value)}
-                            </div>
-                          )}
+                              {/* 3. Icon Xóa hồ sơ với inline confirm */}
+                              {currentRole !== 'guest' && (
+                                <button
+                                  type="button"
+                                  disabled={isUploadingDossier || isDeletingDossier}
+                                  onClick={() => {
+                                    if (confirmDeleteDossier) {
+                                      handleDeleteDossier();
+                                    } else {
+                                      setConfirmDeleteDossier(true);
+                                      setTimeout(() => setConfirmDeleteDossier(false), 3500);
+                                    }
+                                  }}
+                                  className={`p-1.5 rounded-lg border transition cursor-pointer disabled:opacity-50 ${
+                                    confirmDeleteDossier
+                                      ? 'text-white bg-rose-600 border-rose-600 animate-pulse'
+                                      : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50 border-transparent hover:border-rose-200'
+                                  }`}
+                                  title={confirmDeleteDossier ? 'Bấm lần nữa để xác nhận xóa' : 'Xóa hồ sơ'}
+                                >
+                                  {isDeletingDossier ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                                  ) : confirmDeleteDossier ? (
+                                    <AlertTriangle className="w-3.5 h-3.5 text-white" />
+                                  ) : (
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              )}
+                            </>
+                          ) : currentRole !== 'guest' ? (
+                            /* Icon Tải lên khi chưa có hồ sơ */
+                            <button
+                              type="button"
+                              disabled={isUploadingDossier}
+                              onClick={() => fileInputRef.current?.click()}
+                              className="p-1.5 text-slate-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg border border-slate-300 hover:border-blue-400 transition cursor-pointer disabled:opacity-50"
+                              title="Tải lên hồ sơ"
+                            >
+                              {isUploadingDossier ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                              ) : (
+                                <Upload className="w-3.5 h-3.5 text-slate-600" />
+                              )}
+                            </button>
+                          ) : null}
                         </div>
                       ) : locked || currentRole === 'guest' ? (
                         <input

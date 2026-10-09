@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { GeoJsonFeatureItem, LayerConfig, PHAN_LOAI_COLORS, UserRole, AppUser } from '../types';
 import {
   X,
@@ -13,6 +13,7 @@ import {
   Upload,
   ExternalLink,
   Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
@@ -54,6 +55,8 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   const [ghiChu, setGhiChu] = useState<string>('');
   const [editorNotes, setEditorNotes] = useState<string>('');
   const [isUploadingDossier, setIsUploadingDossier] = useState<boolean>(false);
+  const [isDeletingDossier, setIsDeletingDossier] = useState<boolean>(false);
+  const [confirmDeleteDossier, setConfirmDeleteDossier] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Custom attributes table rows
@@ -61,73 +64,164 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   const [newKey, setNewKey] = useState<string>('');
   const [newValue, setNewValue] = useState<string>('');
 
+  // Refs để theo dõi snapshot gốc của form và đường dẫn hồ sơ mới nhất
+  const initialSnapshotRef = useRef<{
+    name: string;
+    selectedLayerId: string;
+    phanLoai: number;
+    thoiGian: string;
+    donVi: string;
+    ghiChu: string;
+    customPropsJson: string;
+  } | null>(null);
+  const currentHoSoRef = useRef<string>('');
+  const activeFeatureIdRef = useRef<string>('');
+
   useEffect(() => {
     if (feature) {
-      setName(feature.name || feature.properties?.Ten || feature.properties?.ten || '');
-      setSelectedLayerId(feature.layerId || (layers.length > 0 ? layers[0].id : 'layer2_tran_danh'));
+      const featId = String(feature.id || (feature as any).code || '');
+      const isSameFeature = activeFeatureIdRef.current === featId && activeFeatureIdRef.current !== '';
 
-      const pLoai = feature.properties?.PhanLoai ?? feature.properties?.phanLoai ?? 1;
-      setPhanLoai(Number(pLoai) || 1);
+      const rawHoSo = String(
+        feature.properties?.HoSo ||
+        feature.properties?.hoso ||
+        feature.properties?.HOSO ||
+        ''
+      ).trim();
 
-      setThoiGian(feature.properties?.ThoiGian || feature.properties?.thoiGian || '');
-      setDonVi(feature.properties?.DonVi || feature.properties?.donVi || '');
-      setGhiChu(
-        feature.properties?.GhiChu || feature.properties?.ghiChu || feature.properties?.MoTa || ''
-      );
-      setEditorNotes(feature.editorNotes || '');
-
-      // Parse custom dynamic properties
-      const targetLayer = layers.find((l) => l.id === (feature.layerId || 'layer2_tran_danh'));
-      const isBattleLayer =
-        feature.layerId === 'layer2_tran_danh' ||
-        targetLayer?.name.toLowerCase().includes('trận đánh') ||
-        targetLayer?.name.toLowerCase().includes('tran danh') ||
-        targetLayer?.name.toLowerCase().includes('chiến dịch') ||
-        targetLayer?.name.toLowerCase().includes('chien dich');
-
-      const existingProps: Record<string, any> = { ...(feature.properties || {}) };
-
-      delete existingProps['TrangThaiMoi'];
-      delete existingProps['trang_thai_moi'];
-      delete existingProps['trangthaimoi'];
-      delete existingProps['ChiHuy'];
-      delete existingProps['chihuy'];
-      delete existingProps['chi_huy'];
-      delete existingProps['KetQua'];
-      delete existingProps['ketqua'];
-      delete existingProps['ket_qua'];
-
-      if (isBattleLayer) {
-        const hasBenTa = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'benta');
-        if (!hasBenTa) existingProps['BenTa'] = '';
-
-        const hasBenDich = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'bendich');
-        if (!hasBenDich) existingProps['BenDich'] = '';
+      // Luôn đồng bộ currentHoSoRef khi mở một đối tượng mới
+      if (!isSameFeature) {
+        currentHoSoRef.current = rawHoSo;
+        activeFeatureIdRef.current = featId;
       }
 
-      const knownKeys = ['Ten', 'ten', 'PhanLoai', 'phanLoai', 'ThoiGian', 'thoiGian', 'DonVi', 'donVi', 'GhiChu', 'ghiChu', 'MoTa'];
-      
-      const rows: AttributeRow[] = [];
-      Object.entries(existingProps).forEach(([k, v]) => {
-        if (!knownKeys.includes(k) && !isFieldHidden(k)) {
-          const alias = getFieldAlias(k);
-          const isDate = isDateField(k, alias || k);
-          const displayVal = isDate
-            ? formatDateForDisplay(v, k, alias || k)
-            : v !== null && v !== undefined
-            ? String(v)
-            : '';
+      // Chỉ khởi tạo lại toàn bộ form nếu đối tượng mở ra là đối tượng mới
+      if (!isSameFeature) {
+        const initialName = feature.name || feature.properties?.Ten || feature.properties?.ten || '';
+        const initialLayerId = feature.layerId || (layers.length > 0 ? layers[0].id : 'layer2_tran_danh');
+        const pLoai = feature.properties?.PhanLoai ?? feature.properties?.phanLoai ?? 1;
+        const initialPhanLoai = Number(pLoai) || 1;
+        const initialThoiGian = feature.properties?.ThoiGian || feature.properties?.thoiGian || '';
+        const initialDonVi = feature.properties?.DonVi || feature.properties?.donVi || '';
+        const initialGhiChu = feature.properties?.GhiChu || feature.properties?.ghiChu || feature.properties?.MoTa || '';
 
-          rows.push({
-            id: `row-${Math.random().toString(36).substr(2, 9)}`,
-            key: k,
-            value: displayVal,
-          });
+        setName(initialName);
+        setSelectedLayerId(initialLayerId);
+        setPhanLoai(initialPhanLoai);
+        setThoiGian(initialThoiGian);
+        setDonVi(initialDonVi);
+        setGhiChu(initialGhiChu);
+        setEditorNotes(feature.editorNotes || '');
+
+        // Parse custom dynamic properties
+        const targetLayer = layers.find((l) => l.id === initialLayerId);
+        const isBattleLayer =
+          initialLayerId === 'layer2_tran_danh' ||
+          targetLayer?.name.toLowerCase().includes('trận đánh') ||
+          targetLayer?.name.toLowerCase().includes('tran danh') ||
+          targetLayer?.name.toLowerCase().includes('chiến dịch') ||
+          targetLayer?.name.toLowerCase().includes('chien dich');
+
+        const existingProps: Record<string, any> = { ...(feature.properties || {}) };
+
+        delete existingProps['TrangThaiMoi'];
+        delete existingProps['trang_thai_moi'];
+        delete existingProps['trangthaimoi'];
+        delete existingProps['ChiHuy'];
+        delete existingProps['chihuy'];
+        delete existingProps['chi_huy'];
+        delete existingProps['KetQua'];
+        delete existingProps['ketqua'];
+        delete existingProps['ket_qua'];
+
+        if (isBattleLayer) {
+          const hasBenTa = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'benta');
+          if (!hasBenTa) existingProps['BenTa'] = '';
+
+          const hasBenDich = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'bendich');
+          if (!hasBenDich) existingProps['BenDich'] = '';
+
+          const hasHoSo = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'hoso');
+          if (!hasHoSo) existingProps['HoSo'] = '';
         }
-      });
-      setCustomRows(sortPropertyRows(rows));
+
+        // Chuẩn hóa tên trường HoSo tránh lỗi phân biệt hoa thường (hoso vs HoSo)
+        const hoSoKey = Object.keys(existingProps).find((k) => k.toLowerCase() === 'hoso');
+        if (hoSoKey && hoSoKey !== 'HoSo') {
+          existingProps['HoSo'] = existingProps[hoSoKey];
+          delete existingProps[hoSoKey];
+        }
+
+        const knownKeys = ['Ten', 'ten', 'PhanLoai', 'phanLoai', 'ThoiGian', 'thoiGian', 'DonVi', 'donVi', 'GhiChu', 'ghiChu', 'MoTa'];
+        
+        const rows: AttributeRow[] = [];
+        const nonHoSoSnapshot: Record<string, string> = {};
+
+        Object.entries(existingProps).forEach(([k, v]) => {
+          if (!knownKeys.includes(k) && !isFieldHidden(k)) {
+            const alias = getFieldAlias(k);
+            const isDate = isDateField(k, alias || k);
+            const displayVal = isDate
+              ? formatDateForDisplay(v, k, alias || k)
+              : v !== null && v !== undefined
+              ? String(v)
+              : '';
+
+            rows.push({
+              id: `row-${Math.random().toString(36).substr(2, 9)}`,
+              key: k,
+              value: displayVal,
+            });
+
+            if (k.toLowerCase() !== 'hoso') {
+              nonHoSoSnapshot[k.trim()] = displayVal.trim();
+            }
+          }
+        });
+
+        const sortedRows = sortPropertyRows(rows);
+        setCustomRows(sortedRows);
+
+        // Lưu bản chụp ban đầu của các trường thông tin (không bao gồm HoSo)
+        initialSnapshotRef.current = {
+          name: initialName.trim(),
+          selectedLayerId: initialLayerId,
+          phanLoai: initialPhanLoai,
+          thoiGian: initialThoiGian.trim(),
+          donVi: initialDonVi.trim(),
+          ghiChu: initialGhiChu.trim(),
+          customPropsJson: JSON.stringify(nonHoSoSnapshot),
+        };
+      }
     }
   }, [feature, layers]);
+
+  // Kiểm tra xem có bất kỳ thay đổi nào ở các trường thông tin không (Nút Lưu chỉ khả dụng khi isDirty === true)
+  const isDirty = useMemo(() => {
+    if (!initialSnapshotRef.current) return false;
+    const init = initialSnapshotRef.current;
+    if (name.trim() !== init.name) return true;
+    if (selectedLayerId !== init.selectedLayerId) return true;
+    if (phanLoai !== init.phanLoai) return true;
+    if (thoiGian.trim() !== init.thoiGian) return true;
+    if (donVi.trim() !== init.donVi) return true;
+    if (ghiChu.trim() !== init.ghiChu) return true;
+
+    // So sánh các thuộc tính tùy biến khác (bỏ qua HoSo vì hồ sơ lưu trực tiếp độc lập)
+    const currentNonHoSoProps: Record<string, string> = {};
+    customRows.forEach((r) => {
+      const k = r.key.trim();
+      if (k && k.toLowerCase() !== 'hoso') {
+        currentNonHoSoProps[k] = r.value.trim();
+      }
+    });
+
+    if (JSON.stringify(currentNonHoSoProps) !== init.customPropsJson) {
+      return true;
+    }
+
+    return false;
+  }, [name, selectedLayerId, phanLoai, thoiGian, donVi, ghiChu, customRows]);
 
   if (!isOpen || !feature) return null;
 
@@ -145,7 +239,67 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
     setNewValue('');
   };
 
+  // Hàm đồng bộ và chuẩn hóa thuộc tính đối tượng khi bấm Lưu hoặc khi cập nhật hồ sơ
+  const buildFeatureToSave = (hoSoOverride?: string | null): GeoJsonFeatureItem => {
+    const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+
+    // Xây dựng danh sách thuộc tính sạch
+    const properties: Record<string, any> = {
+      ...(feature.properties || {}),
+      Ten: name.trim() || feature.name || '',
+      PhanLoai: phanLoai,
+      ThoiGian: thoiGian.trim(),
+      DonVi: donVi.trim(),
+      GhiChu: ghiChu.trim(),
+      NguoiSua: currentUpdater,
+      CapNhat: new Date().toISOString(),
+    };
+
+    // Loại bỏ triệt để mọi biến thể tên trường cũ của HoSo
+    delete properties['hoso'];
+    delete properties['HOSO'];
+    delete properties['ho_so'];
+    delete properties['Ho_So'];
+
+    customRows.forEach((row) => {
+      const k = row.key.trim();
+      if (!k || k.toLowerCase() === 'hoso') return;
+      const origVal = feature.properties?.[k];
+      if (isDateField(k)) {
+        properties[k] = parseDateInputToStorageValue(row.value.trim(), origVal, k);
+      } else {
+        properties[k] = row.value.trim();
+      }
+    });
+
+    // Luôn ưu tiên hoSoOverride nếu truyền vào, ngược lại luôn dùng currentHoSoRef.current (hồ sơ mới nhất)
+    const effectiveHoSo = hoSoOverride !== undefined ? hoSoOverride : currentHoSoRef.current;
+    if (effectiveHoSo && effectiveHoSo.trim()) {
+      properties['HoSo'] = effectiveHoSo.trim();
+    } else {
+      delete properties['HoSo'];
+    }
+
+    properties['NguoiSua'] = currentUpdater;
+    properties['CapNhat'] = new Date().toISOString();
+
+    return {
+      id: feature.id || `feat-${Date.now()}`,
+      layerId: selectedLayerId,
+      name: (name.trim() || feature.name || '').trim(),
+      type: feature.type || 'Point',
+      coordinates: feature.coordinates || [108.3, 14.5],
+      properties,
+      updatedAt: new Date().toISOString(),
+    };
+  };
+
   const handleRemoveRow = (id: string) => {
+    const targetRow = customRows.find((r) => r.id === id);
+    if (targetRow && targetRow.key.toLowerCase() === 'hoso' && targetRow.value) {
+      handleDeleteDossier(id, targetRow.value);
+      return;
+    }
     setCustomRows((prev) => prev.filter((r) => r.id !== id));
   };
 
@@ -176,8 +330,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
             feature.code ??
             feature.id;
 
-          const curHoSoRow = customRows.find((r) => r.key.toLowerCase() === 'hoso');
-          const oldFileUrl = curHoSoRow?.value || feature.properties?.HoSo || feature.properties?.hoso || '';
+          const oldFileUrl = currentHoSoRef.current || feature.properties?.HoSo || feature.properties?.hoso || '';
 
           const res = await fetch('/api/battles/upload-hoso', {
             method: 'POST',
@@ -193,10 +346,14 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
 
           const data = await res.json();
           if (res.ok && data.url) {
+            // 1. Cập nhật ref lưu giữ đường dẫn hồ sơ mới nhất (đảm bảo không bị ghi đè khi bấm Lưu)
+            currentHoSoRef.current = data.url;
+
+            // 2. Cập nhật state hiển thị bảng thuộc tính
             setCustomRows((prev) => {
               const existingIdx = prev.findIndex((r) => r.key.toLowerCase() === 'hoso');
               if (existingIdx !== -1) {
-                return prev.map((r, i) => (i === existingIdx ? { ...r, value: data.url } : r));
+                return prev.map((r, i) => (i === existingIdx ? { ...r, key: 'HoSo', value: data.url } : r));
               } else {
                 return [
                   ...prev,
@@ -208,8 +365,12 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                 ];
               }
             });
+
+            // 3. Tự động lưu trực tiếp và đồng bộ tức thì xuống CSDL Firestore & bản đồ
+            const updatedFeature = buildFeatureToSave(data.url);
+            onSave(updatedFeature);
           } else {
-            alert(data.error || 'Tải hồ sơ lên GitHub thất bại.');
+            alert(data.error || 'Tải hồ sơ lên thất bại.');
           }
         } catch (uploadErr: any) {
           alert('Lỗi kết nối khi tải hồ sơ: ' + (uploadErr?.message || uploadErr));
@@ -226,9 +387,8 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   };
 
   const handleDeleteDossier = async (rowId: string, fileUrl: string) => {
-    if (!window.confirm('Bạn có chắc chắn muốn xóa hồ sơ trận đánh này không?')) {
-      return;
-    }
+    setConfirmDeleteDossier(false);
+    setIsDeletingDossier(true);
 
     const objectIdVal =
       feature.properties?.OBJECTID ??
@@ -244,61 +404,36 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
           body: JSON.stringify({ fileUrl, objectId: objectIdVal }),
         });
       } catch (e) {
-        console.warn('Lỗi khi gọi API xóa file trên GitHub:', e);
+        console.warn('Lỗi khi gọi API xóa file trên Server:', e);
       }
     }
 
+    // 1. Cập nhật ref lưu giữ đường dẫn hồ sơ về rỗng
+    currentHoSoRef.current = '';
+
+    // 2. Cập nhật state hiển thị bảng thuộc tính cho mọi dòng chứa HoSo
     setCustomRows((prev) =>
-      prev.map((r) => (r.id === rowId ? { ...r, value: '' } : r))
+      prev.map((r) =>
+        r.id === rowId || r.key.toLowerCase() === 'hoso' ? { ...r, value: '' } : r
+      )
     );
+
+    // 3. Tự động lưu trực tiếp và xóa trên CSDL Firestore & bản đồ
+    const updatedFeature = buildFeatureToSave('');
+    onSave(updatedFeature);
+    setIsDeletingDossier(false);
   };
 
   const handleSubmit = () => {
+    if (!isDirty) return;
+
     if (!name.trim()) {
       alert('Vui lòng nhập Tên đối tượng');
       return;
     }
 
-    const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
-
-    // Build merged properties dictionary
-    const properties: Record<string, any> = {
-      ...(feature.properties || {}),
-      Ten: name.trim(),
-      PhanLoai: phanLoai,
-      ThoiGian: thoiGian.trim(),
-      DonVi: donVi.trim(),
-      GhiChu: ghiChu.trim(),
-      NguoiSua: currentUpdater,
-      CapNhat: new Date().toISOString(),
-    };
-
-    customRows.forEach((row) => {
-      if (row.key.trim()) {
-        const k = row.key.trim();
-        const origVal = feature.properties?.[k];
-        if (isDateField(k)) {
-          properties[k] = parseDateInputToStorageValue(row.value.trim(), origVal, k);
-        } else {
-          properties[k] = row.value.trim();
-        }
-      }
-    });
-
-    // Luôn ghi ngày hiện tại và tên người dùng đăng nhập vào CapNhat và NguoiSua
-    properties['NguoiSua'] = currentUpdater;
-    properties['CapNhat'] = new Date().toISOString();
-
-    const updatedFeature: GeoJsonFeatureItem = {
-      id: feature.id || `feat-${Date.now()}`,
-      layerId: selectedLayerId,
-      name: name.trim(),
-      type: feature.type || 'Point',
-      coordinates: feature.coordinates || [108.3, 14.5],
-      properties,
-      updatedAt: new Date().toISOString(),
-    };
-
+    // Luôn lấy hồ sơ từ currentHoSoRef.current để bảo toàn dữ liệu hồ sơ mới nhất vừa cập nhật
+    const updatedFeature = buildFeatureToSave();
     onClose();
     onSave(updatedFeature);
   };
@@ -478,9 +613,12 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                           <input
                             type="text"
                             value={row.key}
+                            readOnly={isHoSo}
                             onChange={(e) => handleUpdateRow(row.id, 'key', e.target.value)}
                             placeholder="Tên trường..."
-                            className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-blue-500 outline-none"
+                            className={`w-full px-2 py-1 rounded border border-slate-300 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-blue-500 outline-none ${
+                              isHoSo ? 'bg-slate-100 cursor-not-allowed select-none' : ''
+                            }`}
                           />
                         </div>
                         {alias && alias !== row.key && (
@@ -492,7 +630,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
 
                       <td className="py-1.5 px-3 flex items-center gap-2">
                         {isHoSo ? (
-                          <div className="flex-1 flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1.5">
                             <input
                               type="file"
                               ref={fileInputRef}
@@ -501,9 +639,9 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                               className="hidden"
                             />
 
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {/* Nút Xem hồ sơ (nếu có link) */}
-                              {row.value && row.value.trim() !== '' ? (
+                            {row.value && row.value.trim() !== '' ? (
+                              <>
+                                {/* 1. Icon Xem hồ sơ */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -513,52 +651,70 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                                       window.open(row.value, '_blank');
                                     }
                                   }}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-2xs cursor-pointer"
-                                  title="Xem hồ sơ trận đánh"
+                                  className="p-1.5 text-blue-600 hover:text-white hover:bg-blue-600 rounded-lg border border-blue-200 transition cursor-pointer shadow-2xs"
+                                  title="Xem hồ sơ"
                                 >
                                   <ExternalLink className="w-3.5 h-3.5" />
-                                  <span>Xem</span>
                                 </button>
-                              ) : null}
 
-                              {/* Nút Tải lên / Thay đổi hồ sơ */}
+                                {/* 2. Icon Đổi hồ sơ */}
+                                <button
+                                  type="button"
+                                  disabled={isUploadingDossier || isDeletingDossier}
+                                  onClick={() => fileInputRef.current?.click()}
+                                  className="p-1.5 text-slate-700 hover:text-slate-900 hover:bg-slate-200 rounded-lg border border-slate-300 transition cursor-pointer disabled:opacity-50"
+                                  title="Đổi file"
+                                >
+                                  {isUploadingDossier ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                                  ) : (
+                                    <Upload className="w-3.5 h-3.5 text-slate-600" />
+                                  )}
+                                </button>
+
+                                {/* 3. Icon Xóa hồ sơ với inline confirm */}
+                                <button
+                                  type="button"
+                                  disabled={isUploadingDossier || isDeletingDossier}
+                                  onClick={() => {
+                                    if (confirmDeleteDossier) {
+                                      handleDeleteDossier(row.id, row.value);
+                                    } else {
+                                      setConfirmDeleteDossier(true);
+                                      setTimeout(() => setConfirmDeleteDossier(false), 3500);
+                                    }
+                                  }}
+                                  className={`p-1.5 rounded-lg border transition cursor-pointer disabled:opacity-50 ${
+                                    confirmDeleteDossier
+                                      ? 'text-white bg-rose-600 border-rose-600 animate-pulse'
+                                      : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50 border-transparent hover:border-rose-200'
+                                  }`}
+                                  title={confirmDeleteDossier ? 'Bấm lần nữa để xác nhận xóa' : 'Xóa hồ sơ'}
+                                >
+                                  {isDeletingDossier ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                                  ) : confirmDeleteDossier ? (
+                                    <AlertTriangle className="w-3.5 h-3.5 text-white" />
+                                  ) : (
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              </>
+                            ) : (
+                              /* Icon Tải lên khi chưa có hồ sơ */
                               <button
                                 type="button"
                                 disabled={isUploadingDossier}
                                 onClick={() => fileInputRef.current?.click()}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition cursor-pointer disabled:opacity-50"
-                                title="Tải lên file hồ sơ PDF lên GitHub Release"
+                                className="p-1.5 text-slate-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg border border-slate-300 hover:border-blue-400 transition cursor-pointer disabled:opacity-50"
+                                title="Tải lên hồ sơ"
                               >
                                 {isUploadingDossier ? (
-                                  <>
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                                    <span>Đang tải...</span>
-                                  </>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
                                 ) : (
-                                  <>
-                                    <Upload className="w-3.5 h-3.5 text-slate-600" />
-                                    <span>{row.value ? 'Đổi file' : 'Tải lên PDF'}</span>
-                                  </>
+                                  <Upload className="w-3.5 h-3.5 text-slate-600" />
                                 )}
                               </button>
-
-                              {/* Nút Xóa hồ sơ */}
-                              {row.value && row.value.trim() !== '' && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteDossier(row.id, row.value)}
-                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                                  title="Xóa hồ sơ này"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                            </div>
-
-                            {row.value && (
-                              <div className="text-[10px] text-slate-500 truncate max-w-full font-mono bg-slate-50 p-1 rounded border border-slate-200" title={row.value}>
-                                {decodeURIComponent(row.value.split('/').pop() || row.value)}
-                              </div>
                             )}
                           </div>
                         ) : isDate ? (
@@ -599,14 +755,16 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
                             className="flex-1 px-2 py-1 rounded border border-slate-300 text-xs font-medium text-slate-900 focus:ring-1 focus:ring-blue-500 outline-none"
                           />
                         )}
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveRow(row.id)}
-                          className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded cursor-pointer transition shrink-0"
-                          title="Xóa hàng này"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {!isHoSo && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRow(row.id)}
+                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded cursor-pointer transition shrink-0"
+                            title="Xóa hàng này"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -674,8 +832,14 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
 
             <button
               type="button"
+              disabled={!isDirty}
               onClick={handleSubmit}
-              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs cursor-pointer transition shadow-sm flex items-center gap-1.5"
+              className={`px-4 py-1.5 font-bold rounded-lg text-xs flex items-center gap-1.5 transition ${
+                isDirty
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-sm'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+              }`}
+              title={isDirty ? 'Lưu thay đổi thuộc tính' : 'Chưa có thay đổi thuộc tính nào để lưu'}
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
               <span>Lưu thay đổi</span>

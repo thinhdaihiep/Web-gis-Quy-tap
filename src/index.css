@@ -1,5 +1,19 @@
 @import "tailwindcss";
 
+/* Prevent mobile browser pull-to-refresh & overscroll gestures interfering with map */
+html,
+body,
+#root {
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+}
+
+/* Ensure Leaflet container handles touch dragging cleanly without browser gesture interception */
+.leaflet-container {
+  touch-action: pan-x pan-y;
+  overscroll-behavior: none;
+}
+
 /* Mobile Safe Area Bottom for Android 3-button navigation bar and iOS indicator */
 .safe-area-bottom {
   padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);

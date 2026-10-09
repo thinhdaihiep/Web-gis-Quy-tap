@@ -299,20 +299,20 @@ async function startServer() {
         return await createRes.json();
       }
       const errText = await createRes.text();
-      throw new Error(`Không thể khởi tạo GitHub Release: ${createRes.status} ${errText}`);
+      throw new Error(`Không thể khởi tạo Server lưu trữ: ${createRes.status} ${errText}`);
     }
 
     const errText = await getRes.text();
-    throw new Error(`Không thể truy cập GitHub Release: ${getRes.status} ${errText}`);
+    throw new Error(`Không thể truy cập Server lưu trữ: ${getRes.status} ${errText}`);
   }
 
-  // Upload battle dossier PDF to GitHub Release
+  // Upload battle dossier PDF to Server
   app.post('/api/battles/upload-hoso', async (req, res) => {
     try {
       const token = getEffectiveGitHubToken();
       if (!token) {
         return res.status(500).json({
-          error: 'Chưa cấu hình mã GitHub_Access trong biến môi trường / Secrets của máy chủ.',
+          error: 'Chưa cấu hình khóa truy cập Server trong biến môi trường / Secrets.',
         });
       }
 
@@ -412,7 +412,7 @@ async function startServer() {
       if (!uploadRes.ok) {
         const errText = await uploadRes.text();
         return res.status(uploadRes.status).json({
-          error: `Tải file lên GitHub Release thất bại: ${uploadRes.status} ${errText}`,
+          error: `Tải file lên Server thất bại: ${uploadRes.status} ${errText}`,
         });
       }
 
@@ -429,7 +429,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('[API POST /api/battles/upload-hoso] Error:', err);
-      res.status(500).json({ error: err.message || 'Lỗi khi upload hồ sơ trận đánh lên GitHub' });
+      res.status(500).json({ error: err.message || 'Lỗi khi upload hồ sơ trận đánh lên Server' });
     }
   });
 
@@ -814,7 +814,7 @@ async function startServer() {
       };
       if (feature.code) cleanedDoc.code = feature.code;
 
-      await setDoc(docRef, cleanedDoc, { merge: true });
+      await setDoc(docRef, cleanedDoc);
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/features/save] Error:', err);

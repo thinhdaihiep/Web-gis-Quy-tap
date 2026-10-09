@@ -1062,6 +1062,9 @@ export default function App() {
     // 1. Immediately sync refs and selection state so unsaved badge/toolbar updates in 0ms
     originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(updatedFeat));
     setSelectedFeature(updatedFeat);
+    if (editingFeature && isFeatureMatch(editingFeature, updatedFeat.id)) {
+      setEditingFeature(updatedFeat);
+    }
 
     // 2. Immediate visual toast feedback
     showToast('Đã lưu thay đổi thành công!');

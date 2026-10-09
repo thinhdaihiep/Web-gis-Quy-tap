@@ -76,9 +76,9 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
   }, [selectedFeature?.id]);
 
   return (
-    <div className="absolute top-4 left-4 z-[700] flex items-start gap-2 pointer-events-auto">
+    <div className="absolute top-4 left-4 z-[700] flex items-start gap-2 pointer-events-none">
       {/* Sleek Vertical Floating Icon Toolbar */}
-      <div className="bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-slate-200/90 flex flex-col items-center gap-1 text-slate-800">
+      <div className="bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-slate-200/90 flex flex-col items-center gap-1 text-slate-800 pointer-events-auto">
         {/* Mode 1: Kiểu Bàn Tay (Hand) */}
         <button
           type="button"
@@ -310,10 +310,10 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
       </div>
 
       {/* Popups fly out to the right of the vertical toolbar */}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2 pointer-events-none">
         {/* Delete Confirmation Badge */}
         {isConfirmingDelete && selectedFeature && (
-          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2 py-1.5 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200">
+          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2 py-1.5 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200 pointer-events-auto">
             <Trash2 className="w-4 h-4 text-rose-400 shrink-0 ml-1" />
             <div className="flex items-center gap-1 shrink-0">
               <button
@@ -343,7 +343,7 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
 
         {/* Pending Unsaved Changes Confirmation Floating Badge */}
         {pendingNextFeature && (
-          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2.5 py-1.5 rounded-2xl shadow-xl border border-amber-500/80 flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2.5 py-1.5 rounded-2xl shadow-xl border border-amber-500/80 flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200 pointer-events-auto">
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 ml-0.5" />
             <span className="text-xs text-slate-200 font-medium whitespace-nowrap">Lưu sửa đổi?</span>
             <div className="flex items-center gap-1 shrink-0">
@@ -383,7 +383,7 @@ export const MapEditorToolbar: React.FC<MapEditorToolbarProps> = ({
 
         {/* Ghost Paste Confirm / Cancel Actions Floating Badge */}
         {pendingPasteFeature && (
-          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2 py-1.5 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200">
+          <div className="bg-slate-900/90 text-white backdrop-blur-md px-2 py-1.5 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200 pointer-events-auto">
             <Clipboard className="w-4 h-4 text-emerald-400 shrink-0 ml-1" />
             <div className="flex items-center gap-1 shrink-0">
               <button
