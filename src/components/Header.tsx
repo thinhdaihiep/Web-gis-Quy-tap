@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Database, Search, LogIn, LogOut, Users, Bell } from 'lucide-react';
+import { Layers, Database, Search, LogIn, LogOut, Users, Bell, Info } from 'lucide-react';
 import { UserRole, AppUser } from '../types';
 
 interface HeaderProps {
@@ -15,6 +15,7 @@ interface HeaderProps {
   onOpenDatabaseManagementModal?: () => void;
   onOpenUserManagementModal?: () => void;
   onOpenNotificationModal?: () => void;
+  onOpenWebsiteInfoModal?: () => void;
   isMobile?: boolean;
 }
 
@@ -30,6 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenDatabaseManagementModal,
   onOpenUserManagementModal,
   onOpenNotificationModal,
+  onOpenWebsiteInfoModal,
   isMobile = false,
 }) => {
   return (
@@ -43,9 +45,14 @@ export const Header: React.FC<HeaderProps> = ({
           <h1 className="text-[11px] sm:text-xs md:text-sm font-bold uppercase tracking-wide text-slate-100 truncate">
             Bản đồ tìm kiếm & quy tập mộ Liệt sĩ
           </h1>
-          <p className="text-[10px] text-slate-400 hidden lg:block">
-            Hệ thống CSDL GIS Quân khu 5
-          </p>
+          <button
+            type="button"
+            onClick={onOpenWebsiteInfoModal}
+            className="text-[10px] text-slate-400 hidden lg:flex items-center gap-1 hover:text-white transition-colors duration-150 underline-offset-2 hover:underline cursor-pointer group text-left max-w-full truncate"
+            title="Xem thông tin trang web"
+          >
+            <span className="truncate">Ban Bản đồ/Phòng Tác chiến/Bộ Tham mưu/Quân khu 5</span>
+          </button>
         </div>
 
         {/* Pane Toggle Buttons */}

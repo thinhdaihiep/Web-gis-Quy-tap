@@ -176,6 +176,9 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
             feature.code ??
             feature.id;
 
+          const curHoSoRow = customRows.find((r) => r.key.toLowerCase() === 'hoso');
+          const oldFileUrl = curHoSoRow?.value || feature.properties?.HoSo || feature.properties?.hoso || '';
+
           const res = await fetch('/api/battles/upload-hoso', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -184,6 +187,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
               fileBase64: base64Data,
               objectId: objectIdVal,
               battleName: name || feature.name || 'TranDanh',
+              oldFileUrl,
             }),
           });
 
@@ -226,12 +230,18 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       return;
     }
 
-    if (fileUrl) {
+    const objectIdVal =
+      feature.properties?.OBJECTID ??
+      feature.properties?.objectid ??
+      feature.code ??
+      feature.id;
+
+    if (fileUrl || objectIdVal !== undefined) {
       try {
         await fetch('/api/battles/delete-hoso', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileUrl }),
+          body: JSON.stringify({ fileUrl, objectId: objectIdVal }),
         });
       } catch (e) {
         console.warn('Lỗi khi gọi API xóa file trên GitHub:', e);

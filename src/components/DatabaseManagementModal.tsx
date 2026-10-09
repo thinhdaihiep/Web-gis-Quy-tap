@@ -17,6 +17,9 @@ import {
   Save,
   Check,
   Users,
+  MapPin,
+  UploadCloud,
+  Loader2,
 } from 'lucide-react';
 import proj4 from 'proj4';
 import { RasterManagementTab } from './RasterManagementTab';
@@ -30,6 +33,8 @@ import {
   getAllAliasRules,
   FieldAliasRule
 } from '../fieldAlias';
+import { saveCommuneChunksToFirestore } from '../firebaseService';
+import { invalidateCommuneCache } from '../utils/communeLookup';
 
 proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
 proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
@@ -125,6 +130,12 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   const [parsedFeatures, setParsedFeatures] = useState<GeoJsonFeatureItem[] | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // --- COMMUNE IMPORT STATE ---
+  const communeFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isImportingCommunes, setIsImportingCommunes] = useState<boolean>(false);
+  const [communeImportProgress, setCommuneImportProgress] = useState<{ msg: string; percent: number } | null>(null);
+  const [communeImportStatus, setCommuneImportStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // --- TAB 2: EXPORT STATE ---
   const [selectedExportLayer, setSelectedExportLayer] = useState<string>('all');
@@ -300,6 +311,70 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
       processGeoJsonContent(content, file.name);
     };
     reader.readAsText(file);
+  };
+
+  const handleCommuneFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsImportingCommunes(true);
+    setCommuneImportStatus(null);
+    setCommuneImportProgress({ msg: 'Đang đọc tệp tin...', percent: 5 });
+
+    try {
+      const text = await file.text();
+      let json: any;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new Error('Tệp không đúng định dạng JSON/GeoJSON hợp lệ.');
+      }
+
+      let features: any[] = [];
+      if (json.type === 'FeatureCollection' && Array.isArray(json.features)) {
+        features = json.features;
+      } else if (Array.isArray(json)) {
+        features = json;
+      } else if (json.type === 'Feature') {
+        features = [json];
+      } else {
+        throw new Error('Tệp không chứa danh sách FeatureCollection hợp lệ.');
+      }
+
+      if (features.length === 0) {
+        throw new Error('Tệp không chứa đối tượng hình học xã nào.');
+      }
+
+      setCommuneImportProgress({ msg: `Đang xử lý ${features.length} đối tượng xã...`, percent: 15 });
+
+      const res = await saveCommuneChunksToFirestore(features, (msg, percent) => {
+        setCommuneImportProgress({ msg, percent });
+      });
+
+      if (res.success) {
+        await invalidateCommuneCache();
+        setCommuneImportStatus({
+          type: 'success',
+          text: `Đã nhập thành công ${res.count} xã vào CSDL Firebase.`,
+        });
+      } else {
+        setCommuneImportStatus({
+          type: 'error',
+          text: res.error || 'Lỗi khi lưu dữ liệu xã lên Firebase.',
+        });
+      }
+    } catch (err: any) {
+      setCommuneImportStatus({
+        type: 'error',
+        text: err?.message || 'Có lỗi xảy ra khi xử lý tệp tin xã.',
+      });
+    } finally {
+      setIsImportingCommunes(false);
+      setCommuneImportProgress(null);
+      if (communeFileInputRef.current) {
+        communeFileInputRef.current.value = '';
+      }
+    }
   };
 
   const duplicateCount =
@@ -525,6 +600,73 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
         {/* TAB 1: NHẬP DỮ LIỆU */}
         {activeTab === 'import' && (
           <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-700 flex-1">
+            {/* Nhập dữ liệu hành chính xã */}
+            <div className="bg-emerald-50/80 p-3 rounded-lg border border-emerald-200 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-emerald-900 font-bold">
+                  <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="uppercase tracking-wider text-[11px] sm:text-xs">Dữ liệu hành chính xã</span>
+                </div>
+
+                <input
+                  type="file"
+                  ref={communeFileInputRef}
+                  accept=".geojson,.json"
+                  onChange={handleCommuneFileUpload}
+                  className="hidden"
+                />
+
+                <button
+                  type="button"
+                  disabled={isImportingCommunes}
+                  onClick={() => communeFileInputRef.current?.click()}
+                  className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center space-x-1.5 transition cursor-pointer shadow-xs disabled:opacity-50 active:scale-95 shrink-0"
+                  title="Nhập dữ liệu hành chính xã"
+                >
+                  {isImportingCommunes ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <UploadCloud className="w-3.5 h-3.5" />
+                  )}
+                  <span>Nhập dữ liệu hành chính xã</span>
+                </button>
+              </div>
+
+              {/* Progress bar during import */}
+              {isImportingCommunes && communeImportProgress && (
+                <div className="space-y-1 pt-1">
+                  <div className="flex justify-between text-[11px] font-semibold text-emerald-800">
+                    <span>{communeImportProgress.msg}</span>
+                    <span>{communeImportProgress.percent}%</span>
+                  </div>
+                  <div className="w-full bg-emerald-200 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="bg-emerald-600 h-1.5 rounded-full transition-all duration-300"
+                      style={{ width: `${communeImportProgress.percent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Status message */}
+              {communeImportStatus && (
+                <div
+                  className={`p-2 rounded text-xs flex items-center space-x-2 ${
+                    communeImportStatus.type === 'success'
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      : 'bg-red-50 text-red-700 border border-red-200'
+                  }`}
+                >
+                  {communeImportStatus.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                  )}
+                  <span className="font-medium">{communeImportStatus.text}</span>
+                </div>
+              )}
+            </div>
+
             {/* Lớp dữ liệu đích */}
             <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 space-y-2">
               <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">

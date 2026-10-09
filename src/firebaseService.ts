@@ -661,3 +661,171 @@ export async function updateRasterLayerEnabled(layerId: string, enabled: boolean
   }
 }
 
+/**
+ * Save Administrative Commune (CapXa) features to Firestore in chunks
+ */
+export async function saveCommuneChunksToFirestore(
+  features: any[],
+  onProgress?: (message: string, percent: number) => void
+): Promise<{ success: boolean; count: number; error?: string }> {
+  try {
+    if (!Array.isArray(features) || features.length === 0) {
+      return { success: false, count: 0, error: 'Không có dữ liệu đối tượng xã để nhập.' };
+    }
+
+    onProgress?.('Đang tối ưu dữ liệu tọa độ và phân loại...', 10);
+
+    const validFeatures: any[] = [];
+    for (const f of features) {
+      if (!f) continue;
+      const geom = f.geometry || (f.type && f.coordinates ? f : null);
+      if (!geom || !geom.coordinates) continue;
+
+      const props = f.properties || {};
+      validFeatures.push({
+        type: 'Feature',
+        geometry: {
+          type: geom.type,
+          coordinates: optimizeCoordinates(geom.coordinates),
+        },
+        properties: {
+          Ten: props.Ten || props.ten || '',
+          Huyen: props.Huyen || props.huyen || '',
+          Tinh: props.Tinh || props.tinh || '',
+          XaMoi: props.XaMoi || props.xaMoi || '',
+          TinhMoi: props.TinhMoi || props.tinhMoi || '',
+          PhanLoai: props.PhanLoai || props.phanLoai || '',
+          OBJECTID: props.OBJECTID != null ? props.OBJECTID : props.objectid,
+        },
+      });
+    }
+
+    if (validFeatures.length === 0) {
+      return { success: false, count: 0, error: 'Không tìm thấy hình học Polygon/MultiPolygon hợp lệ trong tệp.' };
+    }
+
+    onProgress?.('Đang phân chia thành các chunk (phân mảnh)...', 25);
+
+    // Split into chunks: max 60 items per chunk or max 650KB payload
+    const MAX_ITEMS_PER_CHUNK = 60;
+    const MAX_CHUNK_PAYLOAD_SIZE = 650000; // ~650KB
+    const chunks: Array<{ id: string; chunkIndex: number; itemCount: number; payloadJson: string }> = [];
+
+    let currentSlice: any[] = [];
+    let currentPayload = '';
+
+    for (let i = 0; i < validFeatures.length; i++) {
+      const feat = validFeatures[i];
+      currentSlice.push(feat);
+      const testJson = JSON.stringify(currentSlice);
+
+      if (currentSlice.length >= MAX_ITEMS_PER_CHUNK || testJson.length >= MAX_CHUNK_PAYLOAD_SIZE || i === validFeatures.length - 1) {
+        const chunkIndex = chunks.length;
+        chunks.push({
+          id: `commune_chunk_${chunkIndex}`,
+          chunkIndex,
+          itemCount: currentSlice.length,
+          payloadJson: testJson,
+        });
+        currentSlice = [];
+      }
+    }
+
+    const totalChunks = chunks.length;
+    onProgress?.(`Đã tạo ${totalChunks} chunks. Bắt đầu tải lên Firebase...`, 35);
+
+    // Upload in batches of 4 chunks
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+      const batchSlice = chunks.slice(i, i + BATCH_SIZE);
+      const isFirst = i === 0;
+      const isLast = i + BATCH_SIZE >= chunks.length;
+
+      const pct = Math.round(35 + (i / chunks.length) * 55);
+      onProgress?.(`Đang lưu đợt ${Math.floor(i / BATCH_SIZE) + 1} / ${Math.ceil(chunks.length / BATCH_SIZE)} (${pct}%)...`, pct);
+
+      const res = await fetch('/api/communes/batch', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          chunks: batchSlice,
+          clearExisting: isFirst,
+          meta: isLast ? { totalFeatures: validFeatures.length, totalChunks } : undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        // Fallback to direct client Firestore write
+        for (const chunk of batchSlice) {
+          await setDoc(doc(db, 'commune_chunks', chunk.id), {
+            chunkIndex: chunk.chunkIndex,
+            itemCount: chunk.itemCount,
+            payloadJson: chunk.payloadJson,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        if (isLast) {
+          await setDoc(doc(db, 'commune_meta', 'config'), {
+            totalFeatures: validFeatures.length,
+            totalChunks,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    onProgress?.('Hoàn tất lưu trữ CSDL Firebase!', 100);
+    return { success: true, count: validFeatures.length };
+  } catch (err: any) {
+    console.error('Lỗi lưu commune chunks lên Firebase:', err);
+    return { success: false, count: 0, error: err?.message || 'Lỗi khi lưu dữ liệu lên Firebase' };
+  }
+}
+
+/**
+ * Load all commune features from Firebase Firestore
+ */
+export async function loadCommuneChunksFromFirestore(): Promise<any[]> {
+  try {
+    // 1. Try server endpoint first (fastest)
+    try {
+      const res = await fetch('/api/communes/chunks', { cache: 'no-cache' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.chunks) && data.chunks.length > 0) {
+          const allFeatures: any[] = [];
+          for (const chunk of data.chunks) {
+            if (chunk.payloadJson) {
+              try {
+                const parsed = JSON.parse(chunk.payloadJson);
+                if (Array.isArray(parsed)) allFeatures.push(...parsed);
+              } catch (_) {}
+            }
+          }
+          if (allFeatures.length > 0) return allFeatures;
+        }
+      }
+    } catch (_) {}
+
+    // 2. Direct Firestore SDK read (works for any public reader)
+    const snap = await getDocs(collection(db, 'commune_chunks'));
+    const allFeatures: any[] = [];
+    const docs = snap.docs.sort((a, b) => (a.data().chunkIndex || 0) - (b.data().chunkIndex || 0));
+
+    for (const d of docs) {
+      const data = d.data();
+      if (data && data.payloadJson) {
+        try {
+          const parsed = JSON.parse(data.payloadJson);
+          if (Array.isArray(parsed)) allFeatures.push(...parsed);
+        } catch (_) {}
+      }
+    }
+
+    return allFeatures;
+  } catch (err) {
+    console.warn('Lỗi tải dữ liệu commune_chunks từ Firebase:', err);
+    return [];
+  }
+}
+

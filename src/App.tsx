@@ -15,6 +15,7 @@ import { NotificationModal } from './components/NotificationModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
 import { PdfViewerModal } from './components/PdfViewerModal';
+import { WebsiteInfoModal } from './components/WebsiteInfoModal';
 
 import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode, RasterLayer, RasterLoadingStatus, LatLngBoundsBox, normalizeBoundsBox } from './types';
 import {
@@ -162,6 +163,7 @@ export default function App() {
   const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
   const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>('import');
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
+  const [isWebsiteInfoModalOpen, setIsWebsiteInfoModalOpen] = useState<boolean>(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1540,6 +1542,7 @@ export default function App() {
           setIsDatabaseManagementModalOpen(true);
         }}
         onOpenNotificationModal={() => setIsNotificationModalOpen(true)}
+        onOpenWebsiteInfoModal={() => setIsWebsiteInfoModalOpen(true)}
         isMobile={isMobile}
       />
 
@@ -1976,6 +1979,12 @@ export default function App() {
           }} 
         />
       )}
+
+      {/* Website Info Modal */}
+      <WebsiteInfoModal
+        isOpen={isWebsiteInfoModalOpen}
+        onClose={() => setIsWebsiteInfoModalOpen(false)}
+      />
 
       {/* Floating Sync Error Alert Banner (Optimistic UI Background Sync Failure) */}
       {syncError && (

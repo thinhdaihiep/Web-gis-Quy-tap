@@ -249,6 +249,9 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
             feature.code ??
             feature.id;
 
+          const curHoSoRow = propRows.find((r) => r.rawKey.toLowerCase() === 'hoso');
+          const oldFileUrl = curHoSoRow?.value || feature.properties?.HoSo || feature.properties?.hoso || '';
+
           const res = await fetch('/api/battles/upload-hoso', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -257,9 +260,9 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
               fileBase64: base64Data,
               objectId: objectIdVal,
               battleName: name || feature.name || 'TranDanh',
+              oldFileUrl,
             }),
           });
-
           const data = await res.json();
           if (res.ok && data.url) {
             handleValueChange('HoSo', data.url);
@@ -288,12 +291,19 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       return;
     }
 
-    if (curUrl) {
+    const objectIdVal =
+      feature.properties?.OBJECTID ??
+      feature.properties?.objectid ??
+      feature.properties?.OBJECTID_1 ??
+      feature.code ??
+      feature.id;
+
+    if (curUrl || objectIdVal !== undefined) {
       try {
         await fetch('/api/battles/delete-hoso', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileUrl: curUrl }),
+          body: JSON.stringify({ fileUrl: curUrl, objectId: objectIdVal }),
         });
       } catch (e) {
         console.warn('Lỗi khi gọi API xóa file trên GitHub:', e);

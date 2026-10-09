@@ -39,6 +39,19 @@ service cloud.firestore {
       allow delete: if isValidId(chunkId);
     }
 
+    // 4. Commune Chunks & Meta: administrative boundaries (public read)
+    match /commune_chunks/{chunkId} {
+      allow read: if true;
+      allow create, update: if isValidId(chunkId) && isValidChunk(request.resource.data);
+      allow delete: if isValidId(chunkId);
+    }
+
+    match /commune_meta/{metaId} {
+      allow read: if true;
+      allow create, update: if isValidId(metaId);
+      allow delete: if isValidId(metaId);
+    }
+
     // 4. App settings: custom layer names, aliases, configuration
     match /app_settings/{settingId} {
       allow read: if true;

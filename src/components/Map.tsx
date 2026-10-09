@@ -267,6 +267,9 @@ function createPointIcon(
   color: string = '#10b981'
 ): L.DivIcon {
   const size = isSelected ? 26 : 24;
+  // Giảm kích thước Icon Mộ liệt sĩ và Nghĩa trang liệt sĩ xuống 70% theo yêu cầu người dùng
+  const reducedSize = Math.round(size * 0.7); // 24 * 0.7 = 17px, 26 * 0.7 = 18px
+
   if (type === 'search') {
     return L.divIcon({
       html: `
@@ -311,7 +314,7 @@ function createPointIcon(
   } else if (type === 'grave') {
     return L.divIcon({
       html: `
-        <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+        <svg viewBox="0 0 24 24" width="${reducedSize}" height="${reducedSize}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
           <polygon points="12 1.5 22.5 21.5 1.5 21.5" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#16a34a'}" stroke-width="${isSelected ? '1.5' : '1.8'}" />
           <svg x="5" y="7.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M2 20h20" />
@@ -323,14 +326,14 @@ function createPointIcon(
         </svg>
       `,
       className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-      iconSize: [size, size],
-      iconAnchor: [size / 2, size / 2],
-      popupAnchor: [0, -10],
+      iconSize: [reducedSize, reducedSize],
+      iconAnchor: [reducedSize / 2, reducedSize / 2],
+      popupAnchor: [0, -8],
     });
   } else if (type === 'cemetery') {
     return L.divIcon({
       html: `
-        <svg viewBox="0 0 24 24" width="${size}" height="${size}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+        <svg viewBox="0 0 24 24" width="${reducedSize}" height="${reducedSize}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
           <rect x="1.5" y="1.5" width="21" height="21" rx="3" fill="#ffffff" stroke="${isSelected ? '#2563eb' : '#9333ea'}" stroke-width="${isSelected ? '1.5' : '1.8'}" />
           <svg x="4.5" y="4.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9333ea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 21h18" />
@@ -342,9 +345,9 @@ function createPointIcon(
         </svg>
       `,
       className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
-      iconSize: [size, size],
-      iconAnchor: [size / 2, size / 2],
-      popupAnchor: [0, -10],
+      iconSize: [reducedSize, reducedSize],
+      iconAnchor: [reducedSize / 2, reducedSize / 2],
+      popupAnchor: [0, -8],
     });
   } else {
     const dotSize = isSelected ? 22 : 20;
@@ -492,6 +495,9 @@ export const MapComponent: React.FC<MapProps> = ({
         clickMarkerRef.current.addTo(map);
       }
       clickMarkerRef.current.setLatLng(targetLatLng);
+    }
+    if (onCursorMoveRef.current) {
+      onCursorMoveRef.current({ lat: targetLatLng.lat, lng: targetLatLng.lng });
     }
   }, []);
 

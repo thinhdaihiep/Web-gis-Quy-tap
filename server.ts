@@ -8,7 +8,7 @@ import { fromUrl, fromArrayBuffer } from 'geotiff';
 import proj4 from 'proj4';
 import bcrypt from 'bcryptjs';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 // Server-side cache directory for downloaded raster files
 const RASTER_CACHE_DIR = path.join('/tmp', 'raster_cache');
@@ -316,21 +316,28 @@ async function startServer() {
         });
       }
 
-      const { fileName, fileBase64, objectId, battleName } = req.body;
+      const { fileName, fileBase64, objectId, battleName, oldFileUrl } = req.body;
       if (!fileBase64) {
         return res.status(400).json({ error: 'Thiếu nội dung file base64' });
       }
 
-      // Format standard filename: [OBJECTID].[Ten].pdf
-      let targetFileName = fileName || 'hoso.pdf';
-      if (objectId !== undefined && objectId !== null && battleName) {
-        // Sanitize Ten for safe URL/Filename
-        const sanitizedName = String(battleName)
-          .replace(/[\\/:*?"<>|#]/g, '_')
-          .trim();
-        targetFileName = `${objectId}.${sanitizedName}.pdf`;
-      } else if (!targetFileName.toLowerCase().endsWith('.pdf')) {
-        targetFileName += '.pdf';
+      // Format standard filename: [OBJECTID].[tên file upload]
+      let uploadedName = (fileName || 'hoso.pdf')
+        .replace(/[\\/:*?"<>|#]/g, '_')
+        .trim();
+
+      if (!uploadedName.toLowerCase().endsWith('.pdf')) {
+        uploadedName += '.pdf';
+      }
+
+      let targetFileName = uploadedName;
+      if (objectId !== undefined && objectId !== null && String(objectId).trim() !== '') {
+        const prefix = `${objectId}.`;
+        if (uploadedName.startsWith(prefix)) {
+          targetFileName = uploadedName;
+        } else {
+          targetFileName = `${prefix}${uploadedName}`;
+        }
       }
 
       // Convert base64 to Buffer
@@ -349,22 +356,43 @@ async function startServer() {
         'User-Agent': 'WebGIS-App/1.0',
       };
 
-      // 2. Check if asset already exists with the same filename, delete it first to overwrite
+      // 2. Identify and delete all old asset(s) belonging to this battle to ensure complete overwrite:
+      // - Match targetFileName exactly
+      // - Match filename extracted from oldFileUrl (if provided)
+      // - Match any asset starting with `${objectId}.` (e.g. previous accented or renamed battle file)
       if (Array.isArray(release.assets)) {
-        const existingAsset = release.assets.find(
-          (a: any) => a.name.toLowerCase() === targetFileName.toLowerCase()
-        );
-        if (existingAsset && existingAsset.id) {
-          try {
-            await fetch(
-              `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/assets/${existingAsset.id}`,
-              {
-                method: 'DELETE',
-                headers,
-              }
-            );
-          } catch (delErr) {
-            console.warn('Lỗi khi xóa asset cũ trước khi ghi đè:', delErr);
+        let oldTargetName = '';
+        if (oldFileUrl && typeof oldFileUrl === 'string') {
+          const parts = oldFileUrl.split('/');
+          oldTargetName = decodeURIComponent(parts[parts.length - 1]).toLowerCase();
+        }
+
+        const objectIdPrefix =
+          objectId !== undefined && objectId !== null ? `${objectId}.`.toLowerCase() : null;
+        const targetLower = targetFileName.toLowerCase();
+
+        const assetsToDelete = release.assets.filter((a: any) => {
+          if (!a || !a.name) return false;
+          const aName = a.name.toLowerCase();
+          if (aName === targetLower) return true;
+          if (oldTargetName && aName === oldTargetName) return true;
+          if (objectIdPrefix && aName.startsWith(objectIdPrefix) && aName.endsWith('.pdf')) return true;
+          return false;
+        });
+
+        for (const oldAsset of assetsToDelete) {
+          if (oldAsset && oldAsset.id) {
+            try {
+              await fetch(
+                `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/assets/${oldAsset.id}`,
+                {
+                  method: 'DELETE',
+                  headers,
+                }
+              );
+            } catch (delErr) {
+              console.warn(`Lỗi khi xóa asset cũ (${oldAsset.name}) trước khi ghi đè:`, delErr);
+            }
           }
         }
       }
@@ -409,10 +437,10 @@ async function startServer() {
   app.post('/api/battles/delete-hoso', async (req, res) => {
     try {
       const token = getEffectiveGitHubToken();
-      const { fileUrl, fileName } = req.body;
+      const { fileUrl, fileName, objectId } = req.body;
 
-      if (!fileUrl && !fileName) {
-        return res.status(400).json({ error: 'Thiếu thông tin URL hoặc tên file cần xóa' });
+      if (!fileUrl && !fileName && objectId === undefined) {
+        return res.status(400).json({ error: 'Thiếu thông tin URL, tên file hoặc objectId cần xóa' });
       }
 
       // If token not provided, simply acknowledge so client can clear HoSo property
@@ -441,17 +469,28 @@ async function startServer() {
       if (releaseRes.ok) {
         const release = await releaseRes.json();
         if (Array.isArray(release.assets)) {
-          const matched = release.assets.find(
-            (a: any) => a.name.toLowerCase() === (targetName || '').toLowerCase()
-          );
-          if (matched && matched.id) {
-            await fetch(
-              `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/assets/${matched.id}`,
-              {
-                method: 'DELETE',
-                headers,
-              }
-            );
+          const targetLower = (targetName || '').toLowerCase();
+          const objectIdPrefix =
+            objectId !== undefined && objectId !== null ? `${objectId}.`.toLowerCase() : null;
+
+          const matchedAssets = release.assets.filter((a: any) => {
+            if (!a || !a.name) return false;
+            const aName = a.name.toLowerCase();
+            if (targetLower && aName === targetLower) return true;
+            if (objectIdPrefix && aName.startsWith(objectIdPrefix) && aName.endsWith('.pdf')) return true;
+            return false;
+          });
+
+          for (const matched of matchedAssets) {
+            if (matched && matched.id) {
+              await fetch(
+                `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/assets/${matched.id}`,
+                {
+                  method: 'DELETE',
+                  headers,
+                }
+              );
+            }
           }
         }
       }
@@ -853,6 +892,84 @@ async function startServer() {
     } catch (err: any) {
       console.error('[API POST /api/features/batch] Error:', err);
       res.status(500).json({ error: err.message || 'Failed to save batch' });
+    }
+  });
+
+  // Commune Administrative Boundaries Batch Upload
+  app.post('/api/communes/batch', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!serverDb) {
+        return res.status(500).json({ error: 'Firestore server not initialized' });
+      }
+      const { chunks, meta, isLastBatch, clearExisting } = req.body;
+
+      if (clearExisting) {
+        try {
+          const oldChunks = await getDocs(collection(serverDb, 'commune_chunks'));
+          for (const d of oldChunks.docs) {
+            await deleteDoc(doc(serverDb, 'commune_chunks', d.id));
+          }
+        } catch (e) {
+          console.warn('[API /api/communes/batch] Clear old chunks warning:', e);
+        }
+      }
+
+      if (Array.isArray(chunks) && chunks.length > 0) {
+        for (const chunk of chunks) {
+          if (chunk.id && chunk.payloadJson) {
+            await setDoc(doc(serverDb, 'commune_chunks', chunk.id), {
+              chunkIndex: chunk.chunkIndex,
+              itemCount: chunk.itemCount,
+              payloadJson: chunk.payloadJson,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      if (meta) {
+        await setDoc(doc(serverDb, 'commune_meta', 'config'), {
+          ...meta,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+      }
+
+      return res.json({ success: true, count: chunks?.length || 0 });
+    } catch (err: any) {
+      console.error('[API POST /api/communes/batch] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to save commune chunks' });
+    }
+  });
+
+  // Commune Public Metadata and Chunks
+  app.get('/api/communes/meta', async (req, res) => {
+    try {
+      if (!serverDb) return res.json({ totalFeatures: 0, totalChunks: 0 });
+      const metaDoc = await getDoc(doc(serverDb, 'commune_meta', 'config'));
+      if (metaDoc.exists()) {
+        return res.json(metaDoc.data());
+      }
+      return res.json({ totalFeatures: 0, totalChunks: 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/communes/chunks', async (req, res) => {
+    try {
+      if (!serverDb) return res.json({ chunks: [] });
+      const snap = await getDocs(collection(serverDb, 'commune_chunks'));
+      const chunks = snap.docs.map((d) => ({
+        id: d.id,
+        chunkIndex: d.data().chunkIndex,
+        itemCount: d.data().itemCount,
+        payloadJson: d.data().payloadJson,
+        updatedAt: d.data().updatedAt,
+      }));
+      chunks.sort((a, b) => (a.chunkIndex || 0) - (b.chunkIndex || 0));
+      return res.json({ chunks });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 
