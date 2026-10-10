@@ -21,89 +21,106 @@ export interface LayerSchema {
  * 1. Tìm kiếm quy tập (Polygon)
  */
 export const TIM_KIEM_QUY_TAP_SCHEMA: FieldDefinition[] = [
+  // Nhóm 1: Bắt buộc
   { name: 'OBJECTID', alias: 'Mã', type: 'Integer', length: 4 },
   { name: 'Ten', alias: 'Tên', type: 'String', length: 255 },
   { name: 'PhanLoai', alias: 'Phân loại', type: 'SmallInteger', length: 2 },
   { name: 'HienTrang', alias: 'Hiện trạng', type: 'String', length: 255 },
-  { name: 'Xa', alias: 'Xã (Phường)', type: 'String', length: 50 },
-  { name: 'Tinh', alias: 'Tỉnh (TP)', type: 'String', length: 50 },
-  { name: 'CapNhat', alias: 'TG cập nhật', type: 'Date', length: 8 },
-  { name: 'NguoiSua', alias: 'Người cập nhật', type: 'String', length: 50 },
-  { name: 'Nguon', alias: 'Nguồn TT', type: 'String', length: 50 },
+  // Nhóm 2: Thông tin chuyên ngành
+  { name: 'QuyTap', alias: 'Kết quả quy tập', type: 'String', length: 255 },
   { name: 'TimDuoc', alias: 'Đã tìm được', type: 'SmallInteger', length: 2 },
   { name: 'ChuaThay', alias: 'Chưa tìm thấy', type: 'SmallInteger', length: 2 },
-  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 30 },
+  // Nhóm 3: Bổ trợ thông tin
   { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
+  { name: 'Xa', alias: 'Xã (Phường)', type: 'String', length: 50 },
+  { name: 'Tinh', alias: 'Tỉnh (TP)', type: 'String', length: 50 },
+  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 30 },
+  // Nhóm 4: Bổ trợ dữ liệu
+  { name: 'Nguon', alias: 'Nguồn TT', type: 'String', length: 50 },
+  { name: 'CapNhat', alias: 'TG cập nhật', type: 'Date', length: 8 },
+  { name: 'NguoiSua', alias: 'Người cập nhật', type: 'String', length: 50 },
 ];
 
 /**
  * 2. Trận đánh lịch sử (Point)
  */
 export const TRAN_DANH_LICH_SU_SCHEMA: FieldDefinition[] = [
+  // Nhóm 1: Bắt buộc
   { name: 'OBJECTID', alias: 'Mã', type: 'Integer', length: 4 },
   { name: 'Ten', alias: 'Tên', type: 'String', length: 255 },
+  // Nhóm 2: Thông tin chuyên ngành
   { name: 'ThoiGian', alias: 'Thời gian', type: 'String', length: 255 },
-  { name: 'DiaDiem', alias: 'Địa điểm', type: 'String', length: 255 },
-  { name: 'DonVi', alias: 'Đơn vị', type: 'String', length: 255 },
+  { name: 'BenTa', alias: 'Bên ta', type: 'String', length: 255 },
   { name: 'BenDich', alias: 'Bên địch', type: 'String', length: 255 },
   { name: 'CongTrinh', alias: 'Công trình lịch sử', type: 'String', length: 255 },
   { name: 'QuyTap', alias: 'Kết quả quy tập', type: 'String', length: 255 },
-  { name: 'CapNhat', alias: 'TG cập nhật', type: 'Date', length: 8 },
-  { name: 'NguoiSua', alias: 'Người cập nhật', type: 'String', length: 50 },
-  { name: 'Nguon', alias: 'Nguồn TT', type: 'String', length: 50 },
-  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 30 },
+  // Nhóm 3: Bổ trợ thông tin
+  { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
   { name: 'Xa', alias: 'Xã (Phường)', type: 'String', length: 50 },
   { name: 'Tinh', alias: 'Tỉnh (TP)', type: 'String', length: 50 },
-  { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
-  { name: 'GhiChu', alias: 'Ghi chú', type: 'String', length: 255 },
-  { name: 'BenTa', alias: 'Bên ta', type: 'String', length: 255 },
+  { name: 'DiaDiem', alias: 'Địa điểm', type: 'String', length: 255 },
+  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 30 },
+  { name: 'DonVi', alias: 'Đơn vị', type: 'String', length: 255 },
+  // Nhóm 4: Bổ trợ dữ liệu
+  { name: 'Nguon', alias: 'Nguồn TT', type: 'String', length: 50 },
+  { name: 'CapNhat', alias: 'TG cập nhật', type: 'Date', length: 8 },
+  { name: 'NguoiSua', alias: 'Người cập nhật', type: 'String', length: 50 },
   { name: 'HoSo', alias: 'Hồ sơ', type: 'String', length: 500 },
+  { name: 'GhiChu', alias: 'Ghi chú', type: 'String', length: 255 },
 ];
 
 /**
  * 3. Mộ liệt sĩ (Point)
  */
 export const MO_LIET_SI_SCHEMA: FieldDefinition[] = [
+  // Nhóm 1: Bắt buộc
   { name: 'OBJECTID', alias: 'Mã', type: 'Integer', length: 4 },
   { name: 'Ten', alias: 'Tên mộ', type: 'String', length: 50 },
-  { name: 'DiaDiem', alias: 'Địa điểm', type: 'String', length: 255 },
-  { name: 'Xa', alias: 'Xã (Phường)', type: 'String', length: 50 },
-  { name: 'Tinh', alias: 'Tỉnh (TP)', type: 'String', length: 50 },
-  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 30 },
-  { name: 'ThongTin', alias: 'Thông tin', type: 'String', length: 255 },
   { name: 'HienTrang', alias: 'Hiện trạng', type: 'String', length: 255 },
-  { name: 'CapNhat', alias: 'TG Cập nhật', type: 'Date', length: 8 },
-  { name: 'NguoiSua', alias: 'Người cập nhật', type: 'String', length: 50 },
-  { name: 'Nguon', alias: 'Nguồn TT', type: 'String', length: 50 },
+  // Nhóm 2: Thông tin chuyên ngành
   { name: 'NTID', alias: 'Mã NT', type: 'Integer', length: 4 },
-  { name: 'GhiChu', alias: 'Ghi chú', type: 'String', length: 255 },
-  { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
   { name: 'NgaySinh', alias: 'Ngày sinh', type: 'String', length: 30 },
   { name: 'NgayMat', alias: 'Ngày mất', type: 'String', length: 30 },
-  { name: 'DonVi', alias: 'Đơn vị', type: 'String', length: 50 },
   { name: 'CapBac', alias: 'Cấp bậc', type: 'String', length: 50 },
   { name: 'ChucVu', alias: 'Chức vụ', type: 'String', length: 50 },
+  // Nhóm 3: Bổ trợ thông tin
+  { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
+  { name: 'Xa', alias: 'Xã (Phường)', type: 'String', length: 50 },
+  { name: 'Tinh', alias: 'Tỉnh (TP)', type: 'String', length: 50 },
+  { name: 'DiaDiem', alias: 'Địa điểm', type: 'String', length: 255 },
+  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 30 },
+  { name: 'DonVi', alias: 'Đơn vị', type: 'String', length: 50 },
+  // Nhóm 4: Bổ trợ dữ liệu
+  { name: 'ThongTin', alias: 'Thông tin', type: 'String', length: 255 },
+  { name: 'Nguon', alias: 'Nguồn TT', type: 'String', length: 50 },
+  { name: 'CapNhat', alias: 'TG Cập nhật', type: 'Date', length: 8 },
+  { name: 'NguoiSua', alias: 'Người cập nhật', type: 'String', length: 50 },
+  { name: 'GhiChu', alias: 'Ghi chú', type: 'String', length: 255 },
 ];
 
 /**
  * 4. Nghĩa trang liệt sĩ (Point)
  */
 export const NGHIA_TRANG_SCHEMA: FieldDefinition[] = [
+  // Nhóm 1: Bắt buộc
   { name: 'OBJECTID', alias: 'Mã', type: 'Integer', length: 4 },
   { name: 'Ten', alias: 'Tên', type: 'String', length: 70 },
-  { name: 'DiaChi', alias: 'Địa chỉ', type: 'String', length: 255 },
-  { name: 'DienThoai', alias: 'Điện thoại', type: 'String', length: 15 },
+  // Nhóm 2: Thông tin chuyên ngành
   { name: 'SoMo', alias: 'Số lượng mộ', type: 'SmallInteger', length: 2 },
+  { name: 'MoCoTen', alias: 'Mộ có tên', type: 'SmallInteger', length: 2 },
+  { name: 'MoVoDanh', alias: 'Mộ vô danh', type: 'SmallInteger', length: 2 },
   { name: 'ThanhLap', alias: 'Năm thành lập', type: 'SmallInteger', length: 2 },
+  // Nhóm 3: Bổ trợ thông tin
+  { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
   { name: 'Xa', alias: 'Xã (Phường)', type: 'String', length: 50 },
   { name: 'Tinh', alias: 'Tỉnh (Tp)', type: 'String', length: 50 },
+  { name: 'DiaChi', alias: 'Địa chỉ', type: 'String', length: 255 },
+  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 30 },
+  { name: 'DienThoai', alias: 'Điện thoại', type: 'String', length: 15 },
+  // Nhóm 4: Bổ trợ dữ liệu
   { name: 'Nguon', alias: 'Nguồn TT', type: 'String', length: 50 },
   { name: 'CapNhat', alias: 'TG cập nhật', type: 'Date', length: 8 },
   { name: 'NguoiSua', alias: 'Người cập nhật', type: 'String', length: 50 },
-  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 30 },
-  { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
-  { name: 'MoCoTen', alias: 'Mộ có tên', type: 'SmallInteger', length: 2 },
-  { name: 'MoVoDanh', alias: 'Mộ vô danh', type: 'SmallInteger', length: 2 },
 ];
 
 /**

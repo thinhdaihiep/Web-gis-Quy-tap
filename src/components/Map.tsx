@@ -27,6 +27,7 @@ import {
   isFeatureMatch,
   deduplicateFeaturesList,
 } from '../fieldAlias';
+import { getSchemaForLayer } from '../FieldSchema';
 import { formatDateForDisplay } from '../utils/dateFormatter';
 import { convertWGS84ToTargetCRS } from '../utils/coordinateParser';
 import {
@@ -109,40 +110,55 @@ function renderPopupProperties(
   feat: GeoJsonFeatureItem,
   lat?: number,
   lng?: number,
-  hiddenKey?: string | null
+  hiddenKey?: string | null,
+  layerId?: string
 ): string {
-  const props = feat.properties || {};
+  const effectiveLayerId = layerId || feat.layerId;
+  const rawProps = feat.properties || {};
+  const props: Record<string, any> = { ...rawProps };
+
+  // Nạp các trường trong Schema của lớp (nếu có) để không bị thiếu trường (như Mộ vô danh, Số mộ...)
+  if (effectiveLayerId) {
+    const schemaFields = getSchemaForLayer(effectiveLayerId);
+    schemaFields.forEach((field) => {
+      const fieldName = field.name;
+      const exists = Object.keys(props).some(
+        (k) => k.toLowerCase() === fieldName.toLowerCase()
+      );
+      if (!exists) {
+        props[fieldName] = '';
+      }
+    });
+  }
+
   const entries = Object.entries(props);
   let hasToaDo = false;
 
   const validItems: { key: string; alias: string; value: string }[] = [];
 
   entries.forEach(([k, v]) => {
-    const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-    if (
-      cleanKey === 'hientrang' ||
-      cleanKey === 'trangthaimoi' ||
-      cleanKey === 'chihuy' ||
-      cleanKey === 'ketqua' ||
-      cleanKey === 'objectid' ||
-      cleanKey === 'id' ||
-      cleanKey === 'fid' ||
-      cleanKey === 'hoso' ||
-      k === hiddenKey ||
-      isFieldHidden(k)
-    ) {
+    // Chỉ loại trừ:
+    // 1. Trường đang được dùng làm tiêu đề lớn của popup (hiddenKey) để tránh trùng lặp thông tin
+    // 2. Trường bị đánh dấu ẩn theo Bảng ánh xạ (isFieldHidden(k))
+    if (hiddenKey && k.toLowerCase() === hiddenKey.toLowerCase()) {
       return;
     }
 
-    const alias = getFieldAlias(k);
-    if (!alias) {
+    if (isFieldHidden(k)) {
       return;
     }
+
+    const alias = getFieldAlias(k) || k;
     if (alias === 'Tọa độ') hasToaDo = true;
 
     const formattedVal = formatDateForDisplay(v, k, alias);
-    const valStr = formattedVal !== '' ? formattedVal : (v !== null && v !== undefined && String(v).trim() !== '' ? String(v) : '---');
+    const valStr =
+      formattedVal !== ''
+        ? formattedVal
+        : v !== null && v !== undefined && String(v).trim() !== ''
+        ? String(v)
+        : '---';
+
     validItems.push({ key: k, alias, value: valStr });
   });
 
@@ -157,7 +173,7 @@ function renderPopupProperties(
     </tr>`;
   });
 
-  if (!hasToaDo && lat !== undefined && lng !== undefined) {
+  if (!hasToaDo && !isFieldHidden('ToaDo') && !isFieldHidden('toado') && lat !== undefined && lng !== undefined) {
     rows.push(`<tr style="border-bottom: 1px solid #f1f5f9;">
       <td style="padding: 3px 8px 3px 0; color: #475569; font-weight: 600; white-space: nowrap; vertical-align: top;">Tọa độ:</td>
       <td style="padding: 3px 0; color: #0f172a; font-weight: 700; text-align: right; font-family: monospace;">${lat.toFixed(6)}, ${lng.toFixed(6)}</td>
@@ -2084,7 +2100,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                     : ''
                 }
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(currentFeat, lat, lng, curHiddenKey)}
+                  ${renderPopupProperties(currentFeat, lat, lng, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
                 </div>
               </div>
             `;
@@ -2281,7 +2297,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                     : ''
                 }
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey)}
+                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
                 </div>
               </div>
             `;
@@ -2435,7 +2451,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey)}
+                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
                 </div>
               </div>
             `;

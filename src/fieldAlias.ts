@@ -404,70 +404,96 @@ export function deduplicateFeaturesList<T extends GeoJsonFeatureItem = GeoJsonFe
 
 /**
  * Calculate numerical priority score for field key or alias.
- * Lower numbers appear higher in the attribute table.
- * Calculate numerical priority score for field key or alias.
- * Lower numbers appear higher in the attribute table.
- * Groups fields by logical importance requested by user:
- * 1. Quan trọng: ID, Tên, Phân loại, Hiện trạng (10 - 30)
- * 2. Chuyên biệt: Các trường đặc hiệu từng lớp (Bên ta, Bên địch, Quy tập, Công trình, Tìm thấy, Chưa thấy...) (40 - 65)
- * 3. Thời gian, Địa điểm, Địa danh, Vị trí, Tọa độ (80 - 95)
- * 4. Thông tin khác: Thuộc tính tùy biến mở rộng khác (150)
- * 5. Thông tin bổ trợ: Đơn vị, Nguồn tư liệu, Thời gian cập nhật, Ghi chú, Mô tả (200 - 230)
+ * Lower numbers appear higher in tables, popups, and edit forms.
+ *
+ * Groups fields strictly according to 4 logical groups:
+ * 1. Nhóm Bắt buộc (10 - 40): Mã/ID, Tên gọi, Phân loại, Hiện trạng, Lớp dữ liệu
+ * 2. Nhóm Thông tin chuyên ngành (100 - 199):
+ *    - Quy tập: Kết quả quy tập, Đã tìm được, Chưa tìm thấy
+ *    - Mộ & Nghĩa trang & Liệt sĩ: Số lượng mộ, Mộ có tên, Mộ vô danh, Năm thành lập, Mã NT, Họ tên, Năm sinh, Hy sinh, Quê quán, Cấp bậc, Chức vụ
+ *    - Trận đánh: Thời gian diễn ra, Bên ta, Bên địch, Lực lượng, Công trình lịch sử, Diễn biến, Ý nghĩa, Mục tiêu, Thiệt hại
+ * 3. Nhóm Bổ trợ thông tin (200 - 299): Địa danh 3 cấp / cũ, Xã/Phường, Huyện/Quận, Tỉnh/TP, Địa điểm/Địa chỉ, Vị trí, Tọa độ, Đơn vị, Điện thoại
+ * 4. Nhóm Bổ trợ dữ liệu (300 - 399): Nguồn dữ liệu, Thời gian cập nhật, Người cập nhật, Hồ sơ tài liệu PDF, Ghi chú, Mô tả / Thông tin
  */
 export function getFieldPriorityScore(rawKey: string, aliasLabel: string): number {
   const k = (rawKey || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const a = (aliasLabel || '').toLowerCase();
 
-  // Mức 1: Quan trọng (Tên, ID, Phân loại, Hiện trạng)
-  if (k === 'objectid' || k === 'objectid1' || k === 'code' || k === 'maso' || a.includes('mã số') || a.includes('mã đối tượng')) return 10;
-  if (k === 'ten' || k === 'name' || k === 'tendiadiem' || k === 'tenkhuvuc' || a.includes('tên')) return 20;
-  if (k === 'phanloai' || k === 'type' || k === 'hientrang' || a.includes('phân loại') || a.includes('hiện trạng')) return 30;
+  // ==========================================
+  // NHÓM 1: BẮT BUỘC (Mã, Tên, Phân loại, Hiện trạng, Lớp)
+  // Điểm: 10 - 40
+  // ==========================================
+  if (k === 'objectid' || k === 'objectid1' || k === 'code' || k === 'maso' || k === 'id' || a.includes('mã số') || a.includes('mã đối tượng') || a === 'mã') return 10;
+  if (k === 'ten' || k === 'name' || k === 'tendiadiem' || k === 'tenkhuvuc' || k === 'tenmo' || a.includes('tên gọi') || a.includes('tên đối tượng') || a === 'tên' || a === 'tên mộ') return 20;
+  if (k === 'phanloai' || k === 'type' || a.includes('phân loại')) return 30;
+  if (k === 'hientrang' || a.includes('hiện trạng')) return 35;
+  if (k === 'lop' || k === 'layer' || k === 'layerid' || a.includes('lớp')) return 38;
 
-  // Mức 2: Chuyên biệt (mang tính đặc hiệu của từng lớp)
-  // Lớp Các trận đánh, chiến dịch
-  if (k === 'benta' || a.includes('bên ta')) return 40;
-  if (k === 'bendich' || a.includes('bên địch')) return 41;
-  if (k === 'lucluong' || a.includes('lực lượng')) return 42;
-  if (k === 'nhiemvu' || a.includes('nhiệm vụ')) return 43;
-  if (k === 'dienbien' || a.includes('diễn biến')) return 44;
-  if (k === 'ynghia' || a.includes('ý nghĩa')) return 45;
-  if (k === 'muctieu' || a.includes('mục tiêu')) return 46;
-  if (k === 'trandanh' || a.includes('trận đánh')) return 47;
-  if (k === 'chiendich' || a.includes('chiến dịch')) return 48;
+  // ==========================================
+  // NHÓM 2: THÔNG TIN CHUYÊN NGÀNH
+  // Điểm: 100 - 199
+  // ==========================================
+  // 2.1. Quy tập & Tiến độ
+  if (k === 'quytap' || a.includes('kết quả quy tập') || a === 'quy tập') return 100;
+  if (k === 'timduoc' || k === 'timthay' || k === 'daquytap' || a.includes('đã tìm được') || a.includes('đã tìm thấy') || a.includes('đã quy tập')) return 105;
+  if (k === 'chuathay' || k === 'chuatimthay' || a.includes('chưa thấy') || a.includes('chưa tìm thấy')) return 110;
 
-  // Lớp Liệt sĩ / Tìm kiếm quy tập
-  if (k === 'hoten' || a.includes('họ và tên') || a.includes('họ tên')) return 50;
-  if (k === 'namsinh' || a.includes('năm sinh')) return 51;
-  if (k === 'hysinh' || a.includes('hy sinh')) return 52;
-  if (k === 'quequan' || a.includes('quê quán')) return 53;
-  if (k === 'quytap' || a.includes('quy tập')) return 54;
-  if (k === 'congtrinh' || a.includes('công trình')) return 55;
-  if (k === 'timduoc' || k === 'timthay' || k === 'daquytap' || a.includes('tìm được') || a.includes('tìm thấy') || a.includes('đã quy tập')) return 56;
-  if (k === 'chuathay' || k === 'chuatimthay' || a.includes('chưa thấy') || a.includes('chưa tìm thấy')) return 57;
-  if (k === 'soluong' || a.includes('số lượng')) return 58;
-  if (k === 'thiethai' || a.includes('thiệt hại')) return 59;
+  // 2.2. Mộ & Nghĩa trang & Liệt sĩ
+  if (k === 'somo' || k === 'soluong' || a.includes('số lượng mộ') || a.includes('số mộ') || a === 'số lượng') return 120;
+  if (k === 'mocoten' || a.includes('mộ có tên')) return 122;
+  if (k === 'movodanh' || a.includes('mộ vô danh')) return 124;
+  if (k === 'thanhlap' || a.includes('năm thành lập') || a.includes('thành lập')) return 126;
+  if (k === 'ntid' || a.includes('mã nt') || a.includes('mã nghĩa trang')) return 128;
+  if (k === 'hoten' || a.includes('họ và tên') || a.includes('họ tên') || a.includes('tên liệt sĩ')) return 130;
+  if (k === 'namsinh' || k === 'ngaysinh' || a.includes('năm sinh') || a.includes('ngày sinh')) return 132;
+  if (k === 'hysinh' || k === 'ngaymat' || a.includes('hy sinh') || a.includes('ngày mất') || a.includes('năm hy sinh')) return 134;
+  if (k === 'quequan' || a.includes('quê quán')) return 136;
+  if (k === 'capbac' || a.includes('cấp bậc')) return 138;
+  if (k === 'chucvu' || a.includes('chức vụ')) return 140;
 
-  // Mức 3: Thời gian, địa điểm, địa danh, vị trí, tọa độ
-  if (k === 'thoigian' || a.includes('thời gian')) return 80;
-  if (k === 'diadiem' || k === 'diachi' || a.includes('địa điểm') || a.includes('địa chỉ')) return 81;
-  if (k === 'tinh' || k === 'tinhtp' || a.includes('tỉnh')) return 82;
-  if (k === 'huyen' || k === 'quanhuyen' || a.includes('huyện') || a.includes('quận')) return 83;
-  if (k === 'xa' || k === 'xaphuong' || a.includes('xã') || a.includes('phường')) return 84;
-  if (k === 'diadanh2c' || a.includes('địa danh 2')) return 85;
-  if (k === 'diadanh3c' || a.includes('địa danh 3')) return 86;
-  if (k === 'vitri' || k === 'location' || a.includes('vị trí')) return 87;
-  if (k === 'toado' || k === 'coordinates' || a.includes('tọa độ')) return 88;
+  // 2.3. Trận đánh lịch sử
+  if (k === 'thoigian' || a.includes('thời gian diễn ra') || a === 'thời gian') return 150;
+  if (k === 'benta' || a.includes('bên ta')) return 152;
+  if (k === 'bendich' || a.includes('bên địch')) return 154;
+  if (k === 'lucluong' || a.includes('lực lượng')) return 156;
+  if (k === 'congtrinh' || a.includes('công trình')) return 158;
+  if (k === 'dienbien' || a.includes('diễn biến')) return 160;
+  if (k === 'ynghia' || a.includes('ý nghĩa')) return 162;
+  if (k === 'muctieu' || a.includes('mục tiêu')) return 164;
+  if (k === 'nhiemvu' || a.includes('nhiệm vụ')) return 166;
+  if (k === 'thiethai' || a.includes('thiệt hại')) return 168;
+  if (k === 'trandanh' || a.includes('trận đánh')) return 170;
+  if (k === 'chiendich' || a.includes('chiến dịch')) return 172;
 
-  // Mức 5: Thông tin bổ trợ (Đơn vị, Nguồn tư liệu, Ngày cập nhật, Người cập nhật, Ghi chú, Mô tả)
-  if (k === 'donvi' || a.includes('đơn vị')) return 200;
-  if (k === 'nguon' || k === 'nguontulieu' || a.includes('nguồn')) return 205;
-  if (k === 'capnhat' || k === 'ngaycapnhat' || k === 'updatedat' || a.includes('tg cập nhật') || a.includes('thời gian cập nhật')) return 210;
-  if (k === 'nguoisua' || k === 'nguoicapnhat' || a.includes('người cập nhật') || a.includes('người sửa')) return 211;
-  if (k === 'ghichu' || k === 'mota' || k === 'description' || a.includes('ghi chú') || a.includes('mô tả')) return 220;
+  // ==========================================
+  // NHÓM 3: BỔ TRỢ THÔNG TIN (Địa lý, Hành chính, Đơn vị, Liên lạc)
+  // Điểm: 200 - 299
+  // ==========================================
+  if (k === 'diadanh3c' || a.includes('hành chính cũ') || a.includes('địa danh 3')) return 200;
+  if (k === 'diadanh2c' || a.includes('địa danh 2')) return 202;
+  if (k === 'xa' || k === 'xaphuong' || a.includes('xã') || a.includes('phường')) return 210;
+  if (k === 'huyen' || k === 'quanhuyen' || a.includes('huyện') || a.includes('quận')) return 212;
+  if (k === 'tinh' || k === 'tinhtp' || a.includes('tỉnh')) return 214;
+  if (k === 'diadiem' || k === 'diachi' || a.includes('địa điểm') || a.includes('địa chỉ')) return 220;
+  if (k === 'vitri' || k === 'location' || a.includes('vị trí')) return 222;
+  if (k === 'toado' || k === 'coordinates' || a.includes('tọa độ')) return 225;
+  if (k === 'donvi' || a.includes('đơn vị')) return 230;
+  if (k === 'dienthoai' || a.includes('điện thoại')) return 240;
 
+  // ==========================================
+  // NHÓM 4: BỔ TRỢ DỮ LIỆU (Nguồn, Cập nhật, Hồ sơ, Ghi chú, Mô tả)
+  // Điểm: 300 - 399
+  // ==========================================
+  if (k === 'nguon' || k === 'nguontulieu' || a.includes('nguồn')) return 300;
+  if (k === 'capnhat' || k === 'ngaycapnhat' || k === 'updatedat' || a.includes('tg cập nhật') || a.includes('ngày cập nhật') || a.includes('thời gian cập nhật')) return 310;
+  if (k === 'nguoisua' || k === 'nguoicapnhat' || a.includes('người cập nhật') || a.includes('người sửa')) return 320;
+  if (k === 'hoso' || a.includes('hồ sơ')) return 330;
+  if (k === 'ghichu' || a.includes('ghi chú')) return 340;
+  if (k === 'mota' || k === 'description' || a.includes('mô tả')) return 345;
+  if (k === 'thongtin' || a.includes('thông tin')) return 350;
 
-  // Mức 4: Thông tin khác
-  return 150;
+  // Các thuộc tính mở rộng khác chưa định danh
+  return 390;
 }
 
 /**

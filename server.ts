@@ -135,7 +135,7 @@ const activeSessions = new Map<string, ActiveSession>();
 const activeAdminSessions = new Set<string>();
 
 const getSecretToken = (): string => {
-  return process.env.ADMIN_API_TOKEN || process.env.admin_api_token || 'Bando@qk5';
+  return process.env.ADMIN_API_TOKEN || process.env.admin_api_token || '';
 };
 
 // Cryptographic token helper to ensure user session survives server restarts
@@ -194,9 +194,9 @@ const requireEditorOrAdmin = (req: express.Request, res: express.Response, next:
     return next();
   }
 
-  // 3. Static admin token check (from secrets/env or Bando@qk5)
+  // 3. Static admin token check (from secrets/env)
   const configuredToken = getSecretToken();
-  if (token === configuredToken || token === 'Bando@qk5' || activeAdminSessions.has(token)) {
+  if ((configuredToken && token === configuredToken) || activeAdminSessions.has(token)) {
     (req as any).user = { username: 'admin', role: 'admin' };
     return next();
   }
@@ -227,7 +227,7 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
 
   // 3. Static admin token check
   const configuredToken = getSecretToken();
-  if (adminTokenHeader === configuredToken || adminTokenHeader === 'Bando@qk5' || activeAdminSessions.has(adminTokenHeader)) {
+  if ((configuredToken && adminTokenHeader === configuredToken) || activeAdminSessions.has(adminTokenHeader)) {
     return next();
   }
 
@@ -895,6 +895,13 @@ async function startServer() {
     }
   });
 
+  // Server in-memory cache for commune administrative boundaries chunks
+  let cachedCommuneChunksResponse: {
+    payload: { chunks: any[] };
+    etag: string;
+    updatedAt: number;
+  } | null = null;
+
   // Commune Administrative Boundaries Batch Upload
   app.post('/api/communes/batch', requireEditorOrAdmin, async (req, res) => {
     try {
@@ -934,6 +941,9 @@ async function startServer() {
         }, { merge: true });
       }
 
+      // Invalidate server in-memory cache upon upload so fresh data will be read
+      cachedCommuneChunksResponse = null;
+
       return res.json({ success: true, count: chunks?.length || 0 });
     } catch (err: any) {
       console.error('[API POST /api/communes/batch] Error:', err);
@@ -957,6 +967,17 @@ async function startServer() {
 
   app.get('/api/communes/chunks', async (req, res) => {
     try {
+      // 1. Return from server in-memory cache if available
+      if (cachedCommuneChunksResponse) {
+        const clientEtag = req.headers['if-none-match'];
+        if (clientEtag && clientEtag === cachedCommuneChunksResponse.etag) {
+          return res.status(304).end();
+        }
+        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        res.setHeader('ETag', cachedCommuneChunksResponse.etag);
+        return res.json(cachedCommuneChunksResponse.payload);
+      }
+
       if (!serverDb) return res.json({ chunks: [] });
       const snap = await getDocs(collection(serverDb, 'commune_chunks'));
       const chunks = snap.docs.map((d) => ({
@@ -967,7 +988,25 @@ async function startServer() {
         updatedAt: d.data().updatedAt,
       }));
       chunks.sort((a, b) => (a.chunkIndex || 0) - (b.chunkIndex || 0));
-      return res.json({ chunks });
+
+      const payload = { chunks };
+      const etag = `W/"communes-${chunks.length}-${crypto.createHash('md5').update(JSON.stringify(chunks)).digest('hex').slice(0, 16)}"`;
+
+      // Cache in server memory
+      cachedCommuneChunksResponse = {
+        payload,
+        etag,
+        updatedAt: Date.now(),
+      };
+
+      const clientEtag = req.headers['if-none-match'];
+      if (clientEtag && clientEtag === etag) {
+        return res.status(304).end();
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      res.setHeader('ETag', etag);
+      return res.json(payload);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

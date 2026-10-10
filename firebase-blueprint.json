@@ -12,12 +12,29 @@
         "read": { "type": "boolean" }
       },
       "required": ["message", "type", "createdAt", "read"]
+    },
+    "User": {
+      "title": "User",
+      "description": "System user account",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "editor"] },
+        "password": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["username", "role"]
     }
   },
   "firestore": {
     "/notifications/{notificationId}": {
       "schema": "Notification",
       "description": "System and error notifications for admins"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User accounts with encrypted credentials"
     }
   }
 }

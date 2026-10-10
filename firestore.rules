@@ -1,14 +1,22 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 1. Strictly block all direct access to users collection (passwords/credentials handled securely on backend)
-    match /users/{userId} {
-      allow read, write: if false;
-    }
-
     // Helper functions for validating data payloads
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    function isValidUser(data) {
+      return (!('username' in data) || (data.username is string && data.username.size() <= 128))
+        && (!('role' in data) || (data.role in ['admin', 'editor']))
+        && (!('password' in data) || (data.password is string && data.password.size() <= 256));
+    }
+
+    // 1. Users collection (passwords hashed with bcrypt, managed via server)
+    match /users/{userId} {
+      allow read: if isValidId(userId);
+      allow create, update: if isValidId(userId) && isValidUser(request.resource.data);
+      allow delete: if isValidId(userId);
     }
 
     function isValidFeature(data) {

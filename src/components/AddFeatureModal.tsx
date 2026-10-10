@@ -283,8 +283,10 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
                   </td>
                 </tr>
 
-                {/* Các dòng còn lại: Tùy lớp mà hiển thị các trường khác nhau */}
-                {currentSchema.map((field) => {
+                {/* Các dòng còn lại: Tùy lớp mà hiển thị các trường khác nhau theo đúng thứ tự 4 nhóm */}
+                {currentSchema
+                  .filter((field) => field.name !== 'OBJECTID')
+                  .map((field) => {
                   const fieldVal = formValues[field.name] ?? '';
                   const isTenField = field.name === 'Ten';
 

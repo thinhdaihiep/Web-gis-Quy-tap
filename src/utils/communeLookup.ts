@@ -35,10 +35,21 @@ let cachedCommunes: IndexedFeature[] | null = null;
 let isLoading = false;
 let loadPromise: Promise<IndexedFeature[] | null> | null = null;
 
-// IndexedDB Caching configuration
+// Retry cooldown to prevent infinite spamming when fetch fails (10 seconds)
+const RETRY_COOLDOWN_MS = 10000;
+let lastFailedTimestamp = 0;
+
+// IndexedDB Caching configuration with lightweight versioning
 const IDB_NAME = 'gis_administrative_cache_db';
 const IDB_VERSION = 1;
 const IDB_STORE_NAME = 'commune_features';
+const COMMUNE_CACHE_VERSION = 1;
+
+interface CachedCommunesRecord {
+  version: number;
+  features: IndexedFeature[];
+  savedAt: number;
+}
 
 function openIndexedDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -66,11 +77,15 @@ async function getCachedCommunesFromIDB(): Promise<IndexedFeature[] | null> {
       const req = store.get('indexed_communes');
       req.onsuccess = () => {
         const val = req.result;
-        if (Array.isArray(val) && val.length > 0) {
-          resolve(val);
-        } else {
-          resolve(null);
+        // Verify lightweight cache version
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          const record = val as CachedCommunesRecord;
+          if (record.version === COMMUNE_CACHE_VERSION && Array.isArray(record.features) && record.features.length > 0) {
+            resolve(record.features);
+            return;
+          }
         }
+        resolve(null);
       };
       req.onerror = () => resolve(null);
     });
@@ -84,7 +99,12 @@ async function setCachedCommunesToIDB(data: IndexedFeature[]): Promise<void> {
     const db = await openIndexedDB();
     const tx = db.transaction(IDB_STORE_NAME, 'readwrite');
     const store = tx.objectStore(IDB_STORE_NAME);
-    store.put(data, 'indexed_communes');
+    const record: CachedCommunesRecord = {
+      version: COMMUNE_CACHE_VERSION,
+      features: data,
+      savedAt: Date.now(),
+    };
+    store.put(record, 'indexed_communes');
   } catch (e) {
     console.warn('Không thể ghi cache địa giới xã vào IndexedDB:', e);
   }
@@ -93,6 +113,7 @@ async function setCachedCommunesToIDB(data: IndexedFeature[]): Promise<void> {
 export async function invalidateCommuneCache(): Promise<void> {
   cachedCommunes = null;
   loadPromise = null;
+  lastFailedTimestamp = 0;
   try {
     const db = await openIndexedDB();
     const tx = db.transaction(IDB_STORE_NAME, 'readwrite');
@@ -232,6 +253,10 @@ export async function loadCapXa(): Promise<IndexedFeature[] | null> {
   if (cachedCommunes && cachedCommunes.length > 0) {
     return cachedCommunes;
   }
+  // Cooldown check if last attempt failed within RETRY_COOLDOWN_MS (10s)
+  if (lastFailedTimestamp > 0 && Date.now() - lastFailedTimestamp < RETRY_COOLDOWN_MS) {
+    return null;
+  }
   if (loadPromise) return loadPromise;
 
   loadPromise = (async () => {
@@ -241,6 +266,7 @@ export async function loadCapXa(): Promise<IndexedFeature[] | null> {
       const cached = await getCachedCommunesFromIDB();
       if (cached && cached.length > 0) {
         cachedCommunes = cached;
+        lastFailedTimestamp = 0;
         return cached;
       }
 
@@ -250,14 +276,17 @@ export async function loadCapXa(): Promise<IndexedFeature[] | null> {
         const indexed = indexRawFeatures(rawFeatures);
         if (indexed.length > 0) {
           cachedCommunes = indexed;
+          lastFailedTimestamp = 0;
           // Store in IndexedDB for subsequent instant access
           setCachedCommunesToIDB(indexed).catch(() => {});
           return indexed;
         }
       }
 
+      lastFailedTimestamp = Date.now();
       return null;
     } catch (err) {
+      lastFailedTimestamp = Date.now();
       console.warn('Lỗi tải dữ liệu xã từ Firebase:', err);
       return null;
     } finally {

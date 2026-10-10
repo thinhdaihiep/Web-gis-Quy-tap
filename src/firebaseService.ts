@@ -108,13 +108,6 @@ function getAuthHeaders(): Record<string, string> {
   if (token) {
     headers['x-session-token'] = token;
     headers['x-admin-token'] = token;
-  } else {
-    // Check if current user is admin
-    const user = getStoredUser();
-    if (user && (user.role === 'admin' || user.username === 'admin')) {
-      headers['x-admin-token'] = 'Bando@qk5';
-      headers['x-session-token'] = 'Bando@qk5';
-    }
   }
   return headers;
 }
@@ -787,9 +780,9 @@ export async function saveCommuneChunksToFirestore(
  */
 export async function loadCommuneChunksFromFirestore(): Promise<any[]> {
   try {
-    // 1. Try server endpoint first (fastest)
+    // 1. Try server endpoint first (fastest, utilizes HTTP browser cache & ETag)
     try {
-      const res = await fetch('/api/communes/chunks', { cache: 'no-cache' });
+      const res = await fetch('/api/communes/chunks');
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.chunks) && data.chunks.length > 0) {
