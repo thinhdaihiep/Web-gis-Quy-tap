@@ -7,7 +7,6 @@ import {
   Clock,
   Trash2,
   Lock,
-  RotateCw,
   Calendar,
   FileText,
   Upload,
@@ -26,7 +25,6 @@ interface AttributePaneProps {
   currentUser?: AppUser | null;
   onSave: (feature: GeoJsonFeatureItem) => void;
   onDelete?: (featureId: string) => void;
-  onReload?: (featureId: string) => Promise<void>;
   onOpenPdfViewer?: (url: string, title?: string) => void;
   onClose: () => void;
 }
@@ -44,7 +42,6 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   currentUser,
   onSave,
   onDelete,
-  onReload,
   onOpenPdfViewer,
   onClose,
 }) => {
@@ -53,7 +50,6 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   const [phanLoai, setPhanLoai] = useState<number>(1);
   const [propRows, setPropRows] = useState<EditablePropertyRow[]>([]);
   const [showRawFieldName, setShowRawFieldName] = useState<boolean>(false);
-  const [isReloading, setIsReloading] = useState<boolean>(false);
   const [isUploadingDossier, setIsUploadingDossier] = useState<boolean>(false);
   const [isDeletingDossier, setIsDeletingDossier] = useState<boolean>(false);
   const [confirmDeleteDossier, setConfirmDeleteDossier] = useState<boolean>(false);
@@ -62,16 +58,6 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   // Resizable pane width state
   const [paneWidth, setPaneWidth] = useState<number>(380);
   const [isResizing, setIsResizing] = useState<boolean>(false);
-
-  const handleReloadClick = async () => {
-    if (!onReload || !feature) return;
-    setIsReloading(true);
-    try {
-      await onReload(String(feature.id));
-    } finally {
-      setIsReloading(false);
-    }
-  };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -478,18 +464,6 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          {onReload && (
-            <button
-              onClick={handleReloadClick}
-              disabled={isReloading}
-              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0 disabled:opacity-50 flex items-center gap-1"
-              title="Tải lại geometry & thuộc tính đối tượng này từ CSDL Firebase"
-            >
-              <RotateCw className={`w-3.5 h-3.5 ${isReloading ? 'animate-spin text-blue-400' : ''}`} />
-              <span className="hidden sm:inline text-[10px] font-bold">Reload</span>
-            </button>
-          )}
-
           <button
             onClick={onClose}
             className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"

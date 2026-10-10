@@ -1122,50 +1122,6 @@ export default function App() {
       });
   };
 
-  const handleReloadFeature = async (featureId: string) => {
-    if (!featureId) return;
-    try {
-      let freshFeature = await fetchSingleFeatureFromFirestore(featureId);
-      if (!freshFeature && selectedFeature && String(selectedFeature.id) === String(featureId)) {
-        const localFound = mapFeatures.find(
-          (f) => String(f.id) === String(featureId) || getItemUniqueKey(f) === getItemUniqueKey(selectedFeature)
-        );
-        if (localFound) {
-          freshFeature = localFound;
-        } else if (originalSelectedFeatureRef.current) {
-          freshFeature = originalSelectedFeatureRef.current;
-        }
-      }
-
-      if (freshFeature) {
-        setMapFeatures((prev) => {
-          const idx = prev.findIndex(
-            (f) => String(f.id) === String(featureId) || getItemUniqueKey(f) === getItemUniqueKey(freshFeature!)
-          );
-          let updatedList: GeoJsonFeatureItem[];
-          if (idx >= 0) {
-            const copy = [...prev];
-            copy[idx] = freshFeature!;
-            updatedList = copy;
-          } else {
-            updatedList = [...prev, freshFeature!];
-          }
-          try {
-            localStorage.setItem('gis_local_map_features', JSON.stringify(updatedList));
-          } catch (e) {}
-          return updatedList;
-        });
-        setSelectedFeature(freshFeature);
-        originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(freshFeature));
-        showToast('Đã tải lại dữ liệu đối tượng thành công!');
-      } else {
-        showToast('Không tìm thấy bản ghi đối tượng này.');
-      }
-    } catch (err) {
-      showToast('Không thể kết nối CSDL để tải lại.');
-    }
-  };
-
   const handleDiscardSelection = () => {
     if (selectedFeature && originalSelectedFeatureRef.current && originalSelectedFeatureRef.current.id === selectedFeature.id) {
       const restored = originalSelectedFeatureRef.current;
@@ -1876,7 +1832,6 @@ export default function App() {
               setSelectedFeature(null);
               setIsAttributePaneOpen(false);
             }}
-            onReload={handleReloadFeature}
             onOpenPdfViewer={(url, title) => {
               setPdfViewerState({ isOpen: true, url, title: title || 'Hồ sơ trận đánh' });
             }}
