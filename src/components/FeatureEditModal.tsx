@@ -16,7 +16,6 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
-import { cleanShapeProperties, isShapeProperty } from '../utils/shapeFieldUtils';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
 
 interface FeatureEditModalProps {
@@ -123,7 +122,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
           targetLayer?.name.toLowerCase().includes('chiến dịch') ||
           targetLayer?.name.toLowerCase().includes('chien dich');
 
-        const existingProps: Record<string, any> = cleanShapeProperties({ ...(feature.properties || {}) });
+        const existingProps: Record<string, any> = { ...(feature.properties || {}) };
 
         delete existingProps['TrangThaiMoi'];
         delete existingProps['trang_thai_moi'];
@@ -290,7 +289,7 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
       name: (name.trim() || feature.name || '').trim(),
       type: feature.type || 'Point',
       coordinates: feature.coordinates || [108.3, 14.5],
-      properties: cleanShapeProperties(properties),
+      properties,
       updatedAt: new Date().toISOString(),
     };
   };

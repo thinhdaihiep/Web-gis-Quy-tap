@@ -2,7 +2,6 @@ import { doc, setDoc, getDoc, getDocs, collection, writeBatch, deleteDoc } from 
 import { db } from './firebase';
 import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole, RasterLayer, RasterFileItem } from './types';
 import { deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
-import { cleanShapeProperties } from './utils/shapeFieldUtils';
 
 const COLLECTION_NAME = 'map_features';
 const CHUNKS_COLLECTION = 'layer_chunks';
@@ -138,11 +137,7 @@ function syncToLocalStorage(features: GeoJsonFeatureItem[]) {
   try {
     const existingRaw = localStorage.getItem('gis_local_map_features');
     const existingList: GeoJsonFeatureItem[] = existingRaw ? JSON.parse(existingRaw) : [];
-    const cleanedIncoming = features.map((f) => ({
-      ...f,
-      properties: cleanShapeProperties(f.properties || {}),
-    }));
-    const merged = deduplicateFeaturesList([...existingList, ...cleanedIncoming].filter((f) => !isDemoFeatureId(f.id)));
+    const merged = deduplicateFeaturesList([...existingList, ...features].filter((f) => !isDemoFeatureId(f.id)));
     localStorage.setItem('gis_local_map_features', JSON.stringify(merged));
   } catch (e) {
     console.warn('Lỗi ghi LocalStorage cache:', e);
@@ -156,12 +151,7 @@ function getFromLocalStorage(): GeoJsonFeatureItem[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed
-          .filter((item) => !isDemoFeatureId(item.id))
-          .map((item) => ({
-            ...item,
-            properties: cleanShapeProperties(item.properties || {}),
-          }));
+        return parsed.filter((item) => !isDemoFeatureId(item.id));
       }
     }
   } catch (e) {}
@@ -195,7 +185,7 @@ export async function fetchSingleFeatureFromFirestore(featureId: string): Promis
         name: data.name || '',
         type: data.type || 'Point',
         coordinates: coords,
-        properties: cleanShapeProperties(data.properties || {}),
+        properties: data.properties || {},
         code: data.code,
         updatedAt: data.updatedAt,
       };
@@ -237,7 +227,6 @@ export async function saveSingleFeatureToFirestore(
 
     const cleanedFeature = {
       ...feature,
-      properties: cleanShapeProperties(feature.properties || {}),
       coordinates: coordsJsonStr,
       updatedAt: feature.updatedAt || new Date().toISOString(),
     };
@@ -305,10 +294,9 @@ export async function saveImportedFeaturesToFirestore(
     // Deduplicate list by OBJECTID / ID before saving
     const deduped = deduplicateFeaturesList(features);
 
-    // Optimize coordinates and sanitize properties across all items
+    // Optimize coordinates across all items
     const cleanedFeatures = deduped.map((feat) => ({
       ...feat,
-      properties: cleanShapeProperties(feat.properties || {}),
       coordinates: optimizeCoordinates(feat.coordinates),
       updatedAt: feat.updatedAt || new Date().toISOString().split('T')[0],
     }));
@@ -408,7 +396,6 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
             const parsedList: GeoJsonFeatureItem[] = JSON.parse(data.payloadJson);
             parsedList.forEach((item) => {
               if (!isDemoFeatureId(item.id)) {
-                item.properties = cleanShapeProperties(item.properties || {});
                 itemsMap.set(getItemUniqueKey(item), item);
                 firestoreChunkItemsCount++;
               }
@@ -449,7 +436,7 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
           code: data.code || undefined,
           type: data.type,
           coordinates: coords,
-          properties: cleanShapeProperties(data.properties || {}),
+          properties: data.properties || {},
           updatedAt: data.updatedAt,
         };
 

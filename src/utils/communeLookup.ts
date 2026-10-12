@@ -8,7 +8,6 @@
  */
 
 import { loadCommuneChunksFromFirestore } from '../firebaseService';
-import { cleanShapeProperties } from './shapeFieldUtils';
 
 export interface CommuneInfo {
   ten: string;
@@ -240,7 +239,7 @@ function indexRawFeatures(features: any[]): IndexedFeature[] {
       bbox,
       geometryType: type,
       coordinates: geom.coordinates,
-      properties: cleanShapeProperties(feat.properties || {}),
+      properties: feat.properties || {},
     });
   }
 

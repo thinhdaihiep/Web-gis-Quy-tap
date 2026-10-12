@@ -17,7 +17,6 @@ import {
 import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
 import { getSchemaForLayer } from '../FieldSchema';
-import { cleanShapeProperties, isShapeProperty } from '../utils/shapeFieldUtils';
 
 interface AttributePaneProps {
   feature: GeoJsonFeatureItem | null;
@@ -116,7 +115,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
         targetLayer?.name.toLowerCase().includes('chiến dịch') ||
         targetLayer?.name.toLowerCase().includes('chien dich');
 
-      const existingProps: Record<string, any> = cleanShapeProperties({ ...(feature.properties || {}) });
+      const existingProps: Record<string, any> = { ...(feature.properties || {}) };
 
       delete existingProps['TrangThaiMoi'];
       delete existingProps['trang_thai_moi'];
@@ -364,7 +363,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       ...feature,
       layerId: selectedLayerId,
       name: (name.trim() || feature.name || '').trim(),
-      properties: cleanShapeProperties(updatedProps),
+      properties: updatedProps,
       updatedAt: new Date().toISOString(),
     };
     onSave(updatedFeature);
@@ -415,7 +414,7 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       ...feature,
       layerId: selectedLayerId,
       name: name.trim(),
-      properties: cleanShapeProperties(properties),
+      properties,
       updatedAt: new Date().toISOString(),
     };
 

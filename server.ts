@@ -788,26 +788,6 @@ async function startServer() {
   // SERVER-SIDE FIRESTORE WRITE APIS (Editor & Admin only)
   // ==========================================
 
-  function cleanShapePropertiesServer(props: Record<string, any> | undefined | null): Record<string, any> {
-    if (!props || typeof props !== 'object') return {};
-    const cleaned: Record<string, any> = {};
-    for (const [k, v] of Object.entries(props)) {
-      const norm = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (
-        norm === 'shapearea' ||
-        norm === 'shapelength' ||
-        norm === 'shapeleng' ||
-        norm.startsWith('shapearea') ||
-        norm.startsWith('shapelength') ||
-        norm.startsWith('shapeleng')
-      ) {
-        continue;
-      }
-      cleaned[k] = v;
-    }
-    return cleaned;
-  }
-
   // Save/Update a single map feature
   app.post('/api/features/save', requireEditorOrAdmin, async (req, res) => {
     try {
@@ -829,7 +809,7 @@ async function startServer() {
         name: feature.name || '',
         type: feature.type || feature.geometry?.type || 'Point',
         coordinates: coordsJsonStr,
-        properties: cleanShapePropertiesServer(feature.properties || {}),
+        properties: feature.properties || {},
         updatedAt: feature.updatedAt || new Date().toISOString(),
       };
       if (feature.code) cleanedDoc.code = feature.code;
@@ -873,22 +853,10 @@ async function startServer() {
         // Save as pre-bundled chunks
         for (const chunk of chunks) {
           if (chunk.id && chunk.payloadJson) {
-            let sanitizedPayload = chunk.payloadJson;
-            try {
-              const list: any[] = JSON.parse(chunk.payloadJson);
-              if (Array.isArray(list)) {
-                const cleanedList = list.map((item) => ({
-                  ...item,
-                  properties: cleanShapePropertiesServer(item.properties || {}),
-                }));
-                sanitizedPayload = JSON.stringify(cleanedList);
-              }
-            } catch (_) {}
-
             await setDoc(doc(serverDb, 'layer_chunks', chunk.id), {
               chunkIndex: chunk.chunkIndex,
               itemCount: chunk.itemCount,
-              payloadJson: sanitizedPayload,
+              payloadJson: chunk.payloadJson,
               updatedAt: new Date().toISOString(),
             });
           }
@@ -910,7 +878,7 @@ async function startServer() {
                 name: feat.name || '',
                 type: feat.type || feat.geometry?.type || 'Point',
                 coordinates: coordsJsonStr,
-                properties: cleanShapePropertiesServer(feat.properties || {}),
+                properties: feat.properties || {},
                 updatedAt: feat.updatedAt || new Date().toISOString(),
               },
               { merge: true }

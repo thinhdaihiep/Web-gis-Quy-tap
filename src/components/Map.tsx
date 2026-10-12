@@ -28,7 +28,6 @@ import {
   deduplicateFeaturesList,
 } from '../fieldAlias';
 import { getSchemaForLayer } from '../FieldSchema';
-import { cleanShapeProperties } from '../utils/shapeFieldUtils';
 import { formatDateForDisplay } from '../utils/dateFormatter';
 import { convertWGS84ToTargetCRS } from '../utils/coordinateParser';
 import {
@@ -116,7 +115,7 @@ function renderPopupProperties(
 ): string {
   const effectiveLayerId = layerId || feat.layerId;
   const rawProps = feat.properties || {};
-  const props: Record<string, any> = cleanShapeProperties({ ...rawProps });
+  const props: Record<string, any> = { ...rawProps };
 
   // Nạp các trường trong Schema của lớp (nếu có) để không bị thiếu trường (như Mộ vô danh, Số mộ...)
   if (effectiveLayerId) {

@@ -1,5 +1,4 @@
 import { GeoJsonFeatureItem } from './types';
-import { isShapeProperty } from './utils/shapeFieldUtils';
 
 /**
  * Central Field Alias Mapping Dictionary for GIS Layers
@@ -129,7 +128,6 @@ export function saveHiddenFieldsMap(map: Record<string, boolean>): void {
  */
 export function isFieldHidden(key: string, customHiddenMap?: Record<string, boolean>): boolean {
   if (!key) return false;
-  if (isShapeProperty(key)) return true;
   const activeHidden = customHiddenMap || getHiddenFieldsMap();
 
   if (activeHidden[key] === true) return true;
@@ -249,7 +247,6 @@ export function getAllAliasRules(
 
   // 1. Process defaults first (skipping any deleted by user)
   Object.entries(DEFAULT_FIELD_ALIASES).forEach(([key, alias]) => {
-    if (isShapeProperty(key)) return;
     if (
       activeCustom[key] === '__DELETED__' ||
       activeCustom[key.toLowerCase()] === '__DELETED__'
@@ -273,7 +270,7 @@ export function getAllAliasRules(
 
   // 2. Process custom entries that were not in default
   Object.entries(activeCustom).forEach(([key, alias]) => {
-    if (!alias || alias === '__DELETED__' || isShapeProperty(key)) return;
+    if (!alias || alias === '__DELETED__') return;
     const uniqueKey = key.toLowerCase();
     if (!seenKeys.has(uniqueKey)) {
       seenKeys.add(uniqueKey);
