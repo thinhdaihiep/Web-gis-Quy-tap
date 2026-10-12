@@ -35,6 +35,7 @@ import {
 } from '../fieldAlias';
 import { saveCommuneChunksToFirestore } from '../firebaseService';
 import { invalidateCommuneCache } from '../utils/communeLookup';
+import { cleanShapeProperties, isShapeProperty } from '../utils/shapeFieldUtils';
 
 proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
 proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
@@ -217,7 +218,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
         const rawId =
           f.id ?? rawProps.OBJECTID ?? rawProps.objectID ?? rawProps.id ?? `IMP-${Date.now()}-${idx + 1}`;
 
-        const props: Record<string, any> = { ...rawProps };
+        const props: Record<string, any> = cleanShapeProperties({ ...rawProps });
 
         // Remove temporary state props
         delete props['TrangThaiMoi'];
@@ -972,8 +973,8 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="bg-slate-100 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
-                    <th className="p-2.5 w-5/12">Tên trường dữ liệu gốc</th>
-                    <th className="p-2.5 w-5/12">Tên hiển thị tiếng Việt</th>
+                    <th className="p-2.5 w-5/12">Tên trường</th>
+                    <th className="p-2.5 w-5/12">Tên hiển thị</th>
                     <th className="p-2.5 w-12 text-center" title="Hiển thị ở Popup & Bảng thuộc tính">
                       <Eye className="w-3.5 h-3.5 text-slate-600 mx-auto" />
                     </th>
