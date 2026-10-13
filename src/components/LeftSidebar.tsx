@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LayerConfig, UserRole, GeoJsonFeatureItem } from '../types';
-import { Layers, Plus, X, Info, ChevronDown, ChevronRight, Folder } from 'lucide-react';
+import { Layers, X, Info, ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import { SearchAreaShapeBadge, BattleShapeBadge, GraveShapeBadge, CemeteryShapeBadge } from './GisIcons';
 
 interface LeftSidebarProps {
@@ -389,19 +389,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </div>
         </div>
 
-        {/* Add Data Layer Button Area */}
-        {currentRole === 'admin' && (
-          <div>
-            <button
-              onClick={() => alert('Tính năng Thêm lớp dữ liệu đang được phát triển.')}
-              className="w-full py-2 px-3 rounded text-xs font-bold uppercase tracking-wider shadow-sm flex items-center justify-center space-x-1.5 transition-all bg-slate-700 hover:bg-slate-800 text-white cursor-pointer active:scale-[0.99]"
-              title="Thêm lớp dữ liệu"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>+ Thêm lớp dữ liệu</span>
-            </button>
-          </div>
-        )}
+
       </div>
     </aside>
   );

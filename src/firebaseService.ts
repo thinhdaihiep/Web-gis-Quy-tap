@@ -3,10 +3,29 @@ import { db } from './firebase';
 import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole, RasterLayer, RasterFileItem } from './types';
 import { deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
 import { cleanShapeProperties } from './utils/shapeFieldUtils';
+import { getCachedData, setCachedData, deleteCachedData } from './utils/indexedDbCache';
 
 const COLLECTION_NAME = 'map_features';
 const CHUNKS_COLLECTION = 'layer_chunks';
 const APP_SETTINGS_COLLECTION = 'app_settings';
+
+export const CACHE_KEY_COMMUNES = 'gis_commune_chunks';
+export const CACHE_KEY_RASTER_LAYERS = 'gis_cached_raster_layers';
+export const CACHE_KEY_LAYER_CONFIGS = 'gis_layer_configs';
+export const CACHE_KEY_ALIASES = 'gis_field_aliases';
+
+/**
+ * Notify server to invalidate its in-memory RAM cache for specific data
+ */
+export async function notifyServerCacheInvalidation(target: 'raster_layers' | 'layer_configs' | 'field_aliases' | 'communes' | 'all') {
+  try {
+    await fetch('/api/cache/invalidate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target }),
+    });
+  } catch (_) {}
+}
 
 // Auth Functions
 
@@ -392,12 +411,6 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
   let firestoreChunkItemsCount = 0;
 
   try {
-    // Purge known demo items from Firestore
-    const demoIdsToDelete = ['demo_poly_1', 'demo_point_1', 'demo_point_2', 'demo_point_3'];
-    demoIdsToDelete.forEach((dId) => {
-      deleteDoc(doc(db, COLLECTION_NAME, dId)).catch(() => {});
-    });
-
     // 1. Load Layer Chunks (for large GeoJSON files)
     try {
       const chunksSnap = await getDocs(collection(db, CHUNKS_COLLECTION));
@@ -507,17 +520,21 @@ export async function saveFieldAliasDictionaryToFirestore(
   aliasMap: Record<string, string>,
   hiddenMap?: Record<string, boolean>
 ): Promise<boolean> {
+  const resultData = {
+    aliases: aliasMap,
+    hiddenFields: hiddenMap || {},
+  };
   try {
     const res = await fetch('/api/aliases/save', {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({
-        aliases: aliasMap,
-        hiddenFields: hiddenMap || {},
-      }),
+      body: JSON.stringify(resultData),
     });
 
     if (res.ok) {
+      // Làm mới bộ nhớ đệm client IndexedDB và server RAM ngay khi lưu thành công
+      await setCachedData(CACHE_KEY_ALIASES, resultData);
+      await notifyServerCacheInvalidation('field_aliases');
       return true;
     }
     const data = await res.json().catch(() => ({}));
@@ -530,21 +547,47 @@ export async function saveFieldAliasDictionaryToFirestore(
 }
 
 /**
- * Load field alias dictionary and hidden fields map from Firestore
+ * Load field alias dictionary and hidden fields map from Firestore (IndexedDB -> Server Cache -> Firestore fallback)
+ * Bộ nhớ đệm không thời hạn (vĩnh viễn), chỉ làm mới khi có thay đổi từ tab alias field.
  */
-export async function loadFieldAliasDictionaryFromFirestore(): Promise<{
+export async function loadFieldAliasDictionaryFromFirestore(forceRefresh = false): Promise<{
   aliases: Record<string, string>;
   hiddenFields: Record<string, boolean>;
 } | null> {
+  // 1. Kiểm tra bộ nhớ đệm client IndexedDB trước (vĩnh viễn, 0 Firestore read)
+  if (!forceRefresh) {
+    try {
+      const cached = await getCachedData<{ aliases: Record<string, string>; hiddenFields: Record<string, boolean> }>(
+        CACHE_KEY_ALIASES
+      );
+      if (cached) return cached;
+    } catch (_) {}
+  }
+
+  // 2. Thử endpoint cache trên RAM máy chủ (/api/aliases)
+  try {
+    const res = await fetch('/api/aliases');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && (data.aliases || data.hiddenFields)) {
+        await setCachedData(CACHE_KEY_ALIASES, data);
+        return data;
+      }
+    }
+  } catch (_) {}
+
+  // 3. Dự phòng đọc trực tiếp Firestore SDK nếu máy chủ chưa khởi tạo
   try {
     const docRef = doc(db, APP_SETTINGS_COLLECTION, 'field_aliases');
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       const data = docSnap.data();
-      return {
+      const result = {
         aliases: data?.aliases || {},
         hiddenFields: data?.hiddenFields || {},
       };
+      await setCachedData(CACHE_KEY_ALIASES, result);
+      return result;
     }
   } catch (err) {
     console.warn('Lỗi khi tải bảng ánh xạ từ Firestore:', err);
@@ -571,6 +614,9 @@ export async function saveLayerConfigsToFirestore(
     });
 
     if (res.ok) {
+      // Làm mới bộ nhớ đệm client IndexedDB và server RAM ngay khi lưu thành công
+      await setCachedData(CACHE_KEY_LAYER_CONFIGS, layerNamesMap);
+      await notifyServerCacheInvalidation('layer_configs');
       return true;
     }
     const data = await res.json().catch(() => ({}));
@@ -583,15 +629,41 @@ export async function saveLayerConfigsToFirestore(
 }
 
 /**
- * Load custom layer names from Firestore
+ * Load custom layer names from Firestore (IndexedDB -> Server Cache -> Firestore fallback)
+ * Bộ nhớ đệm không thời hạn (vĩnh viễn), chỉ làm mới khi người dùng đổi tên lớp.
  */
-export async function loadLayerConfigsFromFirestore(): Promise<Record<string, string> | null> {
+export async function loadLayerConfigsFromFirestore(forceRefresh = false): Promise<Record<string, string> | null> {
+  // 1. Kiểm tra bộ nhớ đệm client IndexedDB trước (vĩnh viễn, 0 Firestore read)
+  if (!forceRefresh) {
+    try {
+      const cached = await getCachedData<Record<string, string>>(CACHE_KEY_LAYER_CONFIGS);
+      if (cached) return cached;
+    } catch (_) {}
+  }
+
+  // 2. Thử endpoint cache trên RAM máy chủ (/api/layers/configs)
+  try {
+    const res = await fetch('/api/layers/configs');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.layerNames) {
+        await setCachedData(CACHE_KEY_LAYER_CONFIGS, data.layerNames);
+        return data.layerNames;
+      }
+    }
+  } catch (_) {}
+
+  // 3. Dự phòng đọc trực tiếp Firestore SDK
   try {
     const docRef = doc(db, APP_SETTINGS_COLLECTION, 'layer_configs');
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       const data = docSnap.data();
-      return data?.layerNames || null;
+      const layerNames = data?.layerNames || null;
+      if (layerNames) {
+        await setCachedData(CACHE_KEY_LAYER_CONFIGS, layerNames);
+      }
+      return layerNames;
     }
   } catch (err) {
     console.warn('Lỗi khi tải cấu hình tên lớp từ Firestore:', err);
@@ -599,8 +671,74 @@ export async function loadLayerConfigsFromFirestore(): Promise<Record<string, st
   return null;
 }
 
+export const RASTER_LAYERS_CACHE_KEY = 'gis_cached_raster_layers';
 
-export async function loadRasterLayersFromFirestore(): Promise<RasterLayer[]> {
+/**
+ * Retrieve cached raster layers from local storage
+ */
+export function getCachedRasterLayers(): RasterLayer[] {
+  try {
+    const raw = localStorage.getItem(RASTER_LAYERS_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Lỗi đọc cache raster layers từ localStorage:', e);
+  }
+  return [];
+}
+
+/**
+ * Save raster layers to local storage cache
+ */
+export function saveCachedRasterLayers(layers: RasterLayer[]): void {
+  try {
+    localStorage.setItem(RASTER_LAYERS_CACHE_KEY, JSON.stringify(layers));
+  } catch (e) {
+    console.warn('Lỗi lưu cache raster layers vào localStorage:', e);
+  }
+}
+
+/**
+ * Load raster layers with tiered cache:
+ * Tier 1: Client IndexedDB (0 network, 0 read)
+ * Tier 2: Server-side RAM cache proxy (/api/raster-layers, 0 Firestore read)
+ * Tier 3: Direct Firestore SDK read fallback
+ */
+export async function loadRasterLayersFromFirestore(forceRefresh = false): Promise<RasterLayer[]> {
+  const cachedLayers = getCachedRasterLayers();
+
+  // 1. Kiểm tra bộ nhớ đệm client IndexedDB trước (vĩnh viễn, chỉ làm mới khi cập nhật bounding box hoặc forceRefresh)
+  if (!forceRefresh) {
+    try {
+      const idbCached = await getCachedData<RasterLayer[]>(CACHE_KEY_RASTER_LAYERS);
+      if (idbCached && idbCached.length > 0) {
+        return idbCached;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Try server-side in-memory cached endpoint (0 Firestore reads if cached in server RAM)
+  try {
+    const res = await fetch('/api/raster-layers');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.layers)) {
+        if (data.layers.length > 0) {
+          saveCachedRasterLayers(data.layers);
+          await setCachedData(CACHE_KEY_RASTER_LAYERS, data.layers);
+          return data.layers;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Không thể kết nối /api/raster-layers, thử Firestore trực tiếp:', err);
+  }
+
+  // 3. Fallback to direct Firestore SDK
   try {
     const querySnapshot = await getDocs(collection(db, 'raster_layers'));
     const fetchedLayers: RasterLayer[] = [];
@@ -632,14 +770,41 @@ export async function loadRasterLayersFromFirestore(): Promise<RasterLayer[]> {
         bounds: data.bounds || null,
         files: files,
         opacity: data.opacity ?? 1.0,
-        enabled: data.enabled !== false, // Mặc định là true nếu chưa set
+        enabled: data.enabled !== false,
         createdAt: data.createdAt || new Date().toISOString(),
         updatedAt: data.updatedAt,
       });
     });
+
+    if (fetchedLayers.length > 0) {
+      saveCachedRasterLayers(fetchedLayers);
+      await setCachedData(CACHE_KEY_RASTER_LAYERS, fetchedLayers);
+      return fetchedLayers;
+    }
+
+    if (cachedLayers.length > 0) {
+      return cachedLayers;
+    }
+
     return fetchedLayers;
-  } catch (error) {
-    console.error('Error fetching raster layers:', error);
+  } catch (error: any) {
+    const isQuotaError = error?.code === 'resource-exhausted' || 
+                         (error?.message && error.message.toLowerCase().includes('quota limit exceeded'));
+    if (isQuotaError) {
+      console.warn('Firestore đã vượt hạn mức đọc (Quota exceeded). Đang sử dụng bộ nhớ đệm (Cache) cho Raster layers.');
+    } else {
+      console.warn('Không thể kết nối Firestore để tải raster layers, sử dụng cache cục bộ:', error?.message || error);
+    }
+
+    // Try IndexedDB stale cache first, then localStorage
+    try {
+      const idbStale = await getCachedData<RasterLayer[]>(CACHE_KEY_RASTER_LAYERS);
+      if (idbStale && idbStale.length > 0) return idbStale;
+    } catch (_) {}
+
+    if (cachedLayers.length > 0) {
+      return cachedLayers;
+    }
     return [];
   }
 }
@@ -648,6 +813,16 @@ export async function loadRasterLayersFromFirestore(): Promise<RasterLayer[]> {
  * Update enabled state for a raster layer
  */
 export async function updateRasterLayerEnabled(layerId: string, enabled: boolean): Promise<boolean> {
+  // Cập nhật ngay trong cache cục bộ
+  try {
+    const cached = getCachedRasterLayers();
+    if (cached.length > 0) {
+      const updated = cached.map(l => l.id === layerId ? { ...l, enabled } : l);
+      saveCachedRasterLayers(updated);
+      await setCachedData(CACHE_KEY_RASTER_LAYERS, updated);
+    }
+  } catch (_) {}
+
   try {
     const res = await fetch('/api/raster-layers/update-enabled', {
       method: 'POST',
@@ -656,6 +831,8 @@ export async function updateRasterLayerEnabled(layerId: string, enabled: boolean
     });
 
     if (res.ok) {
+      await deleteCachedData(CACHE_KEY_RASTER_LAYERS);
+      await notifyServerCacheInvalidation('raster_layers');
       return true;
     }
     const data = await res.json().catch(() => ({}));
@@ -780,6 +957,11 @@ export async function saveCommuneChunksToFirestore(
       }
     }
 
+    // Invalidate client and server caches, đồng thời nạp dữ liệu mới vào IndexedDB ngay lập tức
+    await deleteCachedData(CACHE_KEY_COMMUNES);
+    await notifyServerCacheInvalidation('communes');
+    await setCachedData(CACHE_KEY_COMMUNES, validFeatures);
+
     onProgress?.('Hoàn tất lưu trữ CSDL Firebase!', 100);
     return { success: true, count: validFeatures.length };
   } catch (err: any) {
@@ -789,11 +971,24 @@ export async function saveCommuneChunksToFirestore(
 }
 
 /**
- * Load all commune features from Firebase Firestore
+ * Load all commune features from Firebase Firestore with tiered caching:
+ * Tier 1: Client IndexedDB (0 network, 0 read, lưu vĩnh viễn không thời hạn)
+ * Tier 2: Server-side RAM cache proxy (/api/communes/chunks, 0 Firestore read)
+ * Tier 3: Direct Firestore SDK read fallback
  */
-export async function loadCommuneChunksFromFirestore(): Promise<any[]> {
+export async function loadCommuneChunksFromFirestore(forceRefresh = false): Promise<any[]> {
+  // 1. Kiểm tra IndexedDB cache trước (vĩnh viễn không thời hạn, chỉ làm mới khi import Cấp Xã mới)
+  if (!forceRefresh) {
+    try {
+      const cached = await getCachedData<any[]>(CACHE_KEY_COMMUNES);
+      if (Array.isArray(cached) && cached.length > 0) {
+        return cached;
+      }
+    } catch (_) {}
+  }
+
   try {
-    // 1. Try server endpoint first (fastest, utilizes HTTP browser cache & ETag)
+    // 2. Try server endpoint first (fastest, utilizes HTTP browser cache & server RAM)
     try {
       const res = await fetch('/api/communes/chunks');
       if (res.ok) {
@@ -808,12 +1003,15 @@ export async function loadCommuneChunksFromFirestore(): Promise<any[]> {
               } catch (_) {}
             }
           }
-          if (allFeatures.length > 0) return allFeatures;
+          if (allFeatures.length > 0) {
+            await setCachedData(CACHE_KEY_COMMUNES, allFeatures);
+            return allFeatures;
+          }
         }
       }
     } catch (_) {}
 
-    // 2. Direct Firestore SDK read (works for any public reader)
+    // 3. Direct Firestore SDK read (works for any public reader fallback)
     const snap = await getDocs(collection(db, 'commune_chunks'));
     const allFeatures: any[] = [];
     const docs = snap.docs.sort((a, b) => (a.data().chunkIndex || 0) - (b.data().chunkIndex || 0));
@@ -828,9 +1026,17 @@ export async function loadCommuneChunksFromFirestore(): Promise<any[]> {
       }
     }
 
+    if (allFeatures.length > 0) {
+      await setCachedData(CACHE_KEY_COMMUNES, allFeatures);
+    }
     return allFeatures;
   } catch (err) {
     console.warn('Lỗi tải dữ liệu commune_chunks từ Firebase:', err);
+    // Return stale IndexedDB cache if available
+    try {
+      const stale = await getCachedData<any[]>(CACHE_KEY_COMMUNES);
+      if (Array.isArray(stale) && stale.length > 0) return stale;
+    } catch (_) {}
     return [];
   }
 }

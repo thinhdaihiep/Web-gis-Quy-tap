@@ -23,6 +23,14 @@ import {
 import { parseGeoTiffMetadata } from '../utils/geotiffLoader';
 import { fetchGitHubReleaseAssets } from '../utils/githubRelease';
 import { removeCachedRasters } from '../utils/rasterCache';
+import {
+  getCachedRasterLayers,
+  saveCachedRasterLayers,
+  loadRasterLayersFromFirestore,
+  CACHE_KEY_RASTER_LAYERS,
+  notifyServerCacheInvalidation,
+} from '../firebaseService';
+import { setCachedData } from '../utils/indexedDbCache';
 
 // Official GitHub Octocat Icon
 const GithubCat: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
@@ -78,38 +86,28 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
     fetchLayers();
   }, []);
 
-  const fetchLayers = async () => {
+  const fetchLayers = async (forceRefresh = false) => {
     setIsLoading(true);
-    try {
-      const snap = await getDocs(collection(db, 'raster_layers'));
-      const list: RasterLayer[] = [];
-      snap.forEach((d) => {
-        const data = d.data();
-        const files: RasterFileItem[] = Array.isArray(data.files) ? data.files : [];
-        list.push({
-          id: d.id,
-          name: data.name || 'Bản đồ Raster',
-          type: data.type || 'COG',
-          source: data.source || (data.githubReleaseUrl ? 'github' : data.storagePath ? 'firebase' : 'url'),
-          files,
-          bounds: data.bounds || null,
-          opacity: data.opacity ?? 1.0,
-          enabled: data.enabled !== false,
-          githubReleaseUrl: data.githubReleaseUrl || '',
-          storagePath: data.storagePath || '',
-          createdAt: data.createdAt || new Date().toISOString(),
-          updatedAt: data.updatedAt,
-        });
-      });
+    // Tải trước từ cache cục bộ để hiển thị ngay lập tức
+    const cached = getCachedRasterLayers();
+    if (cached.length > 0 && !forceRefresh) {
+      setLayers(cached);
+      if (onLayersChange) {
+        onLayersChange(cached);
+      }
+    }
 
-      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    try {
+      const list = await loadRasterLayersFromFirestore(forceRefresh);
       setLayers(list);
       if (onLayersChange) {
         onLayersChange(list);
       }
     } catch (err: any) {
       console.error('Error fetching raster layers:', err);
-      setErrorMessage('Không thể tải danh sách lớp raster.');
+      if (cached.length === 0) {
+        setErrorMessage('Không thể tải danh sách lớp raster.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -321,6 +319,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       const updated = [newLayer, ...layers];
       setLayers(updated);
+      saveCachedRasterLayers(updated);
+      await setCachedData(CACHE_KEY_RASTER_LAYERS, updated);
+      await notifyServerCacheInvalidation('raster_layers');
       if (onLayersChange) onLayersChange(updated);
 
       setLayerName('');
@@ -391,6 +392,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       );
 
       setLayers(updated);
+      saveCachedRasterLayers(updated);
+      await setCachedData(CACHE_KEY_RASTER_LAYERS, updated);
+      await notifyServerCacheInvalidation('raster_layers');
       if (onLayersChange) onLayersChange(updated);
       setSuccessMessage(`Đã quét lại lớp "${layer.name}" (${updatedFiles.length} tệp)`);
     } catch (err: any) {
@@ -412,6 +416,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       const updated = layers.map((l) => (l.id === layer.id ? { ...l, enabled: nextState } : l));
       setLayers(updated);
+      saveCachedRasterLayers(updated);
+      await setCachedData(CACHE_KEY_RASTER_LAYERS, updated);
+      await notifyServerCacheInvalidation('raster_layers');
       if (onLayersChange) onLayersChange(updated);
     } catch (err: any) {
       console.error('Error toggling raster layer visibility:', err);
@@ -435,6 +442,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       const updated = layers.map((l) => (l.id === layerId ? { ...l, name: trimmed } : l));
       setLayers(updated);
+      saveCachedRasterLayers(updated);
+      await setCachedData(CACHE_KEY_RASTER_LAYERS, updated);
+      await notifyServerCacheInvalidation('raster_layers');
       if (onLayersChange) onLayersChange(updated);
       setEditingLayerId(null);
     } catch (err: any) {
@@ -456,6 +466,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       const updated = layers.filter((l) => l.id !== layer.id);
       setLayers(updated);
+      saveCachedRasterLayers(updated);
+      await setCachedData(CACHE_KEY_RASTER_LAYERS, updated);
+      await notifyServerCacheInvalidation('raster_layers');
       if (onLayersChange) onLayersChange(updated);
       setSuccessMessage(`Đã xóa lớp "${layer.name}"`);
     } catch (err: any) {
@@ -570,6 +583,20 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
           </button>
         </div>
       </form>
+
+      {/* Layers List Header */}
+      <div className="flex items-center justify-between text-xs text-slate-500 px-1 pt-0.5">
+        <span className="font-medium text-slate-700">Danh sách ({layers.length})</span>
+        <button
+          type="button"
+          onClick={() => fetchLayers(true)}
+          disabled={isLoading}
+          className="p-1 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-colors disabled:opacity-50"
+          title="Làm mới"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-blue-600' : ''}`} />
+        </button>
+      </div>
 
       {/* Layers List */}
       <div className="space-y-2">

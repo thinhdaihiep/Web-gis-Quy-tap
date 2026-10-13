@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Bell, Trash2, CheckCircle2 } from 'lucide-react';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Notification } from '../notificationService';
 
@@ -15,14 +15,21 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({ isOpen, on
   useEffect(() => {
     if (!isOpen) return;
 
-    const q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Notification & { id: string }));
-      setNotifications(items);
-    });
+    const q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const items = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        } as Notification & { id: string }));
+        setNotifications(items);
+      },
+      (error) => {
+        // Xử lý êm luồng stream idle timeout hoặc cạn quota
+        console.warn('Firestore notification stream:', error?.message || error);
+      }
+    );
 
     return () => unsubscribe();
   }, [isOpen]);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   GeoJsonFeatureItem,
   LayerConfig,
@@ -8,6 +8,7 @@ import {
 import { Plus, X, Check, Layers, AlertCircle } from 'lucide-react';
 import { getSchemaForLayer, FieldDefinition } from '../FieldSchema';
 import { generateRegularPolygonCoordinates } from '../utils/geoMeasure';
+import { findCommunesAtLatLng } from '../utils/communeLookup';
 
 interface AddFeatureModalProps {
   isOpen: boolean;
@@ -32,6 +33,58 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
   const [objectId, setObjectId] = useState<string>('1');
   const [formValues, setFormValues] = useState<Record<string, any>>({});
   const [errorMessage, setErrorMessage] = useState<string>('');
+
+  const adminLocationRef = useRef<{ DiaDanh3C: string; Xa: string; Tinh: string }>({
+    DiaDanh3C: '',
+    Xa: '',
+    Tinh: '',
+  });
+
+  // Query administrative location (DiaDanh3C, Xa, Tinh) whenever markerLocation changes or modal opens
+  useEffect(() => {
+    if (!isOpen) {
+      adminLocationRef.current = { DiaDanh3C: '', Xa: '', Tinh: '' };
+      return;
+    }
+
+    if (!markerLocation) return;
+
+    let isCancelled = false;
+    findCommunesAtLatLng(markerLocation.lat, markerLocation.lng)
+      .then((res) => {
+        if (isCancelled) return;
+        const diaDanh3C = res.oldCommune?.formattedText || '';
+        const xa = res.newCommune?.xaMoi || '';
+        const tinh = res.newCommune?.tinhMoi || '';
+
+        adminLocationRef.current = { DiaDanh3C: diaDanh3C, Xa: xa, Tinh: tinh };
+
+        setFormValues((prev) => {
+          const updated = { ...prev };
+          let changed = false;
+          if (diaDanh3C && (!updated['DiaDanh3C'] || updated['DiaDanh3C'] === '')) {
+            updated['DiaDanh3C'] = diaDanh3C;
+            changed = true;
+          }
+          if (xa && (!updated['Xa'] || updated['Xa'] === '')) {
+            updated['Xa'] = xa;
+            changed = true;
+          }
+          if (tinh && (!updated['Tinh'] || updated['Tinh'] === '')) {
+            updated['Tinh'] = tinh;
+            changed = true;
+          }
+          return changed ? updated : prev;
+        });
+      })
+      .catch((err) => {
+        console.warn('Tra cứu địa danh cho feature thất bại:', err);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isOpen, markerLocation]);
 
   // Find next sequential OBJECTID for a layer
   const getNextObjectIdForLayer = (layerId: string) => {
@@ -69,6 +122,12 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
           initialValues[field.name] = 1;
         } else if (field.name === 'ToaDo' && markerLocation) {
           initialValues[field.name] = `${markerLocation.lat.toFixed(6)}, ${markerLocation.lng.toFixed(6)}`;
+        } else if (field.name === 'DiaDanh3C' && adminLocationRef.current.DiaDanh3C) {
+          initialValues[field.name] = adminLocationRef.current.DiaDanh3C;
+        } else if (field.name === 'Xa' && adminLocationRef.current.Xa) {
+          initialValues[field.name] = adminLocationRef.current.Xa;
+        } else if (field.name === 'Tinh' && adminLocationRef.current.Tinh) {
+          initialValues[field.name] = adminLocationRef.current.Tinh;
         } else if (field.name === 'CapNhat') {
           initialValues[field.name] = new Date().toISOString().split('T')[0];
         } else if (field.name === 'NguoiSua') {
@@ -92,16 +151,22 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
     const updatedValues: Record<string, any> = { ...formValues };
     schema.forEach((field) => {
       if (field.name === 'OBJECTID') return;
-      if (!(field.name in updatedValues) || updatedValues[field.name] === undefined) {
+      if (!(field.name in updatedValues) || updatedValues[field.name] === undefined || updatedValues[field.name] === '') {
         if (field.name === 'PhanLoai') {
-          updatedValues[field.name] = 1;
+          if (updatedValues[field.name] === undefined) updatedValues[field.name] = 1;
         } else if (field.name === 'ToaDo' && markerLocation) {
-          updatedValues[field.name] = `${markerLocation.lat.toFixed(6)}, ${markerLocation.lng.toFixed(6)}`;
+          if (!updatedValues[field.name]) updatedValues[field.name] = `${markerLocation.lat.toFixed(6)}, ${markerLocation.lng.toFixed(6)}`;
+        } else if (field.name === 'DiaDanh3C' && adminLocationRef.current.DiaDanh3C) {
+          if (!updatedValues[field.name]) updatedValues[field.name] = adminLocationRef.current.DiaDanh3C;
+        } else if (field.name === 'Xa' && adminLocationRef.current.Xa) {
+          if (!updatedValues[field.name]) updatedValues[field.name] = adminLocationRef.current.Xa;
+        } else if (field.name === 'Tinh' && adminLocationRef.current.Tinh) {
+          if (!updatedValues[field.name]) updatedValues[field.name] = adminLocationRef.current.Tinh;
         } else if (field.name === 'CapNhat') {
-          updatedValues[field.name] = new Date().toISOString().split('T')[0];
+          if (!updatedValues[field.name]) updatedValues[field.name] = new Date().toISOString().split('T')[0];
         } else if (field.name === 'NguoiSua') {
-          updatedValues[field.name] = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
-        } else {
+          if (!updatedValues[field.name]) updatedValues[field.name] = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+        } else if (!(field.name in updatedValues)) {
           updatedValues[field.name] = '';
         }
       }
@@ -149,6 +214,15 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
 
     if (markerLocation && !finalProps['ToaDo']) {
       finalProps['ToaDo'] = `${markerLocation.lat.toFixed(6)}, ${markerLocation.lng.toFixed(6)}`;
+    }
+    if (adminLocationRef.current.DiaDanh3C && !finalProps['DiaDanh3C']) {
+      finalProps['DiaDanh3C'] = adminLocationRef.current.DiaDanh3C;
+    }
+    if (adminLocationRef.current.Xa && !finalProps['Xa']) {
+      finalProps['Xa'] = adminLocationRef.current.Xa;
+    }
+    if (adminLocationRef.current.Tinh && !finalProps['Tinh']) {
+      finalProps['Tinh'] = adminLocationRef.current.Tinh;
     }
 
     let geometryType: 'Polygon' | 'Point' = 'Point';

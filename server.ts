@@ -1005,7 +1005,7 @@ async function startServer() {
         if (clientEtag && clientEtag === cachedCommuneChunksResponse.etag) {
           return res.status(304).end();
         }
-        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        res.setHeader('Cache-Control', 'public, no-cache');
         res.setHeader('ETag', cachedCommuneChunksResponse.etag);
         return res.json(cachedCommuneChunksResponse.payload);
       }
@@ -1036,11 +1036,193 @@ async function startServer() {
         return res.status(304).end();
       }
 
-      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      res.setHeader('Cache-Control', 'public, no-cache');
       res.setHeader('ETag', etag);
       return res.json(payload);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Server in-memory caches for frequently read collections
+  let cachedRasterLayersResponse: {
+    payload: { layers: any[] };
+    etag: string;
+    updatedAt: number;
+  } | null = null;
+
+  let cachedLayerConfigsResponse: {
+    payload: { layerNames: Record<string, string> | null };
+    etag: string;
+    updatedAt: number;
+  } | null = null;
+
+  let cachedAliasesResponse: {
+    payload: { aliases: Record<string, string>; hiddenFields: Record<string, boolean> };
+    etag: string;
+    updatedAt: number;
+  } | null = null;
+
+  // GET cached raster layers (Read-through server RAM cache with ETag & 304 support)
+  app.get('/api/raster-layers', async (req, res) => {
+    try {
+      if (cachedRasterLayersResponse) {
+        const clientEtag = req.headers['if-none-match'];
+        if (clientEtag && clientEtag === cachedRasterLayersResponse.etag) {
+          return res.status(304).end();
+        }
+        res.setHeader('Cache-Control', 'public, no-cache');
+        res.setHeader('ETag', cachedRasterLayersResponse.etag);
+        return res.json(cachedRasterLayersResponse.payload);
+      }
+
+      if (!serverDb) return res.json({ layers: [] });
+      const snap = await getDocs(collection(serverDb, 'raster_layers'));
+      const layers: any[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        let files = Array.isArray(data.files) ? data.files : [];
+        if (files.length === 0 && data.url) {
+          files = [{
+            id: `${d.id}_file_0`,
+            fileName: data.name || 'Raster File',
+            url: data.url,
+            format: data.format || 'COG',
+            minZoom: data.minZoom || 12,
+            maxZoom: data.maxZoom || 18,
+            bounds: data.bounds || null,
+            uploadedAt: data.createdAt || new Date().toISOString(),
+          }];
+        }
+        layers.push({
+          id: d.id,
+          name: data.name || 'Bản đồ nền',
+          type: data.type || 'COG',
+          source: data.source || (data.githubReleaseUrl ? 'github' : data.storagePath ? 'firebase' : 'url'),
+          storagePath: data.storagePath,
+          githubReleaseUrl: data.githubReleaseUrl,
+          bounds: data.bounds || null,
+          files,
+          opacity: data.opacity ?? 1.0,
+          enabled: data.enabled !== false,
+          createdAt: data.createdAt || new Date().toISOString(),
+          updatedAt: data.updatedAt,
+        });
+      });
+
+      layers.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const payload = { layers };
+      const etag = `W/"raster-${layers.length}-${crypto.createHash('md5').update(JSON.stringify(layers)).digest('hex').slice(0, 16)}"`;
+      cachedRasterLayersResponse = {
+        payload,
+        etag,
+        updatedAt: Date.now(),
+      };
+
+      const clientEtag = req.headers['if-none-match'];
+      if (clientEtag && clientEtag === etag) {
+        return res.status(304).end();
+      }
+
+      res.setHeader('Cache-Control', 'public, no-cache');
+      res.setHeader('ETag', etag);
+      return res.json(payload);
+    } catch (e: any) {
+      console.warn('[API /api/raster-layers] Error:', e);
+      return res.status(500).json({ error: e.message || 'Failed to load raster layers' });
+    }
+  });
+
+  // GET cached layer configurations
+  app.get('/api/layers/configs', async (req, res) => {
+    try {
+      if (cachedLayerConfigsResponse) {
+        const clientEtag = req.headers['if-none-match'];
+        if (clientEtag && clientEtag === cachedLayerConfigsResponse.etag) {
+          return res.status(304).end();
+        }
+        res.setHeader('Cache-Control', 'public, no-cache');
+        res.setHeader('ETag', cachedLayerConfigsResponse.etag);
+        return res.json(cachedLayerConfigsResponse.payload);
+      }
+
+      if (!serverDb) return res.json({ layerNames: null });
+      const docSnap = await getDoc(doc(serverDb, 'app_settings', 'layer_configs'));
+      const layerNames = docSnap.exists() ? (docSnap.data()?.layerNames || null) : null;
+      const payload = { layerNames };
+      const etag = `W/"layer-configs-${crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex').slice(0, 16)}"`;
+      cachedLayerConfigsResponse = { payload, etag, updatedAt: Date.now() };
+
+      const clientEtag = req.headers['if-none-match'];
+      if (clientEtag && clientEtag === etag) {
+        return res.status(304).end();
+      }
+
+      res.setHeader('Cache-Control', 'public, no-cache');
+      res.setHeader('ETag', etag);
+      return res.json(payload);
+    } catch (e: any) {
+      console.warn('[API /api/layers/configs] Error:', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET cached field aliases
+  app.get('/api/aliases', async (req, res) => {
+    try {
+      if (cachedAliasesResponse) {
+        const clientEtag = req.headers['if-none-match'];
+        if (clientEtag && clientEtag === cachedAliasesResponse.etag) {
+          return res.status(304).end();
+        }
+        res.setHeader('Cache-Control', 'public, no-cache');
+        res.setHeader('ETag', cachedAliasesResponse.etag);
+        return res.json(cachedAliasesResponse.payload);
+      }
+
+      if (!serverDb) return res.json({ aliases: {}, hiddenFields: {} });
+      const docSnap = await getDoc(doc(serverDb, 'app_settings', 'field_aliases'));
+      const data = docSnap.exists() ? docSnap.data() : null;
+      const payload = {
+        aliases: data?.aliases || {},
+        hiddenFields: data?.hiddenFields || {},
+      };
+      const etag = `W/"aliases-${crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex').slice(0, 16)}"`;
+      cachedAliasesResponse = { payload, etag, updatedAt: Date.now() };
+
+      const clientEtag = req.headers['if-none-match'];
+      if (clientEtag && clientEtag === etag) {
+        return res.status(304).end();
+      }
+
+      res.setHeader('Cache-Control', 'public, no-cache');
+      res.setHeader('ETag', etag);
+      return res.json(payload);
+    } catch (e: any) {
+      console.warn('[API /api/aliases] Error:', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Invalidate server-side memory caches
+  app.post('/api/cache/invalidate', async (req, res) => {
+    try {
+      const { target } = req.body || {};
+      if (!target || target === 'all' || target === 'raster_layers') {
+        cachedRasterLayersResponse = null;
+      }
+      if (!target || target === 'all' || target === 'layer_configs') {
+        cachedLayerConfigsResponse = null;
+      }
+      if (!target || target === 'all' || target === 'field_aliases') {
+        cachedAliasesResponse = null;
+      }
+      if (!target || target === 'all' || target === 'communes') {
+        cachedCommuneChunksResponse = null;
+      }
+      return res.json({ success: true, target: target || 'all' });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
     }
   });
 
@@ -1059,6 +1241,7 @@ async function startServer() {
         layerNames,
         updatedAt: new Date().toISOString(),
       });
+      cachedLayerConfigsResponse = null;
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/layers/save] Error:', err);
@@ -1078,6 +1261,7 @@ async function startServer() {
         hiddenFields: hiddenFields || {},
         updatedAt: new Date().toISOString(),
       });
+      cachedAliasesResponse = null;
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/aliases/save] Error:', err);
@@ -1100,6 +1284,7 @@ async function startServer() {
         enabled: enabled !== false,
         updatedAt: new Date().toISOString(),
       });
+      cachedRasterLayersResponse = null;
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/raster-layers/update-enabled] Error:', err);

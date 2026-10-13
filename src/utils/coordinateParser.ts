@@ -56,10 +56,10 @@ export interface SmartCoordinateResult {
 
 /**
  * Format WGS84 coordinates to minimal clean display string:
- * long lat (6 decimal places)
+ * lat, lng (6 decimal places, Google Maps standard)
  */
 export function formatWGS84Display(lat: number, lng: number): string {
-  return `${lng.toFixed(6)}, ${lat.toFixed(6)}`;
+  return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
 }
 
 /**

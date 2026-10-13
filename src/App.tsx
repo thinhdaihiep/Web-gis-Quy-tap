@@ -1888,7 +1888,7 @@ export default function App() {
           onClose={() => setIsAddFeatureModalOpen(false)}
           layers={layers}
           mapFeatures={mapFeatures}
-          markerLocation={cursorLocation}
+          markerLocation={cursorLocation || userLocation}
           currentUser={user}
           onSave={(newFeature) => {
             handleSaveFeature(newFeature);

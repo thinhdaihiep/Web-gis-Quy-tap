@@ -441,7 +441,7 @@ export const Footer: React.FC<FooterProps> = ({
                 >
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                    WGS-84 (Long/Lat)
+                    WGS-84 (Lat/Long)
                   </span>
                   {activeCRS === '4326' && <Check className="w-3 h-3 text-emerald-400" />}
                 </button>
