@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import L from 'leaflet';
 import { Header } from './components/Header';
 import { SearchPane } from './components/SearchPane';
@@ -12,10 +12,13 @@ import { AttributePane } from './components/AttributePane';
 import { Footer } from './components/Footer';
 import { DatabaseManagementModal } from './components/DatabaseManagementModal';
 import { NotificationModal } from './components/NotificationModal';
+import { FeedbackModal } from './components/FeedbackModal';
 import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
 import { PdfViewerModal } from './components/PdfViewerModal';
 import { WebsiteInfoModal } from './components/WebsiteInfoModal';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db } from './firebase';
 
 import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode, RasterLayer, RasterLoadingStatus, LatLngBoundsBox, normalizeBoundsBox } from './types';
 import {
@@ -33,6 +36,7 @@ import {
   getStoredUser
 } from './firebaseService';
 import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
+import { OsmItem } from './utils/osmService';
 import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, CheckCircle2, Layers, Loader2 } from 'lucide-react';
 
 function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: any } {
@@ -163,6 +167,42 @@ export default function App() {
   const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
   const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>('import');
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState<number>(0);
+  const [feedbackModalState, setFeedbackModalState] = useState<{
+    isOpen: boolean;
+    objectId: string | number | null;
+    layerId: string | null;
+    featureName: string;
+    layerName: string;
+  }>({
+    isOpen: false,
+    objectId: null,
+    layerId: null,
+    featureName: '',
+    layerName: '',
+  });
+
+  // Lắng nghe realtime số thông báo chưa đọc cho Admin và Editor
+  useEffect(() => {
+    if (effectiveRole !== 'admin' && effectiveRole !== 'editor') {
+      setUnreadNotificationCount(0);
+      return;
+    }
+
+    const q = query(collection(db, 'notifications'), where('read', '==', false));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setUnreadNotificationCount(snapshot.size);
+      },
+      (err) => {
+        console.warn('Firestore unread notifications error:', err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [effectiveRole]);
+
   const [isWebsiteInfoModalOpen, setIsWebsiteInfoModalOpen] = useState<boolean>(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [aliasVersion, setAliasVersion] = useState<number>(0);
@@ -438,6 +478,254 @@ export default function App() {
       easeLinearity: 0.25,
     });
   };
+
+  const handleOpenFeedbackModal = (
+    objectId: string | number,
+    layerId: string,
+    featureName: string,
+    layerName: string
+  ) => {
+    setFeedbackModalState({
+      isOpen: true,
+      objectId,
+      layerId,
+      featureName,
+      layerName,
+    });
+  };
+
+  const handleSelectNotification = (notification: any) => {
+    setIsNotificationModalOpen(false);
+
+    const { objectId, layerId } = notification;
+    if (objectId === undefined || objectId === null) return;
+
+    const strTargetObjId = String(objectId).toLowerCase().trim();
+    const targetFeat = mapFeatures.find((f) => {
+      if (layerId && f.layerId !== layerId) return false;
+      const fObjId = extractObjectId(f);
+      if (fObjId && String(fObjId).toLowerCase().trim() === strTargetObjId) {
+        return true;
+      }
+      const fId = f.id !== undefined && f.id !== null ? String(f.id).toLowerCase().trim() : '';
+      const fCode = f.code !== undefined && f.code !== null ? String(f.code).toLowerCase().trim() : '';
+      return fId === strTargetObjId || fCode === strTargetObjId;
+    });
+
+    const featureProps = targetFeat?.properties || {};
+    const featureTitle =
+      featureProps['Ten'] ||
+      featureProps['ten'] ||
+      featureProps['TEN'] ||
+      featureProps['Name'] ||
+      featureProps['name'] ||
+      targetFeat?.name ||
+      'Đối tượng GIS';
+
+    const effLayer = layers.find((l) => l.id === (targetFeat?.layerId || layerId));
+    const layerTitle = effLayer?.name || 'Lớp bản đồ';
+
+    // 1. Pan/flyTo đối tượng và kiểm tra zoom >= 11
+    if (targetFeat && mapInstance) {
+      let rawCoords = targetFeat.coordinates;
+      if (!rawCoords && (targetFeat as any).geometry?.coordinates) {
+        rawCoords = (targetFeat as any).geometry.coordinates;
+      }
+      if (typeof rawCoords === 'string') {
+        try {
+          rawCoords = JSON.parse(rawCoords);
+        } catch (_) {}
+      }
+
+      const points: [number, number][] = [];
+      const collectCoords = (arr: any) => {
+        if (
+          Array.isArray(arr) &&
+          arr.length >= 2 &&
+          typeof arr[0] === 'number' &&
+          !isNaN(arr[0]) &&
+          typeof arr[1] === 'number' &&
+          !isNaN(arr[1])
+        ) {
+          const a = arr[0];
+          const b = arr[1];
+          if (Math.abs(a) > 90 && Math.abs(b) <= 90) {
+            points.push([b, a]);
+          } else if (Math.abs(b) > 90 && Math.abs(a) <= 90) {
+            points.push([a, b]);
+          } else {
+            points.push([b, a]);
+          }
+        } else if (Array.isArray(arr)) {
+          arr.forEach(collectCoords);
+        } else if (arr && typeof arr === 'object') {
+          const lat = arr.lat ?? arr.latitude;
+          const lng = arr.lng ?? arr.longitude;
+          if (typeof lat === 'number' && !isNaN(lat) && typeof lng === 'number' && !isNaN(lng)) {
+            points.push([lat, lng]);
+          }
+        }
+      };
+
+      collectCoords(rawCoords);
+
+      if (points.length === 0 && targetFeat.properties) {
+        const p = targetFeat.properties;
+        const lat = p.lat ?? p.latitude ?? p.ViDo ?? p.vi_do ?? p.y;
+        const lng = p.lng ?? p.longitude ?? p.KinhDo ?? p.kinh_do ?? p.x;
+        if (typeof lat === 'number' && !isNaN(lat) && typeof lng === 'number' && !isNaN(lng)) {
+          points.push([lat, lng]);
+        } else if (
+          typeof lat === 'string' &&
+          typeof lng === 'string' &&
+          !isNaN(Number(lat)) &&
+          !isNaN(Number(lng))
+        ) {
+          points.push([Number(lat), Number(lng)]);
+        }
+      }
+
+      if (points.length > 0) {
+        const bounds = L.latLngBounds(points);
+        const center = bounds.getCenter();
+
+        const currentZoom = mapInstance.getZoom();
+        const targetZoom = currentZoom < 11 ? 11 : currentZoom;
+
+        try {
+          (mapInstance as any).stop?.();
+          mapInstance.closePopup();
+        } catch (_) {}
+
+        setCursorLocation({ lat: center.lat, lng: center.lng });
+        setTargetMarkerLocation({ lat: center.lat, lng: center.lng, timestamp: Date.now() });
+
+        mapInstance.flyTo(center, targetZoom, {
+          duration: 0.8,
+          easeLinearity: 0.25,
+        });
+      }
+    }
+
+    // 2. Mở cửa sổ phản ánh của đối tượng đó
+    setFeedbackModalState({
+      isOpen: true,
+      objectId,
+      layerId: targetFeat?.layerId || layerId || 'layer1_tim_kiem',
+      featureName: featureTitle,
+      layerName: layerTitle,
+    });
+  };
+
+  // OpenStreetMap Temporary Marker LayerGroup & State for AddFeature from OSM
+  const tempOsmLayerGroupRef = useRef<L.LayerGroup | null>(null);
+  const [addFeatureInitialData, setAddFeatureInitialData] = useState<{
+    name?: string;
+    location?: { lat: number; lng: number };
+    layerId?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!mapInstance) return;
+    if (!tempOsmLayerGroupRef.current) {
+      tempOsmLayerGroupRef.current = L.layerGroup().addTo(mapInstance);
+    } else {
+      tempOsmLayerGroupRef.current.addTo(mapInstance);
+    }
+    return () => {
+      tempOsmLayerGroupRef.current?.clearLayers();
+    };
+  }, [mapInstance]);
+
+  const handleClearOsmMarker = useCallback(() => {
+    if (tempOsmLayerGroupRef.current) {
+      tempOsmLayerGroupRef.current.clearLayers();
+    }
+  }, []);
+
+  const handleLocateOsmFeature = useCallback(
+    (item: OsmItem) => {
+      if (!mapInstance) return;
+
+      // Xóa sạch marker cũ trước
+      if (tempOsmLayerGroupRef.current) {
+        tempOsmLayerGroupRef.current.clearLayers();
+      }
+
+      const lat = item.lat;
+      const lng = item.lon;
+
+      // Bay bản đồ tới vị trí (zoom tối thiểu 14)
+      const currentZoom = mapInstance.getZoom();
+      const targetZoom = currentZoom < 14 ? 14 : currentZoom;
+      mapInstance.flyTo([lat, lng], targetZoom, {
+        duration: 0.8,
+        easeLinearity: 0.25,
+      });
+
+      // Ghim marker nhấp nháy tạm
+      const pulsingIcon = L.divIcon({
+        className: 'osm-temp-marker-pulse',
+        html: `
+          <div style="position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; width: 36px; height: 36px; border-radius: 50%; background: rgba(14, 165, 233, 0.45); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="width: 22px; height: 22px; border-radius: 50%; background: #0284c7; border: 3px solid #ffffff; box-shadow: 0 4px 10px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center;">
+              <div style="width: 6px; height: 6px; border-radius: 50%; background: #ffffff;"></div>
+            </div>
+          </div>
+        `,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+      });
+
+      const marker = L.marker([lat, lng], { icon: pulsingIcon });
+      const eleHtml = item.ele ? `<span style="color: #f59e0b; margin-left: 4px;">(${item.ele}m)</span>` : '';
+      const popupHtml = `
+        <div style="min-width: 170px; padding: 2px;">
+          <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 3px;">
+            ${item.name} ${eleHtml}
+          </div>
+          <div style="font-size: 11px; color: #0284c7; font-weight: 600; margin-bottom: 3px;">
+            ${item.kindLabel}
+          </div>
+          <div style="font-size: 10px; color: #64748b; font-family: monospace;">
+            ${lat.toFixed(6)}, ${lng.toFixed(6)}
+          </div>
+        </div>
+      `;
+      marker.bindPopup(popupHtml, { offset: [0, -10] });
+
+      if (tempOsmLayerGroupRef.current) {
+        marker.addTo(tempOsmLayerGroupRef.current);
+      }
+
+      setTimeout(() => {
+        marker.openPopup();
+      }, 400);
+    },
+    [mapInstance]
+  );
+
+  const handleAddFeatureFromOsm = useCallback(
+    (item: OsmItem) => {
+      // Xác định lớp GIS gợi ý theo nhóm OSM
+      let suggestedLayerId = 'layer1_tim_kiem';
+      if (item.group === 'di_tich') {
+        suggestedLayerId = 'layer4_nghia_trang';
+      } else if (item.group === 'song_nui') {
+        suggestedLayerId = 'layer2_tran_danh';
+      }
+
+      setAddFeatureInitialData({
+        name: item.name,
+        location: { lat: item.lat, lng: item.lon },
+        layerId: suggestedLayerId,
+      });
+
+      setIsAddFeatureModalOpen(true);
+    },
+    []
+  );
 
   // App initial loading splash state
   const [isDbLoaded, setIsDbLoaded] = useState<boolean>(false);
@@ -1503,6 +1791,7 @@ export default function App() {
         onOpenNotificationModal={() => setIsNotificationModalOpen(true)}
         onOpenWebsiteInfoModal={() => setIsWebsiteInfoModalOpen(true)}
         isMobile={isMobile}
+        unreadNotificationCount={unreadNotificationCount}
       />
 
       {/* Main App Body */}
@@ -1536,22 +1825,29 @@ export default function App() {
         )}
 
         {/* Left Sidebar: Spatial & Attribute Search Pane */}
-        {isSearchPaneOpen && (
-          <div className="absolute lg:relative inset-y-0 left-0 z-[2000] lg:z-10 bg-slate-900 h-full shadow-2xl lg:shadow-none transition-all">
-            <SearchPane
-              isOpen={isSearchPaneOpen}
-              onClose={() => {
-                setIsSearchPaneOpen(false);
-                setTimeout(() => mapInstance?.invalidateSize(), 200);
-              }}
-              layers={layers}
-              features={mapFeatures}
-              selectedFeatureId={selectedFeature ? getItemUniqueKey(selectedFeature) : null}
-              onSingleClickFeature={handleJumpToFeature}
-              onDoubleClickFeature={handleJumpToFeature}
-            />
-          </div>
-        )}
+        <div
+          className={`absolute lg:relative inset-y-0 left-0 z-[2000] lg:z-10 bg-slate-900 h-full shadow-2xl lg:shadow-none transition-all ${
+            isSearchPaneOpen ? 'flex' : 'hidden'
+          }`}
+        >
+          <SearchPane
+            isOpen={isSearchPaneOpen}
+            onClose={() => {
+              setIsSearchPaneOpen(false);
+              setTimeout(() => mapInstance?.invalidateSize(), 200);
+            }}
+            layers={layers}
+            features={mapFeatures}
+            selectedFeatureId={selectedFeature ? getItemUniqueKey(selectedFeature) : null}
+            onSingleClickFeature={handleJumpToFeature}
+            onDoubleClickFeature={handleJumpToFeature}
+            mapInstance={mapInstance}
+            currentRole={effectiveRole}
+            onLocateOsmFeature={handleLocateOsmFeature}
+            onAddFeatureFromOsm={handleAddFeatureFromOsm}
+            onClearOsmMarker={handleClearOsmMarker}
+          />
+        </div>
 
         {/* Center: Leaflet Map & Overlays */}
         <section className="flex-1 relative bg-slate-200 overflow-hidden flex flex-col">
@@ -1626,6 +1922,7 @@ export default function App() {
             onOpenPdfViewer={(url, title) => {
               setPdfViewerState({ isOpen: true, url, title: title || 'Hồ sơ trận đánh' });
             }}
+            onOpenFeedbackModal={handleOpenFeedbackModal}
           />
 
           {/* Map Overlay Controls (Top Right 3 BaseMaps Switcher & Raster Checkbox/Combo & Zoom & GPS Locate) */}
@@ -1855,7 +2152,7 @@ export default function App() {
 
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-14 right-4 sm:bottom-10 sm:right-10 z-[2000] bg-slate-900 text-white px-4 py-3 rounded-lg shadow-2xl border border-slate-700 flex items-center space-x-2 text-xs animate-bounce">
+        <div className="fixed bottom-14 left-4 sm:bottom-10 sm:left-10 z-[2000] bg-slate-900 text-white px-4 py-3 rounded-lg shadow-2xl border border-slate-700 flex items-center space-x-2 text-xs animate-bounce">
           <Check className="w-4 h-4 text-emerald-400" />
           <span>{toastMessage}</span>
         </div>
@@ -1885,11 +2182,16 @@ export default function App() {
       {isAddFeatureModalOpen && (
         <AddFeatureModal
           isOpen={isAddFeatureModalOpen}
-          onClose={() => setIsAddFeatureModalOpen(false)}
+          onClose={() => {
+            setIsAddFeatureModalOpen(false);
+            setAddFeatureInitialData(null);
+          }}
           layers={layers}
           mapFeatures={mapFeatures}
-          markerLocation={cursorLocation || userLocation}
+          markerLocation={addFeatureInitialData?.location || cursorLocation || userLocation}
           currentUser={user}
+          initialName={addFeatureInitialData?.name}
+          initialLayerId={addFeatureInitialData?.layerId}
           onSave={(newFeature) => {
             handleSaveFeature(newFeature);
           }}
@@ -1915,6 +2217,24 @@ export default function App() {
         <NotificationModal
           isOpen={isNotificationModalOpen}
           onClose={() => setIsNotificationModalOpen(false)}
+          onSelectNotification={handleSelectNotification}
+        />
+      )}
+
+      {/* User Feedback Modal [PhanAnh] */}
+      {feedbackModalState.isOpen && (
+        <FeedbackModal
+          isOpen={feedbackModalState.isOpen}
+          onClose={() =>
+            setFeedbackModalState((prev) => ({ ...prev, isOpen: false }))
+          }
+          objectId={feedbackModalState.objectId}
+          layerId={feedbackModalState.layerId}
+          featureName={feedbackModalState.featureName}
+          layerName={feedbackModalState.layerName}
+          currentRole={effectiveRole}
+          isLoggedIn={Boolean(user)}
+          onSuccessToast={showToast}
         />
       )}
 

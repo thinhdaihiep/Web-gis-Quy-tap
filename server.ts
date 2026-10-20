@@ -241,6 +241,397 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
 
   // ==========================================
+  // OPENSTREETMAP SERVER PROXY & CACHE API
+  // ==========================================
+  const osmSearchCache = new Map<string, { timestamp: number; items: any[] }>();
+
+  function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371000;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  function classifyServerOsmItem(
+    name: string,
+    tags: Record<string, string> = {},
+    osmKey?: string,
+    osmValue?: string
+  ): { group: 'hanh_chinh' | 'song_nui' | 'di_tich'; kind: string; kindLabel: string } {
+    const lowerName = name.toLowerCase();
+
+    // 1. Nhóm Nghĩa trang & Di tích
+    if (
+      tags.landuse === 'cemetery' ||
+      tags.amenity === 'grave_yard' ||
+      (osmKey === 'landuse' && osmValue === 'cemetery') ||
+      (osmKey === 'amenity' && osmValue === 'grave_yard') ||
+      lowerName.includes('nghĩa trang') ||
+      lowerName.includes('liệt sĩ') ||
+      lowerName.includes('mộ')
+    ) {
+      return { group: 'di_tich', kind: 'cemetery', kindLabel: 'Nghĩa trang' };
+    }
+
+    if (
+      tags.historic === 'battlefield' ||
+      (osmKey === 'historic' && osmValue === 'battlefield') ||
+      lowerName.includes('chiến trường') ||
+      lowerName.includes('trận')
+    ) {
+      return { group: 'di_tich', kind: 'battlefield', kindLabel: 'Chiến trường' };
+    }
+
+    if (
+      tags.historic === 'memorial' ||
+      tags.historic === 'monument' ||
+      osmKey === 'historic' ||
+      lowerName.includes('tưởng niệm') ||
+      lowerName.includes('đài tưởng niệm') ||
+      lowerName.includes('di tích') ||
+      lowerName.includes('chùa') ||
+      lowerName.includes('đền') ||
+      lowerName.includes('miếu')
+    ) {
+      return { group: 'di_tich', kind: 'memorial', kindLabel: 'Di tích/Tưởng niệm' };
+    }
+
+    // 2. Nhóm Sông núi & Thủy văn
+    // 2.1. Hồ nước, đầm, bàu, hồ chứa nước
+    if (
+      tags.natural === 'water' ||
+      tags.water === 'lake' ||
+      tags.water === 'reservoir' ||
+      tags.water === 'pond' ||
+      tags.landuse === 'reservoir' ||
+      (osmKey === 'natural' && osmValue === 'water') ||
+      (osmKey === 'water' && (osmValue === 'lake' || osmValue === 'reservoir' || osmValue === 'pond')) ||
+      (osmKey === 'landuse' && osmValue === 'reservoir') ||
+      lowerName.startsWith('hồ ') ||
+      lowerName.includes('hồ chứa nước') ||
+      lowerName.startsWith('đầm ') ||
+      lowerName.startsWith('bàu ') ||
+      lowerName.startsWith('vực ')
+    ) {
+      return { group: 'song_nui', kind: 'lake', kindLabel: 'Hồ nước' };
+    }
+
+    // 2.2. Sông
+    if (
+      tags.waterway === 'river' ||
+      osmValue === 'river' ||
+      (osmKey === 'waterway' && osmValue === 'river') ||
+      lowerName.startsWith('sông ') ||
+      lowerName.includes('sông ')
+    ) {
+      return { group: 'song_nui', kind: 'river', kindLabel: 'Sông' };
+    }
+
+    // 2.3. Suối, kênh, mương
+    if (
+      tags.waterway === 'stream' ||
+      tags.waterway === 'canal' ||
+      tags.waterway === 'drain' ||
+      tags.waterway === 'ditch' ||
+      osmValue === 'stream' ||
+      osmValue === 'canal' ||
+      lowerName.startsWith('suối ') ||
+      lowerName.includes('suối ') ||
+      lowerName.startsWith('kênh ') ||
+      lowerName.startsWith('mương ')
+    ) {
+      return { group: 'song_nui', kind: 'stream', kindLabel: 'Suối' };
+    }
+
+    // 2.4. Đỉnh núi, đồi, địa hình
+    if (
+      tags.natural === 'peak' ||
+      osmValue === 'peak' ||
+      lowerName.startsWith('núi ') ||
+      lowerName.includes('đỉnh ') ||
+      lowerName.includes('cao điểm')
+    ) {
+      return { group: 'song_nui', kind: 'peak', kindLabel: 'Đỉnh núi' };
+    }
+
+    if (
+      tags.natural === 'hill' ||
+      osmValue === 'hill' ||
+      lowerName.startsWith('đồi ')
+    ) {
+      return { group: 'song_nui', kind: 'hill', kindLabel: 'Đồi' };
+    }
+
+    if (
+      tags.natural === 'ridge' ||
+      tags.natural === 'valley' ||
+      osmValue === 'ridge' ||
+      osmValue === 'valley' ||
+      lowerName.includes('dãy núi') ||
+      lowerName.includes('thung lũng')
+    ) {
+      return { group: 'song_nui', kind: 'ridge', kindLabel: 'Dãy núi/Thung lũng' };
+    }
+
+    // 3. Nhóm Hành chính & Dân cư
+    if (
+      tags.place === 'hamlet' ||
+      osmValue === 'hamlet' ||
+      lowerName.startsWith('thôn ') ||
+      lowerName.startsWith('bản ') ||
+      lowerName.startsWith('ấp ')
+    ) {
+      return { group: 'hanh_chinh', kind: 'hamlet', kindLabel: 'Thôn/Bản' };
+    }
+
+    if (
+      tags.place === 'village' ||
+      osmValue === 'village' ||
+      lowerName.startsWith('xã ') ||
+      lowerName.startsWith('làng ')
+    ) {
+      return { group: 'hanh_chinh', kind: 'village', kindLabel: 'Làng/Xã' };
+    }
+
+    if (
+      tags.place === 'town' ||
+      osmValue === 'town' ||
+      lowerName.startsWith('thị trấn ')
+    ) {
+      return { group: 'hanh_chinh', kind: 'town', kindLabel: 'Thị trấn' };
+    }
+
+    if (
+      tags.place === 'suburb' ||
+      osmValue === 'suburb' ||
+      lowerName.startsWith('phường ') ||
+      lowerName.startsWith('khu phố ')
+    ) {
+      return { group: 'hanh_chinh', kind: 'suburb', kindLabel: 'Phường/Khu' };
+    }
+
+    return { group: 'hanh_chinh', kind: 'locality', kindLabel: 'Địa danh' };
+  }
+
+  app.post('/api/osm/search', async (req, res) => {
+    try {
+      const { bounds, keyword } = req.body || {};
+      if (!bounds) {
+        return res.status(400).json({ error: 'bounds is required' });
+      }
+
+      const south = Number(bounds.south);
+      const west = Number(bounds.west);
+      const north = Number(bounds.north);
+      const east = Number(bounds.east);
+
+      if (isNaN(south) || isNaN(west) || isNaN(north) || isNaN(east)) {
+        return res.status(400).json({ error: 'invalid bounds' });
+      }
+
+      const trimmedKeyword = keyword ? String(keyword).trim() : '';
+      const cacheKey = `${south.toFixed(3)}_${west.toFixed(3)}_${north.toFixed(3)}_${east.toFixed(3)}_${trimmedKeyword.toLowerCase()}`;
+
+      // Kiểm tra cache server (TTL 5 phút)
+      const cached = osmSearchCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < 300000) {
+        return res.json({ success: true, items: cached.items, cached: true });
+      }
+
+      const items: any[] = [];
+      const bboxStr = `${west},${south},${east},${north}`;
+
+      if (trimmedKeyword) {
+        const lowerKw = trimmedKeyword.toLowerCase();
+        // Mode 1: Tìm kiếm theo từ khóa kết hợp Photon và Nominatim
+        const photonFetches: Promise<any>[] = [
+          fetch(
+            `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmedKeyword)}&bbox=${bboxStr}&limit=50`,
+            { headers: { 'User-Agent': 'WebGIS-QK5-App/1.0' } }
+          )
+            .then((r) => r.json())
+            .catch(() => ({ features: [] })),
+        ];
+
+        // Nếu từ khóa chứa 'hồ', 'đầm', 'nước': bổ sung truy vấn với thẻ thủy văn
+        if (lowerKw.includes('hồ') || lowerKw.includes('đầm') || lowerKw.includes('bàu')) {
+          photonFetches.push(
+            fetch(
+              `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmedKeyword)}&osm_tag=natural:water&bbox=${bboxStr}&limit=30`,
+              { headers: { 'User-Agent': 'WebGIS-QK5-App/1.0' } }
+            )
+              .then((r) => r.json())
+              .catch(() => ({ features: [] })),
+            fetch(
+              `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmedKeyword)}&osm_tag=water&bbox=${bboxStr}&limit=30`,
+              { headers: { 'User-Agent': 'WebGIS-QK5-App/1.0' } }
+            )
+              .then((r) => r.json())
+              .catch(() => ({ features: [] }))
+          );
+        }
+
+        // Nếu từ khóa chứa 'sông', 'suối', 'kênh': bổ sung truy vấn với waterway
+        if (lowerKw.includes('sông') || lowerKw.includes('suối') || lowerKw.includes('kênh')) {
+          photonFetches.push(
+            fetch(
+              `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmedKeyword)}&osm_tag=waterway&bbox=${bboxStr}&limit=30`,
+              { headers: { 'User-Agent': 'WebGIS-QK5-App/1.0' } }
+            )
+              .then((r) => r.json())
+              .catch(() => ({ features: [] }))
+          );
+        }
+
+        const nominatimPromise = fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(trimmedKeyword)}&format=json&viewbox=${west},${north},${east},${south}&bounded=1&limit=40&addressdetails=1&extratags=1`,
+          { headers: { 'User-Agent': 'WebGIS-QK5-App/1.0 (contact: admin@webgis.vn)' } }
+        )
+          .then((r) => r.json())
+          .catch(() => []);
+
+        const [photonResults, nominatimData] = await Promise.all([
+          Promise.all(photonFetches),
+          nominatimPromise,
+        ]);
+
+        // Xử lý dữ liệu từ tất cả kết quả Photon
+        for (const pData of photonResults) {
+          for (const f of pData.features || []) {
+            const p = f.properties || {};
+            const geom = f.geometry || {};
+            const name = p.name || p.street || p.locality || p.city;
+            if (!name || !geom.coordinates || geom.coordinates.length < 2) continue;
+
+            const lon = geom.coordinates[0];
+            const lat = geom.coordinates[1];
+            if (typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) continue;
+
+            const { group, kind, kindLabel } = classifyServerOsmItem(name, {}, p.osm_key, p.osm_value);
+            items.push({
+              id: `photon/${p.osm_type || 'N'}/${p.osm_id || Math.random()}`,
+              name: String(name).trim(),
+              group,
+              kind,
+              kindLabel,
+              lat: Number(lat.toFixed(6)),
+              lon: Number(lon.toFixed(6)),
+              ele: p.ele || p.extratags?.ele || undefined,
+            });
+          }
+        }
+
+        // Xử lý dữ liệu từ Nominatim
+        if (Array.isArray(nominatimData)) {
+          for (const n of nominatimData) {
+            const name = n.name || (n.display_name ? n.display_name.split(',')[0] : '');
+            const lat = parseFloat(n.lat);
+            const lon = parseFloat(n.lon);
+            if (!name || isNaN(lat) || isNaN(lon)) continue;
+
+            const extra = n.extratags || {};
+            const { group, kind, kindLabel } = classifyServerOsmItem(name, extra, n.class, n.type);
+            items.push({
+              id: `nominatim/${n.osm_type || 'node'}/${n.osm_id || Math.random()}`,
+              name: String(name).trim(),
+              group,
+              kind,
+              kindLabel,
+              lat: Number(lat.toFixed(6)),
+              lon: Number(lon.toFixed(6)),
+              ele: extra.ele || undefined,
+            });
+          }
+        }
+      } else {
+        // Mode 2: Ô tìm kiếm để trống => quét các danh mục địa danh trong khung nhìn
+        const queryConfigs = [
+          { q: 'xã', extra: '' },
+          { q: 'thôn', extra: '' },
+          { q: 'núi', extra: '' },
+          { q: 'hồ', extra: '&osm_tag=natural:water' },
+          { q: 'hồ', extra: '&osm_tag=water' },
+          { q: 'sông', extra: '&osm_tag=waterway' },
+          { q: 'suối', extra: '&osm_tag=waterway' },
+          { q: 'nghĩa trang', extra: '' },
+          { q: 'di tích', extra: '' },
+        ];
+
+        const photonPromises = queryConfigs.map((cfg) =>
+          fetch(
+            `https://photon.komoot.io/api/?q=${encodeURIComponent(cfg.q)}${cfg.extra}&bbox=${bboxStr}&limit=18`,
+            { headers: { 'User-Agent': 'WebGIS-QK5-App/1.0' } }
+          )
+            .then((r) => r.json())
+            .catch(() => ({ features: [] }))
+        );
+
+        const results = await Promise.all(photonPromises);
+        for (const data of results) {
+          for (const f of data.features || []) {
+            const p = f.properties || {};
+            const geom = f.geometry || {};
+            const name = p.name || p.street || p.locality || p.city;
+            if (!name || !geom.coordinates || geom.coordinates.length < 2) continue;
+
+            const lon = geom.coordinates[0];
+            const lat = geom.coordinates[1];
+            if (typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) continue;
+
+            if (lat < south - 0.005 || lat > north + 0.005 || lon < west - 0.005 || lon > east + 0.005) {
+              continue;
+            }
+
+            const { group, kind, kindLabel } = classifyServerOsmItem(name, {}, p.osm_key, p.osm_value);
+            items.push({
+              id: `photon/${p.osm_type || 'N'}/${p.osm_id || Math.random()}`,
+              name: String(name).trim(),
+              group,
+              kind,
+              kindLabel,
+              lat: Number(lat.toFixed(6)),
+              lon: Number(lon.toFixed(6)),
+              ele: p.ele || p.extratags?.ele || undefined,
+            });
+          }
+        }
+      }
+
+      // Khử trùng lặp (< 50m và cùng tên)
+      const deduped: any[] = [];
+      for (const item of items) {
+        const exists = deduped.some((existing) => {
+          if (existing.name.toLowerCase() !== item.name.toLowerCase()) return false;
+          const dist = calculateDistanceMeters(existing.lat, existing.lon, item.lat, item.lon);
+          return dist < 50;
+        });
+        if (!exists) {
+          deduped.push(item);
+        }
+      }
+
+      // Giới hạn kích thước cache bộ nhớ
+      if (osmSearchCache.size > 150) {
+        const firstKey = osmSearchCache.keys().next().value;
+        if (firstKey) osmSearchCache.delete(firstKey);
+      }
+      osmSearchCache.set(cacheKey, { timestamp: Date.now(), items: deduped });
+
+      return res.json({ success: true, items: deduped });
+    } catch (err: any) {
+      console.error('Lỗi khi truy vấn OSM trên Server:', err);
+      return res.status(500).json({ error: err.message || 'Lỗi khi xử lý truy vấn OpenStreetMap' });
+    }
+  });
+
+  // ==========================================
   // GITHUB RELEASE BATTLE DOSSIER (HỒ SƠ TRẬN ĐÁNH) APIS
   // ==========================================
   const GITHUB_REPO_OWNER = 'thinhdaihiep';

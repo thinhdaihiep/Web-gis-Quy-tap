@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Crosshair, Copy, Check, Navigation, ChevronDown, ArrowLeftRight } from 'lucide-react';
+import { Crosshair, Copy, Check, Navigation, ChevronDown, ArrowLeftRight, MapPin } from 'lucide-react';
 import {
   smartParseCoordinateInput,
   convertWGS84ToTargetCRS,
@@ -186,6 +186,30 @@ export const Footer: React.FC<FooterProps> = ({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
+  };
+
+  const handleOpenGoogleMaps = () => {
+    let lat: number | null = null;
+    let lng: number | null = null;
+
+    if (activeLoc) {
+      lat = activeLoc.lat;
+      lng = activeLoc.lng;
+    } else if (smartStatus && smartStatus.lat !== undefined && smartStatus.lng !== undefined) {
+      lat = smartStatus.lat;
+      lng = smartStatus.lng;
+    } else if (inputText) {
+      const parsed = smartParseCoordinateInput(inputText);
+      if (parsed.lat !== undefined && parsed.lng !== undefined) {
+        lat = parsed.lat;
+        lng = parsed.lng;
+      }
+    }
+
+    if (lat !== null && lng !== null) {
+      const url = `https://www.google.com/maps?q=${lat},${lng}`;
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
   };
 
   const handleFocus = () => {
@@ -512,6 +536,18 @@ export const Footer: React.FC<FooterProps> = ({
               ) : (
                 <Copy className="w-3 h-3" />
               )}
+            </button>
+          )}
+
+          {/* Open in Google Maps Button */}
+          {(activeLoc || inputText) && !isEditing && (
+            <button
+              type="button"
+              onClick={handleOpenGoogleMaps}
+              className="ml-0.5 p-0.5 text-slate-400 hover:text-sky-300 hover:bg-slate-700 rounded transition cursor-pointer flex items-center gap-0.5 shrink-0"
+              title="Mở trong Google Maps"
+            >
+              <MapPin className="w-3 h-3" />
             </button>
           )}
         </div>

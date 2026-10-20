@@ -25,6 +25,24 @@
         "createdAt": { "type": "string" }
       },
       "required": ["username", "role"]
+    },
+    "PhanAnh": {
+      "title": "PhanAnh",
+      "description": "User feedback regarding GIS map features",
+      "type": "object",
+      "properties": {
+        "OBJECTID": { "type": ["string", "number"] },
+        "Lop": { "type": "string" },
+        "TenLop": { "type": "string" },
+        "TenDoiTuong": { "type": "string" },
+        "Ten": { "type": "string" },
+        "DienThoai": { "type": "string" },
+        "NoiDung": { "type": "string" },
+        "ThoiGian": { "type": "string" },
+        "TrangThai": { "type": "string", "enum": ["moi", "dang_xu_ly", "da_xu_ly"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["OBJECTID", "Lop", "Ten", "DienThoai", "NoiDung"]
     }
   },
   "firestore": {
@@ -35,6 +53,10 @@
     "/users/{userId}": {
       "schema": "User",
       "description": "User accounts with encrypted credentials"
+    },
+    "/PhanAnh/{feedbackId}": {
+      "schema": "PhanAnh",
+      "description": "Public feedbacks submitted on GIS features"
     }
   }
 }

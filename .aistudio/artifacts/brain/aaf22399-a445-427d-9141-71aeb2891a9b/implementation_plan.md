@@ -1,76 +1,99 @@
-# Kế hoạch tối ưu hóa đọc/ghi Firestore (Server In-Memory Cache + Client IndexedDB)
+# Kế hoạch Nâng cấp SearchPane thành Tìm kiếm 2 Tab (Dữ liệu GIS & OpenStreetMap)
 
-## 1. Đánh giá tính tương thích với môi trường App Hosting / Cloud Run
-Môi trường **Firebase App Hosting** (vận hành trên nền tảng Cloud Run container với lệnh `npm run start` chạy `dist/server.cjs`):
-
-* **Client IndexedDB (Trình duyệt):**
-  * Chạy hoàn toàn 100% ở phía máy khách (Local Browser Storage).
-  * **Không phụ thuộc vào hosting**, hoạt động ổn định trên mọi môi trường triển khai (Firebase App Hosting, Cloud Run, CDN, v.v.).
-
-* **Server In-Memory Cache (Express Server):**
-  * **Cơ chế hoạt động trong App Hosting:** App Hosting / Cloud Run quản lý các container có thể tự động scale (tăng/giảm số lượng instance hoặc scale-to-zero khi không có truy cập).
-  * **Hành vi bộ nhớ:** Mỗi container instance giữ một bản cache trong RAM. Khi một instance khởi động hoặc hết thời hạn TTL (ví dụ: 15-30 phút), nó chỉ đọc Firestore đúng **1 lần** để nạp vào RAM rồi phục vụ cho hàng nghìn lượt request của người dùng gửi tới instance đó.
-  * **Không làm gián đoạn dịch vụ:** Bộ nhớ đệm chỉ đóng vai trò "Read-Through Cache" (đọc nhanh từ RAM), hoàn toàn không lưu trữ trạng thái cố định (stateless backend) nên tương thích hoàn hảo với đặc tính scale của App Hosting.
-
-* **Cơ chế dự phòng an toàn (Fallback Gracefully):**
-  * Trong trường hợp API cache phía server gặp độ trễ hoặc lỗi mạng tạm thời, client sẽ tự động fallback truy vấn trực tiếp Firestore SDK như cơ chế hiện tại.
-  * Không làm mất dữ liệu, không ảnh hưởng đến logic tạo điểm (`map_features`) hay biên tập bản đồ.
-
----
-
-## 2. Các điểm tắc nghẽn hiện tại
-1. **Lớp ảnh vệ tinh (`raster_layers`):** Đọc toàn bộ collection mỗi lần tải trang chủ và mỗi lần chuyển sang tab quản lý Raster.
-2. **Dữ liệu phân mảnh hành chính (`commune_chunks`):** Đọc nhiều tài liệu chunk lớn từ Firestore mỗi phiên làm việc.
-3. **Cấu hình lớp & Từ điển trường (`layer_configs`, `field_alias_dictionary`):** Tải lại toàn bộ mỗi khi khởi động ứng dụng.
-4. **Không có cơ chế kiểm tra phiên bản (ETag/Version metadata):** Mọi request đều kéo dữ liệu thô thay vì kiểm tra timestamp thay đổi gần nhất.
+## 1. Phân tích Hiện trạng `AddFeatureModal` & Đề xuất Xử lý
+Theo đúng yêu cầu kiểm tra:
+* **Hiện trạng**: `AddFeatureModalProps` hiện tại **chỉ nhận** `markerLocation: { lat, lng } | null`. Trong component, ô nhập tên `initialValues['Ten']` luôn mặc định là rỗng `""` và `selectedLayerId` luôn mặc định là lớp đầu tiên (`layer1_tim_kiem`). Component chưa có prop nhận tên điền sẵn hay lớp gợi ý.
+* **Giải pháp tối ưu & an toàn**:
+  * Bổ sung 2 props tùy chọn vào `AddFeatureModalProps`:
+    ```ts
+    initialName?: string;
+    initialLayerId?: string;
+    ```
+  * Khi mở modal từ icon `PlusCircle` của địa danh OSM:
+    * Truyền `initialName = osmItem.name` -> Tự động điền vào ô Tên đối tượng.
+    * Gợi ý `initialLayerId` phù hợp với loại địa danh (ví dụ: Nghĩa trang -> `layer4_nghia_trang`, Di tích/Chiến trường -> `layer2_tran_danh`, Thôn/Làng/Đồi núi -> `layer1_tim_kiem`).
+    * Truyền `markerLocation = { lat: osmItem.lat, lng: osmItem.lon }` -> Tọa độ được điền sẵn chính xác.
+  * *Cam kết*: Hoàn toàn tương thích ngược, không ảnh hưởng đến các luồng thêm đối tượng thông thường khác từ thanh công cụ bản đồ.
 
 ---
 
-## 3. Kiến trúc giải pháp kết hợp
+## 2. Chi tiết Triển khai các File
 
-```
-[Trình duyệt / Client]
-       │
-       ├─ (1) Kiểm tra IndexedDB cục bộ (Cache-First)
-       │      └─ Nếu có dữ liệu + chưa hết hạn / cùng version: Dùng ngay (0 network, 0 Firestore read)
-       │
-       ▼ (2) Khi cần tải mới hoặc dữ liệu cục bộ hết hạn
-[Server Express API (/api/cache/...)] (Chạy trên App Hosting)
-       │
-       ├─ (3) Kiểm tra Server RAM Cache (TTL + Invalidation khi có ghi)
-       │      └─ Nếu có trong RAM: Trả về client ngay (0 Firestore read)
-       │
-       ▼ (4) Chỉ khi Server RAM Cache chưa có / bị xóa bộ đệm
-[Firebase Firestore] (Chỉ 1 lượt đọc cho nhiều client dùng chung)
-```
-
----
-
-## 4. Các bước triển khai cụ thể
-
-### Giai đoạn 1: Triển khai Client IndexedDB Caching
-- Xây dựng tiện ích quản lý IndexedDB nhẹ, thuần TypeScript không phụ thuộc thêm thư viện ngoài (zero dependency).
-- Lưu trữ các tập dữ liệu có dung lượng lớn hoặc ít thay đổi:
-  - `commune_chunks` (danh mục hành chính xã/huyện/tỉnh).
-  - `raster_layers` (danh sách lớp ảnh vệ tinh).
-  - `layer_configs` và `field_alias_dictionary`.
-- Thiết lập cơ chế kiểm tra `lastUpdated` hoặc TTL (Time-to-Live) để tự động làm mới khi cần.
-
-### Giai đoạn 2: Triển khai Server-side In-Memory Cache & Proxy API
-- Trong `server.ts`, xây dựng router `/api/cache/...`:
-  - `GET /api/cache/raster-layers`: Lưu trữ danh sách raster layers trong RAM của server (TTL: 15-30 phút hoặc xóa cache khi có sự kiện thêm/xóa ảnh).
-  - `GET /api/cache/communes`: Lưu trữ và phục vụ commune chunks qua server RAM.
-  - `GET /api/cache/layer-configs`: Lưu trữ cấu hình các lớp dữ liệu.
-- Xử lý Cache Invalidation: Khi có hành động thêm/sửa/xóa lớp raster hoặc cấu hình lớp, gọi hàm xóa cache tương ứng trên server để các lượt đọc kế tiếp lấy dữ liệu mới nhất.
-
-### Giai đoạn 3: Cập nhật luồng đọc dữ liệu trong giao diện
-- Cập nhật `src/firebaseService.ts` và `src/App.tsx`:
-  - Ưu tiên đọc từ IndexedDB client -> nếu rỗng, gọi API Proxy từ server -> nếu server chưa cache mới chạm vào Firestore.
-- Cập nhật `src/components/RasterManagementTab.tsx`: Sử dụng dữ liệu cache thay vì liên tục gọi `getDocs(collection(db, 'raster_layers'))`.
+### 2.1. File `src/utils/osmService.ts` (Tạo mới)
+* **Kiểu dữ liệu**:
+  * `OsmGroup`: `'all' | 'hanh_chinh' | 'song_nui' | 'di_tich'`
+  * `OsmItem`: `{ id, name, group, kind, kindLabel, lat, lon, ele? }`
+  * `OsmError`: Lớp lỗi tùy chỉnh với thông báo tiếng Việt.
+* **Cú pháp Overpass QL chuẩn xác**:
+  * Áp dụng `out center tags;` cho toàn bộ kết quả.
+  * Node: `place` (dân cư), `natural=peak|hill|volcano` (đỉnh núi/cao điểm).
+  * Way: `waterway=river|stream|canal` (sông suối), `natural=ridge|valley|cliff` (dãy núi/thung lũng), `landuse=cemetery`, `amenity=grave_yard` (nghĩa trang), `historic=battlefield|memorial|monument` (di tích).
+  * **Server-side Regex**:
+    * Có từ khóa: Thêm `["name"~"từ khóa",i]` (hoặc `name:vi|alt_name|old_name`) vào từng selector. Kèm hàm escape ký tự đặc biệt regex.
+    * Ô trống: Thêm `["name"]` để lọc lấy các đối tượng có tên.
+* **Xoay vòng 3 máy chủ đã xác thực**:
+  1. `https://overpass-api.de/api/interpreter`
+  2. `https://overpass.kumi.systems/api/interpreter`
+  3. `https://overpass.private.coffee/api/interpreter`
+* **Kiểm soát mạng**:
+  * `[timeout:25]` trong query, timeout 28s bằng `AbortController`.
+  * Khử trùng lặp: Nếu trùng tên và khoảng cách < 50m thì giữ lại 1 bản ghi duy nhất.
+  * Hàm tiện ích: `filterOsm(items, group)`, `makeBBoxKey(bounds)`, `isZoomOk(map)`.
 
 ---
 
-## 5. Kết quả dự kiến
-- **Lượt đọc Firestore:** Giảm từ **80% - 95%** tổng số reads hàng ngày.
-- **Tốc độ phản hồi:** Thời gian tải danh sách xã và danh sách ảnh vệ tinh giảm từ vài giây xuống dưới 50ms khi dữ liệu đã nằm trong bộ nhớ đệm.
-- **Tính tương thích:** 100% tương thích với Firebase App Hosting và Cloud Run, không gây lỗi build hay ảnh hưởng tới các chức năng hiện có.
+### 2.2. File `src/components/SearchPane.tsx` (Nâng cấp)
+* **Khu vực Đầu bảng (Dùng chung)**:
+  * Ô `inputText` kèm nút `X` xóa nhanh.
+    * Placeholder Tab Dữ liệu: `"Nhập tên, quê quán, nghĩa trang, mã số..."`
+    * Placeholder Tab Bản đồ: `"Nhập tên địa danh (hoặc để trống quét tất cả)..."`
+  * Nút `Search` (Icon `Search`), xoay vòng `animate-spin` khi `isSearching`.
+* **Thanh 2 Tab**:
+  * Tab 1: Icon `Database` + "Dữ liệu"
+  * Tab 2: Icon `Globe` + "Bản đồ"
+  * Đường viền chỉ báo (active indicator) màu xanh dương nổi bật.
+* **ComboBox lọc theo từng Tab**:
+  * Tab Dữ liệu: `-- Tất cả các lớp --`, `Khu vực tìm kiếm, quy tập`, `Các trận đánh lịch sử`, `Mộ liệt sĩ`, `Nghĩa trang liệt sĩ`.
+  * Tab Bản đồ: `-- Tất cả địa danh --` (`all`), `Hành chính` (`hanh_chinh`), `Sông núi` (`song_nui`), `Nghĩa trang & Di tích` (`di_tich`).
+* **Cơ chế Tìm kiếm & Cache**:
+  * Cache: `cachedOsmData = { bboxKey, keyword, allElements: OsmItem[] }`.
+  * Chỉ gọi `searchOsm` khi:
+    * (a) Người dùng bấm nút Search hoặc nhấn Enter.
+    * (b) Chuyển sang Tab Bản đồ mà chưa có dữ liệu cache.
+  * **Khi kéo/zoom bản đồ (bbox thay đổi)**: **KHÔNG tự quét lại, GIỮ NGUYÊN kết quả cũ**. Chỉ quét lại khi người dùng bấm Search/Enter.
+  * **Khi đổi ComboBox ở Tab Bản đồ**: Lọc Client-side tức thì bằng `filterOsm(cache.allElements, group)`, không gọi mạng.
+  * Kiểm tra Zoom: Nếu `!isZoomOk(map)` thì hiển thị cảnh báo: *"Vui lòng phóng to bản đồ (Zoom ≥ 11) để quét địa danh."* và không gửi request.
+  * Hủy request đang chạy bằng `AbortController`. Bỏ qua im lặng nếu `e.name === 'AbortError'`; hiển thị `e.message` nếu là `OsmError`.
+* **Quy tắc Chuyển Tab**:
+  * Sang Tab Bản đồ: Chưa có dữ liệu -> Tự động quét.
+  * Sang Tab Dữ liệu: Chưa có kết quả & ô nhập có từ khóa -> Tự động lọc.
+  * Giữ nguyên kết quả của mỗi tab khi qua lại.
+  * Khi chuyển tab hoặc đóng pane: Xóa sạch marker tạm.
+* **Thẻ Kết quả Tab Bản đồ**:
+  * Hàng 1: Icon theo nhóm (`Home` xanh lá cho hành chính, `Mountain` cam cho sông núi, `Landmark` tím cho di tích) + Tên đậm + Độ cao `(876m)` nếu có `ele` + Badge loại `kindLabel`.
+  * Hàng 2: Tọa độ `lat, lng` font monospace, 5-6 chữ số thập phân (KHÔNG khoảng cách).
+  * Cụm nút tác vụ (toàn bộ là Icon kèm tooltip):
+    * `Navigation`: Bay bản đồ đến vị trí và ghim marker nhấp nháy tạm.
+    * `Copy`: Sao chép `"tên, lat, lng"` vào clipboard.
+    * `MapPin`: Mở `https://www.google.com/maps?q=lat,lng` ở tab mới.
+    * `PlusCircle` (Chỉ hiện cho Admin / Biên tập viên): Mở modal thêm đối tượng vào 1 trong 4 lớp GIS với tên và tọa độ điền sẵn.
+
+---
+
+### 2.3. File `src/components/AddFeatureModal.tsx` & `src/App.tsx`
+* **`AddFeatureModal.tsx`**:
+  * Thêm props `initialName?: string; initialLayerId?: string;`.
+  * Khi modal mở: nếu có `initialName`, điền vào `formValues['Ten']`; nếu có `initialLayerId`, chọn lớp đó.
+* **`App.tsx`**:
+  * Truyền `mapInstance` và `currentRole` cho `SearchPane`.
+  * Quản lý `tempOsmLayerGroupRef` (`L.LayerGroup`): Khi ghim marker mới thì xóa sạch marker cũ trước. Dọn sạch khi đóng pane hoặc chuyển tab.
+  * Xử lý callback định vị OSM và mở `AddFeatureModal` với dữ liệu điền sẵn (`addFeatureInitialData`).
+
+---
+
+## 3. Quy trình Triển khai & Kiểm tra
+1. Tạo `src/utils/osmService.ts`.
+2. Bổ sung props cho `src/components/AddFeatureModal.tsx`.
+3. Nâng cấp `src/components/SearchPane.tsx`.
+4. Kết nối trong `src/App.tsx`.
+5. Chạy `compile_applet` và kiểm tra TypeScript, đảm bảo không có bất kỳ lỗi nào.

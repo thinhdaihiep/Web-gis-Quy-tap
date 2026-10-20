@@ -17,6 +17,8 @@ interface AddFeatureModalProps {
   mapFeatures: GeoJsonFeatureItem[];
   markerLocation: { lat: number; lng: number } | null;
   currentUser?: AppUser | null;
+  initialName?: string;
+  initialLayerId?: string;
   onSave: (newFeature: GeoJsonFeatureItem) => void;
 }
 
@@ -27,6 +29,8 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
   mapFeatures,
   markerLocation,
   currentUser,
+  initialName,
+  initialLayerId,
   onSave,
 }) => {
   const [selectedLayerId, setSelectedLayerId] = useState<string>('');
@@ -108,17 +112,24 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
   // Initialize form when modal opens
   useEffect(() => {
     if (isOpen) {
-      const initialLayerId = layers.length > 0 ? layers[0].id : 'layer1_tim_kiem';
-      setSelectedLayerId(initialLayerId);
+      const startLayerId =
+        initialLayerId && layers.some((l) => l.id === initialLayerId)
+          ? initialLayerId
+          : layers.length > 0
+          ? layers[0].id
+          : 'layer1_tim_kiem';
+      setSelectedLayerId(startLayerId);
 
-      const nextId = getNextObjectIdForLayer(initialLayerId);
+      const nextId = getNextObjectIdForLayer(startLayerId);
       setObjectId(nextId);
 
-      const schema = getSchemaForLayer(initialLayerId);
+      const schema = getSchemaForLayer(startLayerId);
       const initialValues: Record<string, any> = {};
       schema.forEach((field) => {
         if (field.name === 'OBJECTID') return;
-        if (field.name === 'PhanLoai') {
+        if (field.name === 'Ten' && initialName) {
+          initialValues[field.name] = initialName;
+        } else if (field.name === 'PhanLoai') {
           initialValues[field.name] = 1;
         } else if (field.name === 'ToaDo' && markerLocation) {
           initialValues[field.name] = `${markerLocation.lat.toFixed(6)}, ${markerLocation.lng.toFixed(6)}`;
@@ -139,7 +150,7 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
       setFormValues(initialValues);
       setErrorMessage('');
     }
-  }, [isOpen, layers, markerLocation]);
+  }, [isOpen, layers, markerLocation, initialName, initialLayerId]);
 
   // When layer changes, update schema fields and auto-calculate next OBJECTID
   const handleLayerChange = (newLayerId: string) => {

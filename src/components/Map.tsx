@@ -26,6 +26,7 @@ import {
   getItemUniqueKey,
   isFeatureMatch,
   deduplicateFeaturesList,
+  extractObjectId,
 } from '../fieldAlias';
 import { getSchemaForLayer } from '../FieldSchema';
 import { cleanShapeProperties } from '../utils/shapeFieldUtils';
@@ -68,6 +69,28 @@ interface MapProps {
   onRasterStatusChange?: (status: RasterLoadingStatus) => void;
   onMapRenderedReady?: () => void;
   onOpenPdfViewer?: (url: string, title?: string) => void;
+  onOpenFeedbackModal?: (
+    objectId: string | number,
+    layerId: string,
+    featureName: string,
+    layerName: string
+  ) => void;
+}
+
+function renderFeedbackButtonHtml(feat: GeoJsonFeatureItem, layerName?: string): string {
+  const objId = extractObjectId(feat) || feat.code || feat.id;
+  const layerId = feat.layerId || 'layer1_tim_kiem';
+  const { name: title } = getFeatureName(feat);
+  const effLayerName = layerName || 'Lớp bản đồ';
+
+  return `
+    <div style="display: flex; justify-content: flex-end; align-items: center; margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
+      <button type="button" onclick="if(window.__openGisFeedbackModal){window.__openGisFeedbackModal('${encodeURIComponent(String(objId))}','${encodeURIComponent(String(layerId))}','${encodeURIComponent(String(title))}','${encodeURIComponent(String(effLayerName))}')}" style="cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; background-color: #0284c7; color: #ffffff; border: none; border-radius: 4px; font-weight: bold; font-size: 11px; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.1);" title="Góp ý đối tượng này">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+        <span>Góp ý</span>
+      </button>
+    </div>
+  `;
 }
 
 function getFeatureName(feat: GeoJsonFeatureItem): { name: string; hiddenKey: string | null } {
@@ -444,6 +467,7 @@ export const MapComponent: React.FC<MapProps> = ({
   onRasterStatusChange,
   onMapRenderedReady,
   onOpenPdfViewer,
+  onOpenFeedbackModal,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
 
@@ -465,6 +489,31 @@ export const MapComponent: React.FC<MapProps> = ({
       delete (window as any).__openGisPdfViewer;
     };
   }, [onOpenPdfViewer]);
+
+  // Expose global feedback modal handler for Leaflet popup HTML strings
+  useEffect(() => {
+    (window as any).__openGisFeedbackModal = (
+      encodedObjId: string,
+      encodedLayerId: string,
+      encodedName: string,
+      encodedLayerName: string
+    ) => {
+      try {
+        const objId = decodeURIComponent(encodedObjId);
+        const layerId = decodeURIComponent(encodedLayerId);
+        const name = decodeURIComponent(encodedName);
+        const layerName = decodeURIComponent(encodedLayerName);
+        if (onOpenFeedbackModal) {
+          onOpenFeedbackModal(objId, layerId, name, layerName);
+        }
+      } catch (e) {
+        console.error('Lỗi khi mở cửa sổ phản ánh:', e);
+      }
+    };
+    return () => {
+      delete (window as any).__openGisFeedbackModal;
+    };
+  }, [onOpenFeedbackModal]);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const baseLayersRef = useRef<Record<BaseMapType, L.TileLayer> | null>(null);
   const featureLayersRef = useRef<L.LayerGroup | null>(null);
@@ -2103,6 +2152,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
                   ${renderPopupProperties(currentFeat, lat, lng, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
                 </div>
+                ${renderFeedbackButtonHtml(currentFeat, parentLayer?.name)}
               </div>
             `;
           });
@@ -2300,6 +2350,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
                   ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
                 </div>
+                ${renderFeedbackButtonHtml(currentFeat, parentLayer?.name)}
               </div>
             `;
           });
@@ -2454,6 +2505,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
                   ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
                 </div>
+                ${renderFeedbackButtonHtml(currentFeat, parentLayer?.name)}
               </div>
             `;
           });

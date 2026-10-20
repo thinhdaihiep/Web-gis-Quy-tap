@@ -79,7 +79,14 @@ service cloud.firestore {
       allow read, write: if isValidId(notificationId);
     }
 
-    // 7. Global default deny for any other collections
+    // 7. User feedback collection [PhanAnh]
+    match /PhanAnh/{feedbackId} {
+      allow read: if true;
+      allow create: if isValidId(feedbackId);
+      allow update, delete: if isValidId(feedbackId);
+    }
+
+    // 8. Global default deny for any other collections
     match /{document=**} {
       allow read: if true;
       allow write: if false;

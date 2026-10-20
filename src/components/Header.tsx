@@ -17,6 +17,7 @@ interface HeaderProps {
   onOpenNotificationModal?: () => void;
   onOpenWebsiteInfoModal?: () => void;
   isMobile?: boolean;
+  unreadNotificationCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -33,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenNotificationModal,
   onOpenWebsiteInfoModal,
   isMobile = false,
+  unreadNotificationCount = 0,
 }) => {
   return (
     <header className="h-14 bg-[#1e293b] text-white flex items-center justify-between px-2.5 sm:px-4 border-b border-slate-700 shrink-0 z-[3000] shadow-sm gap-1.5 sm:gap-3">
@@ -97,10 +99,15 @@ export const Header: React.FC<HeaderProps> = ({
           {(currentRole === 'admin' || currentRole === 'editor') && onOpenNotificationModal && (
             <button
               onClick={onOpenNotificationModal}
-              className="p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
+              className="relative p-1.5 sm:px-2 sm:py-1.5 rounded text-xs font-medium flex items-center gap-1 transition cursor-pointer bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
               title="Thông báo hệ thống"
             >
               <Bell className="w-4 h-4 shrink-0" />
+              {unreadNotificationCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white shadow-xs animate-pulse">
+                  {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                </span>
+              )}
             </button>
           )}
         </div>
