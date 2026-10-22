@@ -3,12 +3,12 @@
  * Hỗ trợ truy vấn địa danh thực địa trong Bounding Box của bản đồ
  */
 
-export type OsmGroup = 'all' | 'hanh_chinh' | 'song_nui' | 'di_tich';
+export type OsmGroup = 'all' | 'hanh_chinh' | 'song_nui' | 'di_tich' | 'giao_thong';
 
 export interface OsmItem {
   id: string;
   name: string;
-  group: 'hanh_chinh' | 'song_nui' | 'di_tich';
+  group: 'hanh_chinh' | 'song_nui' | 'di_tich' | 'giao_thong';
   kind: string;
   kindLabel: string;
   lat: number;
@@ -88,7 +88,7 @@ function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: numbe
  * Phân loại thẻ OSM thành nhóm, loại và nhãn tiếng Việt
  */
 function classifyOsmElement(tags: Record<string, string>): {
-  group: 'hanh_chinh' | 'song_nui' | 'di_tich';
+  group: 'hanh_chinh' | 'song_nui' | 'di_tich' | 'giao_thong';
   kind: string;
   kindLabel: string;
 } {
@@ -133,7 +133,57 @@ function classifyOsmElement(tags: Record<string, string>): {
     return { group: 'song_nui', kind: 'stream', kindLabel: 'Suối' };
   }
 
-  // 3. Nhóm Hành chính & Dân cư
+  // 3. Nhóm Giao thông & Đường sá
+  if (
+    tags.highway ||
+    tags.bridge ||
+    (tags.name && (
+      tags.name.toLowerCase().startsWith('đường ') ||
+      tags.name.toLowerCase().startsWith('phố ') ||
+      tags.name.toLowerCase().startsWith('quốc lộ ') ||
+      tags.name.toLowerCase().startsWith('ql ') ||
+      tags.name.toLowerCase().startsWith('tỉnh lộ ') ||
+      tags.name.toLowerCase().startsWith('đt ') ||
+      tags.name.toLowerCase().startsWith('đại lộ ') ||
+      tags.name.toLowerCase().startsWith('cầu ') ||
+      tags.name.toLowerCase().startsWith('kiệt ') ||
+      tags.name.toLowerCase().startsWith('ngõ ') ||
+      tags.name.toLowerCase().startsWith('hẻm ') ||
+      tags.name.toLowerCase().startsWith('hầm ')
+    ))
+  ) {
+    const lowerName = (tags.name || '').toLowerCase();
+    if (lowerName.startsWith('cầu ') || tags.bridge) {
+      return { group: 'giao_thong', kind: 'bridge', kindLabel: 'Cầu' };
+    }
+    if (
+      tags.highway === 'motorway' ||
+      tags.highway === 'trunk' ||
+      lowerName.startsWith('quốc lộ ') ||
+      lowerName.startsWith('ql ') ||
+      lowerName.startsWith('cao tốc ')
+    ) {
+      return { group: 'giao_thong', kind: 'trunk', kindLabel: 'Quốc lộ/Cao tốc' };
+    }
+    if (
+      tags.highway === 'primary' ||
+      tags.highway === 'secondary' ||
+      lowerName.startsWith('tỉnh lộ ') ||
+      lowerName.startsWith('đt ')
+    ) {
+      return { group: 'giao_thong', kind: 'primary', kindLabel: 'Tỉnh lộ/Đường chính' };
+    }
+    if (
+      lowerName.startsWith('kiệt ') ||
+      lowerName.startsWith('ngõ ') ||
+      lowerName.startsWith('hẻm ')
+    ) {
+      return { group: 'giao_thong', kind: 'alley', kindLabel: 'Ngõ/Kiệt' };
+    }
+    return { group: 'giao_thong', kind: 'street', kindLabel: 'Đường phố' };
+  }
+
+  // 4. Nhóm Hành chính & Dân cư
   if (tags.place === 'hamlet') {
     return { group: 'hanh_chinh', kind: 'hamlet', kindLabel: 'Thôn/Bản' };
   }
@@ -208,7 +258,7 @@ async function searchPhotonClientFallback(
   const bbox = `${west},${south},${east},${north}`;
   const trimmed = keyword ? keyword.trim() : '';
 
-  const queryTerms = trimmed ? [trimmed] : ['xã', 'thôn', 'núi', 'hồ', 'sông', 'suối', 'nghĩa trang'];
+  const queryTerms = trimmed ? [trimmed] : ['xã', 'thôn', 'núi', 'hồ', 'sông', 'suối', 'đường', 'nghĩa trang'];
   const promises = queryTerms.map((term) =>
     fetch(
       `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&bbox=${bbox}&limit=20`,

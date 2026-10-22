@@ -8,7 +8,6 @@ import {
   Home,
   Mountain,
   Landmark,
-  Navigation,
   Copy,
   Check,
   MapPin,
@@ -16,6 +15,7 @@ import {
   AlertCircle,
   Loader2,
   Waves,
+  Route,
 } from 'lucide-react';
 import { List } from 'react-window';
 import L from 'leaflet';
@@ -155,6 +155,12 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
 
       const q = (keywordToSearch !== undefined ? keywordToSearch : inputText).trim();
 
+      // Nếu để trống ô nhập liệu thì không truy vấn bản đồ (tránh truy vấn quá nhiều)
+      if (!q) {
+        setOsmError('Vui lòng nhập từ khóa tìm kiếm (tên xã, sông núi, hồ, tên đường...).');
+        return;
+      }
+
       // Hủy request đang chạy nếu có
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -214,8 +220,11 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
       setHasDataSearched(false);
       setIsSearchingData(false);
     } else {
-      // Ở tab Bản đồ, nếu xóa ô tìm kiếm thì quét lại không kèm từ khóa
-      executeOsmSearch('');
+      // Ở tab Bản đồ: xóa kết quả và xóa marker, không tự động quét lại khi ô trống
+      setCachedOsmData(null);
+      setOsmError(null);
+      setIsSearchingOsm(false);
+      onClearOsmMarker?.();
     }
   };
 
@@ -227,9 +236,10 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
     onClearOsmMarker?.();
 
     if (newTab === 'map') {
-      // Nếu tab Bản đồ chưa có dữ liệu, tự động quét
-      if (!cachedOsmData && mapInstance && isZoomOk(mapInstance)) {
-        executeOsmSearch(inputText.trim());
+      // Chỉ tìm kiếm khi ô nhập đã có sẵn từ khóa
+      const trimmed = inputText.trim();
+      if (trimmed && (!cachedOsmData || cachedOsmData.keyword !== trimmed) && mapInstance && isZoomOk(mapInstance)) {
+        executeOsmSearch(trimmed);
       }
     } else {
       // Nếu tab Dữ liệu chưa có kết quả và ô nhập có từ khóa, tự động lọc
@@ -378,7 +388,7 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
               placeholder={
                 activeTab === 'data'
                   ? 'Nhập tên, quê quán, nghĩa trang, mã số...'
-                  : 'Nhập tên địa danh (hoặc để trống quét tất cả)...'
+                  : 'Nhập tên xã, sông núi, hồ, tên đường...'
               }
               className="w-full bg-slate-800 text-xs text-slate-100 placeholder-slate-400 pl-3 pr-8 py-2 rounded-lg border border-slate-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
               autoFocus
@@ -470,6 +480,7 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
               <option value="hanh_chinh">Hành chính & Dân cư</option>
               <option value="song_nui">Sông núi & Thủy văn</option>
               <option value="di_tich">Nghĩa trang & Di tích</option>
+              <option value="giao_thong">Giao thông & Đường sá</option>
             </select>
           )}
         </div>
@@ -627,21 +638,21 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
             ) : !cachedOsmData ? (
               <div className="p-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2 flex-1">
                 <Globe className="w-8 h-8 stroke-1 text-slate-500 opacity-50" />
-                <p className="text-slate-300 font-medium">Nhấn nút Tìm kiếm để quét địa danh</p>
+                <p className="text-slate-300 font-medium">Nhập từ khóa và nhấn Tìm kiếm (hoặc Enter)</p>
                 <p className="text-[11px] text-slate-500">
-                  Hệ thống sẽ quét địa danh, cao điểm, sông suối trong khung nhìn hiện tại (Zoom ≥ 11).
+                  Tìm kiếm thôn xã, sông núi, hồ nước, tên đường... trong khung nhìn hiện tại (Zoom ≥ 11).
                 </p>
               </div>
             ) : filteredOsmItems.length === 0 ? (
               <div className="p-8 text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-2 flex-1">
                 <Search className="w-8 h-8 stroke-1 text-slate-600 opacity-60" />
-                <p>Không tìm thấy địa danh nào phù hợp trong khung nhìn.</p>
+                <p>Không tìm thấy địa danh nào phù hợp với từ khóa "{cachedOsmData.keyword}".</p>
                 <button
                   type="button"
                   onClick={() => executeOsmSearch()}
                   className="mt-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg border border-slate-700 transition cursor-pointer"
                 >
-                  Quét lại khung nhìn
+                  Tìm lại
                 </button>
               </div>
             ) : (
@@ -649,11 +660,13 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
                 {filteredOsmItems.map((item) => {
                   const isHanhChinh = item.group === 'hanh_chinh';
                   const isSongNui = item.group === 'song_nui';
+                  const isGiaoThong = item.group === 'giao_thong';
 
                   return (
                     <div
                       key={item.id}
-                      className="p-2.5 rounded-xl border border-slate-700/60 bg-slate-800/70 hover:bg-slate-800 hover:border-slate-600 transition flex flex-col gap-1.5"
+                      onClick={() => onLocateOsmFeature?.(item)}
+                      className="p-2.5 rounded-xl border border-slate-700/60 bg-slate-800/70 hover:bg-slate-800 hover:border-sky-500/70 active:scale-[0.99] transition flex flex-col gap-1.5 cursor-pointer select-none"
                     >
                       {/* Hàng 1: Icon nhóm + Tên đậm + Độ cao (nếu có) + Badge kind */}
                       <div className="flex items-center justify-between gap-1.5">
@@ -666,6 +679,8 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
                             ) : (
                               <Mountain className="w-4 h-4 text-amber-400 shrink-0" />
                             )
+                          ) : isGiaoThong ? (
+                            <Route className="w-4 h-4 text-orange-400 shrink-0" />
                           ) : (
                             <Landmark className="w-4 h-4 text-purple-400 shrink-0" />
                           )}
@@ -693,17 +708,7 @@ export const SearchPane: React.FC<SearchPaneProps> = ({
 
                         {/* Cụm nút tác vụ (toàn bộ là Icon) */}
                         <div className="flex items-center gap-1 shrink-0">
-                          {/* 1. Nút Navigation: Bay đến vị trí và ghim marker */}
-                          <button
-                            type="button"
-                            onClick={() => onLocateOsmFeature?.(item)}
-                            className="p-1 text-sky-400 hover:text-white hover:bg-sky-600/30 rounded transition cursor-pointer"
-                            title="Định vị trên bản đồ"
-                          >
-                            <Navigation className="w-3.5 h-3.5 fill-current" />
-                          </button>
-
-                          {/* 2. Nút Copy: Sao chép tên, lat, lng */}
+                          {/* 1. Nút Copy: Sao chép tên, lat, lng */}
                           <button
                             type="button"
                             onClick={(e) => handleCopyOsm(item, e)}

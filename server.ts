@@ -264,7 +264,7 @@ async function startServer() {
     tags: Record<string, string> = {},
     osmKey?: string,
     osmValue?: string
-  ): { group: 'hanh_chinh' | 'song_nui' | 'di_tich'; kind: string; kindLabel: string } {
+  ): { group: 'hanh_chinh' | 'song_nui' | 'di_tich' | 'giao_thong'; kind: string; kindLabel: string } {
     const lowerName = name.toLowerCase();
 
     // 1. Nhóm Nghĩa trang & Di tích
@@ -380,7 +380,61 @@ async function startServer() {
       return { group: 'song_nui', kind: 'ridge', kindLabel: 'Dãy núi/Thung lũng' };
     }
 
-    // 3. Nhóm Hành chính & Dân cư
+    // 3. Nhóm Giao thông & Đường sá
+    if (
+      osmKey === 'highway' ||
+      tags.highway ||
+      osmKey === 'bridge' ||
+      tags.bridge ||
+      osmValue === 'bridge' ||
+      lowerName.startsWith('đường ') ||
+      lowerName.startsWith('phố ') ||
+      lowerName.startsWith('quốc lộ ') ||
+      lowerName.startsWith('ql ') ||
+      lowerName.startsWith('tỉnh lộ ') ||
+      lowerName.startsWith('đt ') ||
+      lowerName.startsWith('đại lộ ') ||
+      lowerName.startsWith('cầu ') ||
+      lowerName.startsWith('ngõ ') ||
+      lowerName.startsWith('kiệt ') ||
+      lowerName.startsWith('hẻm ') ||
+      lowerName.startsWith('hầm ')
+    ) {
+      if (lowerName.startsWith('cầu ') || tags.bridge || osmValue === 'bridge') {
+        return { group: 'giao_thong', kind: 'bridge', kindLabel: 'Cầu' };
+      }
+      if (
+        osmValue === 'motorway' ||
+        osmValue === 'trunk' ||
+        tags.highway === 'motorway' ||
+        tags.highway === 'trunk' ||
+        lowerName.startsWith('quốc lộ ') ||
+        lowerName.startsWith('ql ') ||
+        lowerName.startsWith('cao tốc ')
+      ) {
+        return { group: 'giao_thong', kind: 'trunk', kindLabel: 'Quốc lộ/Cao tốc' };
+      }
+      if (
+        osmValue === 'primary' ||
+        osmValue === 'secondary' ||
+        tags.highway === 'primary' ||
+        tags.highway === 'secondary' ||
+        lowerName.startsWith('tỉnh lộ ') ||
+        lowerName.startsWith('đt ')
+      ) {
+        return { group: 'giao_thong', kind: 'primary', kindLabel: 'Tỉnh lộ/Đường chính' };
+      }
+      if (
+        lowerName.startsWith('kiệt ') ||
+        lowerName.startsWith('ngõ ') ||
+        lowerName.startsWith('hẻm ')
+      ) {
+        return { group: 'giao_thong', kind: 'alley', kindLabel: 'Ngõ/Kiệt' };
+      }
+      return { group: 'giao_thong', kind: 'street', kindLabel: 'Đường phố' };
+    }
+
+    // 4. Nhóm Hành chính & Dân cư
     if (
       tags.place === 'hamlet' ||
       osmValue === 'hamlet' ||
@@ -437,6 +491,11 @@ async function startServer() {
       }
 
       const trimmedKeyword = keyword ? String(keyword).trim() : '';
+      // Nếu từ khóa rỗng thì không truy vấn OSM, trả về mảng rỗng để bảo vệ tài nguyên
+      if (!trimmedKeyword) {
+        return res.json({ success: true, items: [] });
+      }
+
       const cacheKey = `${south.toFixed(3)}_${west.toFixed(3)}_${north.toFixed(3)}_${east.toFixed(3)}_${trimmedKeyword.toLowerCase()}`;
 
       // Kiểm tra cache server (TTL 5 phút)
@@ -483,6 +542,28 @@ async function startServer() {
           photonFetches.push(
             fetch(
               `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmedKeyword)}&osm_tag=waterway&bbox=${bboxStr}&limit=30`,
+              { headers: { 'User-Agent': 'WebGIS-QK5-App/1.0' } }
+            )
+              .then((r) => r.json())
+              .catch(() => ({ features: [] }))
+          );
+        }
+
+        // Nếu từ khóa chứa 'đường', 'phố', 'quốc lộ', 'ql', 'cầu', 'đại lộ', 'kiệt', 'ngõ', 'hẻm': bổ sung truy vấn với highway
+        if (
+          lowerKw.includes('đường') ||
+          lowerKw.includes('phố') ||
+          lowerKw.includes('quốc lộ') ||
+          lowerKw.includes('ql') ||
+          lowerKw.includes('cầu') ||
+          lowerKw.includes('đại lộ') ||
+          lowerKw.includes('kiệt') ||
+          lowerKw.includes('ngõ') ||
+          lowerKw.includes('hẻm')
+        ) {
+          photonFetches.push(
+            fetch(
+              `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmedKeyword)}&osm_tag=highway&bbox=${bboxStr}&limit=35`,
               { headers: { 'User-Agent': 'WebGIS-QK5-App/1.0' } }
             )
               .then((r) => r.json())
@@ -560,6 +641,8 @@ async function startServer() {
           { q: 'hồ', extra: '&osm_tag=water' },
           { q: 'sông', extra: '&osm_tag=waterway' },
           { q: 'suối', extra: '&osm_tag=waterway' },
+          { q: 'đường', extra: '&osm_tag=highway' },
+          { q: 'cầu', extra: '' },
           { q: 'nghĩa trang', extra: '' },
           { q: 'di tích', extra: '' },
         ];

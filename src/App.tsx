@@ -712,7 +712,7 @@ export default function App() {
       let suggestedLayerId = 'layer1_tim_kiem';
       if (item.group === 'di_tich') {
         suggestedLayerId = 'layer4_nghia_trang';
-      } else if (item.group === 'song_nui') {
+      } else if (item.group === 'song_nui' || item.group === 'giao_thong') {
         suggestedLayerId = 'layer2_tran_danh';
       }
 

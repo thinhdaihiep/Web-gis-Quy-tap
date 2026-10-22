@@ -72,7 +72,7 @@ export const WebsiteInfoModal: React.FC<WebsiteInfoModalProps> = ({ isOpen, onCl
               <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <div className="space-y-0.5">
                 <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                  Chịu trách nhiệm nội dung và xuất bản:
+                  Chịu trách nhiệm nội dung và ban hành:
                 </div>
                 <div className="font-semibold text-slate-100">
                   Thượng tá Nguyễn Bá Long
