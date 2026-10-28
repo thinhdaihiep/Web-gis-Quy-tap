@@ -9,6 +9,7 @@ import { Plus, X, Check, Layers, AlertCircle } from 'lucide-react';
 import { getSchemaForLayer, FieldDefinition } from '../FieldSchema';
 import { generateRegularPolygonCoordinates } from '../utils/geoMeasure';
 import { findCommunesAtLatLng } from '../utils/communeLookup';
+import { getLayerCodePrefix } from '../fieldAlias';
 
 interface AddFeatureModalProps {
   isOpen: boolean;
@@ -254,10 +255,12 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
       coordinates = [markerLocation.lng, markerLocation.lat];
     }
 
+    const cleanCode = `${getLayerCodePrefix(selectedLayerId)}-${objectId}`;
     const newFeature: GeoJsonFeatureItem = {
       id: `feat_${selectedLayerId}_${objectId}_${Date.now()}`,
       layerId: selectedLayerId,
       name: tenValue,
+      code: cleanCode,
       type: geometryType,
       coordinates,
       properties: finalProps,
@@ -351,20 +354,25 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
                   </td>
                 </tr>
 
-                {/* Dòng 2: Mã đối tượng (ID OBJECT) */}
+                {/* Dòng 2: Mã số */}
                 <tr className="hover:bg-slate-50/80 transition">
                   <td className="py-2.5 px-3 border-r border-slate-200 font-bold bg-slate-50 text-slate-700">
-                    <span>Mã đối tượng (ID OBJECT)</span>
+                    <span>Mã số</span>
                     <span className="text-red-500 ml-0.5">*</span>
                   </td>
                   <td className="py-1.5 px-3">
-                    <input
-                      type="text"
-                      value={objectId}
-                      onChange={(e) => setObjectId(e.target.value)}
-                      placeholder="Mã số đối tượng..."
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-2 py-1 bg-slate-100 border border-slate-300 rounded font-mono font-bold text-slate-600 text-[11px] shrink-0 select-none">
+                        {getLayerCodePrefix(selectedLayerId)}-
+                      </span>
+                      <input
+                        type="text"
+                        value={objectId}
+                        onChange={(e) => setObjectId(e.target.value)}
+                        placeholder="Số thứ tự..."
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </div>
                   </td>
                 </tr>
 

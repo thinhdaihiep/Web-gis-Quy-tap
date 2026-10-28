@@ -1,5 +1,3 @@
-import { doc, setDoc, getDoc, getDocs, collection, writeBatch, deleteDoc } from 'firebase/firestore';
-import { db } from './firebase';
 import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole, RasterLayer, RasterFileItem } from './types';
 import { deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
 import { cleanShapeProperties } from './utils/shapeFieldUtils';
@@ -26,6 +24,142 @@ export async function notifyServerCacheInvalidation(target: 'raster_layers' | 'l
     });
   } catch (_) {}
 }
+
+export interface SyncVersions {
+  featuresVersion: number;
+  featuresUpdatedAt: string;
+  rasterVersion: number;
+  rasterUpdatedAt: string;
+  communesVersion: number;
+  communesUpdatedAt: string;
+  configsVersion: number;
+  configsUpdatedAt: string;
+  aliasesVersion: number;
+  aliasesUpdatedAt: string;
+}
+
+export const LOCAL_SYNC_VERSIONS_KEY = 'gis_local_sync_versions';
+
+export function getLocalSyncVersions(): Partial<SyncVersions> {
+  try {
+    const raw = localStorage.getItem(LOCAL_SYNC_VERSIONS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+export function saveLocalSyncVersions(versions: Partial<SyncVersions>): void {
+  try {
+    const current = getLocalSyncVersions();
+    localStorage.setItem(LOCAL_SYNC_VERSIONS_KEY, JSON.stringify({ ...current, ...versions }));
+  } catch (_) {}
+}
+
+export async function fetchServerSyncVersions(): Promise<SyncVersions | null> {
+  try {
+    const res = await fetch('/api/sync/versions');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.versions) {
+        return data.versions;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Intelligent selective background sync for all collections using Global Sync Registry
+ */
+export async function syncAllCachedDataIfOutdated(callbacks?: {
+  onFeaturesUpdated?: (features: GeoJsonFeatureItem[]) => void;
+  onRasterUpdated?: (layers: RasterLayer[]) => void;
+  onConfigsUpdated?: (layerNames: Record<string, string>) => void;
+  onAliasesUpdated?: (aliases: Record<string, string>) => void;
+}) {
+  try {
+    const serverVersions = await fetchServerSyncVersions();
+    if (!serverVersions) return;
+    const localVersions = getLocalSyncVersions();
+
+    // 1. Kiểm tra lớp bản đồ Raster
+    const sRaster = Number(serverVersions.rasterVersion) || 1;
+    const lRaster = Number(localVersions.rasterVersion) || 0;
+    if (sRaster > lRaster || lRaster === 0) {
+      try {
+        const res = await fetch('/api/raster-layers?fresh=1');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.layers) && data.layers.length > 0) {
+            saveCachedRasterLayers(data.layers);
+            await setCachedData(CACHE_KEY_RASTER_LAYERS, data.layers);
+            saveLocalSyncVersions({ rasterVersion: sRaster, rasterUpdatedAt: serverVersions.rasterUpdatedAt });
+            if (callbacks?.onRasterUpdated) callbacks.onRasterUpdated(data.layers);
+          }
+        }
+      } catch (rErr) {
+        console.warn('[Sync] Cập nhật raster nền thất bại:', rErr);
+      }
+    }
+
+    // 2. Kiểm tra lớp đối tượng bản đồ Map Features (Mộ chí, điểm quy tập)
+    const sFeat = Number(serverVersions.featuresVersion) || 1;
+    const lFeat = Number(localVersions.featuresVersion) || 0;
+    if (sFeat > lFeat || lFeat === 0) {
+      try {
+        const freshFeatures = await loadSharedFeaturesFromFirestore();
+        if (freshFeatures && freshFeatures.length > 0) {
+          saveLocalSyncVersions({ featuresVersion: sFeat, featuresUpdatedAt: serverVersions.featuresUpdatedAt });
+          if (callbacks?.onFeaturesUpdated) callbacks.onFeaturesUpdated(freshFeatures);
+        }
+      } catch (fErr) {
+        console.warn('[Sync] Cập nhật map_features nền thất bại:', fErr);
+      }
+    }
+
+    // 3. Kiểm tra cấu hình lớp Layer Configs
+    const sConf = Number(serverVersions.configsVersion) || 1;
+    const lConf = Number(localVersions.configsVersion) || 0;
+    if (sConf > lConf || lConf === 0) {
+      try {
+        const res = await fetch('/api/layers/configs');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.layerNames) {
+            await setCachedData(CACHE_KEY_LAYER_CONFIGS, data.layerNames);
+            saveLocalSyncVersions({ configsVersion: sConf, configsUpdatedAt: serverVersions.configsUpdatedAt });
+            if (callbacks?.onConfigsUpdated) callbacks.onConfigsUpdated(data.layerNames);
+          }
+        }
+      } catch (cErr) {
+        console.warn('[Sync] Cập nhật configs nền thất bại:', cErr);
+      }
+    }
+
+    // 4. Kiểm tra từ điển bí danh Field Aliases
+    const sAlias = Number(serverVersions.aliasesVersion) || 1;
+    const lAlias = Number(localVersions.aliasesVersion) || 0;
+    if (sAlias > lAlias || lAlias === 0) {
+      try {
+        const res = await fetch('/api/aliases');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.aliases) {
+            await setCachedData(CACHE_KEY_ALIASES, data.aliases);
+            saveLocalSyncVersions({ aliasesVersion: sAlias, aliasesUpdatedAt: serverVersions.aliasesUpdatedAt });
+            if (callbacks?.onAliasesUpdated) callbacks.onAliasesUpdated(data.aliases);
+          }
+        }
+      } catch (aErr) {
+        console.warn('[Sync] Cập nhật aliases nền thất bại:', aErr);
+      }
+    }
+  } catch (err) {
+    console.warn('[Sync] Kiểm tra phiên bản nền gặp lỗi:', err);
+  }
+}
+
 
 // Auth Functions
 
@@ -188,39 +322,23 @@ function getFromLocalStorage(): GeoJsonFeatureItem[] {
 }
 
 /**
- * Fetch latest version of a single feature directly from Firestore by ID.
+ * Fetch latest version of a single feature by ID.
  */
 export async function fetchSingleFeatureFromFirestore(featureId: string): Promise<GeoJsonFeatureItem | null> {
   if (!featureId) return null;
   const targetIdStr = String(featureId).toLowerCase();
 
   try {
-    // 1. Try direct lookup in individual documents in map_features collection
-    const docRef = doc(db, COLLECTION_NAME, String(featureId));
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-      const data = docSnap.data();
-      let coords = data.coordinates;
-      if (typeof coords === 'string') {
-        try {
-          coords = JSON.parse(coords);
-        } catch (e) {
-          coords = [];
-        }
+    // 1. Try server endpoint
+    try {
+      const res = await fetch(`/api/features/${encodeURIComponent(featureId)}`);
+      if (res.ok) {
+        const item = await res.json();
+        if (item && item.id) return item;
       }
-      return {
-        id: data.id || docSnap.id,
-        layerId: data.layerId || 'layer1_tim_kiem',
-        name: data.name || '',
-        type: data.type || 'Point',
-        coordinates: coords,
-        properties: cleanShapeProperties(data.properties || {}),
-        code: data.code,
-        updatedAt: data.updatedAt,
-      };
-    }
+    } catch (_) {}
 
-    // 2. Fallback: Search across all shared features (layer_chunks & local cache merged)
+    // 2. Search across shared features and local cache
     const allShared = await loadSharedFeaturesFromFirestore();
     const foundInShared = allShared.find(
       (f) =>
@@ -233,13 +351,13 @@ export async function fetchSingleFeatureFromFirestore(featureId: string): Promis
       return foundInShared;
     }
   } catch (err) {
-    console.warn('Lỗi khi tải đối tượng từ Firestore:', err);
+    console.warn('Lỗi khi tải đối tượng:', err);
   }
   return null;
 }
 
 /**
- * Save or update a single feature in Firestore without altering layer chunks.
+ * Save or update a single feature without altering layer chunks.
  */
 export async function saveSingleFeatureToFirestore(
   feature: GeoJsonFeatureItem
@@ -271,36 +389,11 @@ export async function saveSingleFeatureToFirestore(
       return true;
     }
 
-    // If server returned error, try direct Firestore client write
     const data = await res.json().catch(() => ({}));
     console.warn('[Security Proxy] Không thể lưu đối tượng qua máy chủ:', data.error || res.statusText);
-
-    try {
-      const docRef = doc(db, COLLECTION_NAME, String(feature.id));
-      await setDoc(docRef, cleanedFeature);
-      return true;
-    } catch (directErr) {
-      console.warn('Lỗi lưu trực tiếp Firestore:', directErr);
-    }
-
     return false;
   } catch (err) {
     console.warn('Lỗi khi gửi yêu cầu lưu đối tượng:', err);
-    try {
-      const rawCoords = feature.coordinates || (feature as any).geometry?.coordinates || [];
-      const optimizedCoords = optimizeCoordinates(rawCoords);
-      const coordsJsonStr = typeof optimizedCoords === 'string' ? optimizedCoords : JSON.stringify(optimizedCoords);
-      const cleanedFeature = {
-        ...feature,
-        coordinates: coordsJsonStr,
-        updatedAt: feature.updatedAt || new Date().toISOString(),
-      };
-      const docRef = doc(db, COLLECTION_NAME, String(feature.id));
-      await setDoc(docRef, cleanedFeature);
-      return true;
-    } catch (fbErr) {
-      console.warn('Lỗi ghi trực tiếp vào Firestore sau ngoại lệ mạng:', fbErr);
-    }
     return false;
   }
 }
@@ -397,7 +490,7 @@ export async function saveImportedFeaturesToFirestore(
 }
 
 /**
- * Load all shared features from Firestore database (supports both Chunked Layer bundles and Individual documents)
+ * Load all shared features (supports both Chunked Layer bundles and Individual documents via server)
  */
 export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureItem[]> {
   const itemsMap = new Map<string, GeoJsonFeatureItem>();
@@ -408,82 +501,31 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
     if (!isDemoFeatureId(item.id)) itemsMap.set(getItemUniqueKey(item), item);
   });
 
-  let firestoreChunkItemsCount = 0;
-
   try {
-    // 1. Load Layer Chunks (for large GeoJSON files)
-    try {
-      const chunksSnap = await getDocs(collection(db, CHUNKS_COLLECTION));
-      chunksSnap.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data && data.payloadJson) {
-          try {
-            const parsedList: GeoJsonFeatureItem[] = JSON.parse(data.payloadJson);
-            parsedList.forEach((item) => {
-              if (!isDemoFeatureId(item.id)) {
-                item.properties = cleanShapeProperties(item.properties || {});
-                itemsMap.set(getItemUniqueKey(item), item);
-                firestoreChunkItemsCount++;
-              }
-            });
-          } catch (e) {
-            console.error('Lỗi parse chunk JSON:', e);
+    const res = await fetch('/api/features/all');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.features)) {
+        data.features.forEach((feat: any) => {
+          if (!isDemoFeatureId(feat.id)) {
+            feat.properties = cleanShapeProperties(feat.properties || {});
+            itemsMap.set(getItemUniqueKey(feat), feat);
           }
-        }
-      });
-    } catch (chunkErr) {
-      console.warn('Không tải được layer_chunks (dùng LocalStorage cache):', chunkErr);
+        });
+      }
     }
-
-    // 2. Load Individual feature documents (single edits/approvals override chunks)
-    try {
-      const querySnapshot = await getDocs(collection(db, COLLECTION_NAME));
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const featId = data.id || docSnap.id;
-        if (isDemoFeatureId(featId)) {
-          deleteDoc(doc(db, COLLECTION_NAME, docSnap.id)).catch(() => {});
-          return;
-        }
-
-        let coords = data.coordinates;
-        if (typeof coords === 'string') {
-          try {
-            coords = JSON.parse(coords);
-          } catch (e) {
-            coords = [];
-          }
-        }
-
-        const feat: GeoJsonFeatureItem = {
-          id: featId,
-          layerId: data.layerId,
-          name: data.name,
-          code: data.code || undefined,
-          type: data.type,
-          coordinates: coords,
-          properties: cleanShapeProperties(data.properties || {}),
-          updatedAt: data.updatedAt,
-        };
-
-        itemsMap.set(getItemUniqueKey(feat), feat);
-      });
-    } catch (individualErr) {
-      console.warn('Không tải được individual map_features (dùng LocalStorage cache):', individualErr);
-    }
-
-    const allList = deduplicateFeaturesList(Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id)));
-    
-    // Cache to LocalStorage
-    try {
-      localStorage.setItem('gis_local_map_features', JSON.stringify(allList));
-    } catch (e) {}
-
-    return allList;
   } catch (err) {
-    console.warn('Không thể tải dữ liệu mới từ Firestore, sử dụng bộ nhớ đệm LocalStorage:', err);
-    return deduplicateFeaturesList(Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id)));
+    console.warn('Lỗi tải /api/features/all (sử dụng LocalStorage cache):', err);
   }
+
+  const allList = deduplicateFeaturesList(Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id)));
+
+  // Cache to LocalStorage
+  try {
+    localStorage.setItem('gis_local_map_features', JSON.stringify(allList));
+  } catch (e) {}
+
+  return allList;
 }
 
 /**
@@ -576,22 +618,6 @@ export async function loadFieldAliasDictionaryFromFirestore(forceRefresh = false
     }
   } catch (_) {}
 
-  // 3. Dự phòng đọc trực tiếp Firestore SDK nếu máy chủ chưa khởi tạo
-  try {
-    const docRef = doc(db, APP_SETTINGS_COLLECTION, 'field_aliases');
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-      const data = docSnap.data();
-      const result = {
-        aliases: data?.aliases || {},
-        hiddenFields: data?.hiddenFields || {},
-      };
-      await setCachedData(CACHE_KEY_ALIASES, result);
-      return result;
-    }
-  } catch (err) {
-    console.warn('Lỗi khi tải bảng ánh xạ từ Firestore:', err);
-  }
   return null;
 }
 
@@ -653,21 +679,6 @@ export async function loadLayerConfigsFromFirestore(forceRefresh = false): Promi
     }
   } catch (_) {}
 
-  // 3. Dự phòng đọc trực tiếp Firestore SDK
-  try {
-    const docRef = doc(db, APP_SETTINGS_COLLECTION, 'layer_configs');
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-      const data = docSnap.data();
-      const layerNames = data?.layerNames || null;
-      if (layerNames) {
-        await setCachedData(CACHE_KEY_LAYER_CONFIGS, layerNames);
-      }
-      return layerNames;
-    }
-  } catch (err) {
-    console.warn('Lỗi khi tải cấu hình tên lớp từ Firestore:', err);
-  }
   return null;
 }
 
@@ -708,105 +719,78 @@ export function saveCachedRasterLayers(layers: RasterLayer[]): void {
  * Tier 2: Server-side RAM cache proxy (/api/raster-layers, 0 Firestore read)
  * Tier 3: Direct Firestore SDK read fallback
  */
-export async function loadRasterLayersFromFirestore(forceRefresh = false): Promise<RasterLayer[]> {
+export async function loadRasterLayersFromFirestore(
+  forceRefresh = false,
+  onBackgroundUpdate?: (layers: RasterLayer[]) => void
+): Promise<RasterLayer[]> {
   const cachedLayers = getCachedRasterLayers();
 
-  // 1. Kiểm tra bộ nhớ đệm client IndexedDB trước (vĩnh viễn, chỉ làm mới khi cập nhật bounding box hoặc forceRefresh)
-  if (!forceRefresh) {
+  // Helper function to fetch latest raster layers from server
+  const fetchFromServer = async (fresh = false): Promise<RasterLayer[] | null> => {
     try {
-      const idbCached = await getCachedData<RasterLayer[]>(CACHE_KEY_RASTER_LAYERS);
-      if (idbCached && idbCached.length > 0) {
-        return idbCached;
-      }
-    } catch (_) {}
-  }
-
-  // 2. Try server-side in-memory cached endpoint (0 Firestore reads if cached in server RAM)
-  try {
-    const res = await fetch('/api/raster-layers');
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.layers)) {
-        if (data.layers.length > 0) {
+      const url = fresh ? '/api/raster-layers?fresh=1' : '/api/raster-layers';
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.layers)) {
           saveCachedRasterLayers(data.layers);
           await setCachedData(CACHE_KEY_RASTER_LAYERS, data.layers);
           return data.layers;
         }
       }
+    } catch (err) {
+      console.warn('Không thể kết nối /api/raster-layers:', err);
     }
-  } catch (err) {
-    console.warn('Không thể kết nối /api/raster-layers, thử Firestore trực tiếp:', err);
-  }
+    return null;
+  };
 
-  // 3. Fallback to direct Firestore SDK
-  try {
-    const querySnapshot = await getDocs(collection(db, 'raster_layers'));
-    const fetchedLayers: RasterLayer[] = [];
-    querySnapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      let files: RasterFileItem[] = Array.isArray(data.files) ? data.files : [];
-      
-      // Backward compatibility: if layer had a single direct URL without files array
-      if (files.length === 0 && data.url) {
-        files = [{
-          id: `${docSnap.id}_file_0`,
-          fileName: data.name || 'Raster File',
-          url: data.url,
-          format: data.format || 'COG',
-          minZoom: data.minZoom || 12,
-          maxZoom: data.maxZoom || 18,
-          bounds: data.bounds || null,
-          uploadedAt: data.createdAt || new Date().toISOString(),
-        }];
-      }
-
-      fetchedLayers.push({
-        id: docSnap.id,
-        name: data.name || 'Bản đồ nền',
-        type: data.type || 'COG',
-        source: data.source,
-        storagePath: data.storagePath,
-        githubReleaseUrl: data.githubReleaseUrl,
-        bounds: data.bounds || null,
-        files: files,
-        opacity: data.opacity ?? 1.0,
-        enabled: data.enabled !== false,
-        createdAt: data.createdAt || new Date().toISOString(),
-        updatedAt: data.updatedAt,
-      });
-    });
-
-    if (fetchedLayers.length > 0) {
-      saveCachedRasterLayers(fetchedLayers);
-      await setCachedData(CACHE_KEY_RASTER_LAYERS, fetchedLayers);
-      return fetchedLayers;
-    }
-
-    if (cachedLayers.length > 0) {
-      return cachedLayers;
-    }
-
-    return fetchedLayers;
-  } catch (error: any) {
-    const isQuotaError = error?.code === 'resource-exhausted' || 
-                         (error?.message && error.message.toLowerCase().includes('quota limit exceeded'));
-    if (isQuotaError) {
-      console.warn('Firestore đã vượt hạn mức đọc (Quota exceeded). Đang sử dụng bộ nhớ đệm (Cache) cho Raster layers.');
-    } else {
-      console.warn('Không thể kết nối Firestore để tải raster layers, sử dụng cache cục bộ:', error?.message || error);
-    }
-
-    // Try IndexedDB stale cache first, then localStorage
+  // 1. Kiểm tra bộ nhớ đệm client IndexedDB trước để trả về ngay cho UI (0ms latency)
+  if (!forceRefresh) {
     try {
-      const idbStale = await getCachedData<RasterLayer[]>(CACHE_KEY_RASTER_LAYERS);
-      if (idbStale && idbStale.length > 0) return idbStale;
-    } catch (_) {}
+      const idbCached = await getCachedData<RasterLayer[]>(CACHE_KEY_RASTER_LAYERS);
+      if (idbCached && idbCached.length > 0) {
+        // Kích hoạt đối soát ngầm với Server Sync Registry
+        (async () => {
+          try {
+            const serverVersions = await fetchServerSyncVersions();
+            const localVersions = getLocalSyncVersions();
+            const sRaster = Number(serverVersions?.rasterVersion) || 1;
+            const lRaster = Number(localVersions.rasterVersion) || 0;
 
-    if (cachedLayers.length > 0) {
-      return cachedLayers;
-    }
-    return [];
+            if (sRaster > lRaster || lRaster === 0) {
+              const freshLayers = await fetchFromServer(true);
+              if (freshLayers && freshLayers.length > 0) {
+                saveLocalSyncVersions({ rasterVersion: sRaster, rasterUpdatedAt: serverVersions?.rasterUpdatedAt });
+                if (onBackgroundUpdate) {
+                  onBackgroundUpdate(freshLayers);
+                }
+                window.dispatchEvent(new CustomEvent('webgis:raster-layers-updated', { detail: freshLayers }));
+              }
+            }
+          } catch (_) {}
+        })();
+
+        return idbCached;
+      }
+    } catch (_) {}
   }
+
+  // 2. Nạp từ Server endpoint (sử dụng Admin SDK)
+  const serverLayers = await fetchFromServer(forceRefresh);
+  if (serverLayers && serverLayers.length > 0) {
+    try {
+      const serverVersions = await fetchServerSyncVersions();
+      if (serverVersions?.rasterVersion) {
+        saveLocalSyncVersions({ rasterVersion: serverVersions.rasterVersion });
+      }
+    } catch (_) {}
+    return serverLayers;
+  }
+
+  if (cachedLayers.length > 0) {
+    return cachedLayers;
+  }
+  return [];
 }
 
 /**
@@ -938,22 +922,8 @@ export async function saveCommuneChunksToFirestore(
       });
 
       if (!res.ok) {
-        // Fallback to direct client Firestore write
-        for (const chunk of batchSlice) {
-          await setDoc(doc(db, 'commune_chunks', chunk.id), {
-            chunkIndex: chunk.chunkIndex,
-            itemCount: chunk.itemCount,
-            payloadJson: chunk.payloadJson,
-            updatedAt: new Date().toISOString(),
-          });
-        }
-        if (isLast) {
-          await setDoc(doc(db, 'commune_meta', 'config'), {
-            totalFeatures: validFeatures.length,
-            totalChunks,
-            updatedAt: new Date().toISOString(),
-          });
-        }
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Lỗi khi lưu đợt phân mảnh xã lên máy chủ');
       }
     }
 
@@ -1011,25 +981,7 @@ export async function loadCommuneChunksFromFirestore(forceRefresh = false): Prom
       }
     } catch (_) {}
 
-    // 3. Direct Firestore SDK read (works for any public reader fallback)
-    const snap = await getDocs(collection(db, 'commune_chunks'));
-    const allFeatures: any[] = [];
-    const docs = snap.docs.sort((a, b) => (a.data().chunkIndex || 0) - (b.data().chunkIndex || 0));
-
-    for (const d of docs) {
-      const data = d.data();
-      if (data && data.payloadJson) {
-        try {
-          const parsed = JSON.parse(data.payloadJson);
-          if (Array.isArray(parsed)) allFeatures.push(...parsed);
-        } catch (_) {}
-      }
-    }
-
-    if (allFeatures.length > 0) {
-      await setCachedData(CACHE_KEY_COMMUNES, allFeatures);
-    }
-    return allFeatures;
+    return [];
   } catch (err) {
     console.warn('Lỗi tải dữ liệu commune_chunks từ Firebase:', err);
     // Return stale IndexedDB cache if available

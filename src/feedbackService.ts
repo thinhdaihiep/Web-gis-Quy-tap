@@ -1,17 +1,3 @@
-import {
-  collection,
-  addDoc,
-  deleteDoc,
-  updateDoc,
-  doc,
-  query,
-  where,
-  onSnapshot,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db } from './firebase';
-import { addNotification } from './notificationService';
-
 export type FeedbackStatus = 'moi' | 'dang_xu_ly' | 'da_xu_ly';
 
 export interface FeedbackItem {
@@ -39,99 +25,98 @@ export interface CreateFeedbackParams {
 }
 
 export async function createFeedback(params: CreateFeedbackParams): Promise<string> {
-  const colRef = collection(db, 'PhanAnh');
-  const now = new Date();
-  const timeFormatted = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
-
-  const docRef = await addDoc(colRef, {
-    OBJECTID: params.OBJECTID,
-    Lop: params.Lop,
-    TenLop: params.TenLop,
-    TenDoiTuong: params.TenDoiTuong,
-    Ten: params.Ten,
-    DienThoai: params.DienThoai,
-    NoiDung: params.NoiDung,
-    ThoiGian: timeFormatted,
-    TrangThai: 'moi',
-    createdAt: serverTimestamp(),
+  const res = await fetch('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
   });
 
-  // Tự động đẩy thông báo realtime cho Admin và Biên tập viên mang trực tiếp objectId và layerId
-  await addNotification(
-    `[${params.Ten}] góp ý trên "${params.TenDoiTuong}" (${params.TenLop})`,
-    'feedback',
-    {
-      title: 'Góp ý mới',
-      objectId: params.OBJECTID,
-      layerId: params.Lop,
-      feedbackId: docRef.id,
-    }
-  );
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || 'Gửi góp ý thất bại');
+  }
 
-  return docRef.id;
+  const data = await res.json();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('webgis:notification-updated'));
+  }
+  return data.id || '';
 }
 
+/**
+ * Smart Polling subscription for feedback on a specific GIS object
+ * Automatically polls initially, on window focus, and on an active 15s interval while open
+ */
 export function subscribeFeedbacksForObject(
   objectId: string | number,
   layerId: string,
   onData: (items: FeedbackItem[]) => void,
   onError?: (err: any) => void
 ): () => void {
-  const colRef = collection(db, 'PhanAnh');
-  const q = query(colRef, where('Lop', '==', String(layerId)));
+  let isSubscribed = true;
 
-  const unsubscribe = onSnapshot(
-    q,
-    (snapshot) => {
-      const items: FeedbackItem[] = [];
-      snapshot.forEach((d) => {
-        const data = d.data();
-        if (
-          String(data.OBJECTID).toLowerCase().trim() ===
-          String(objectId).toLowerCase().trim()
-        ) {
-          items.push({
-            id: d.id,
-            OBJECTID: data.OBJECTID,
-            Lop: data.Lop,
-            TenLop: data.TenLop || '',
-            TenDoiTuong: data.TenDoiTuong || '',
-            Ten: data.Ten || '',
-            DienThoai: data.DienThoai || '',
-            NoiDung: data.NoiDung || '',
-            ThoiGian: data.ThoiGian || '',
-            TrangThai: (data.TrangThai as FeedbackStatus) || 'moi',
-            createdAt: data.createdAt,
-          });
+  const fetchItems = async () => {
+    if (!isSubscribed) return;
+    try {
+      const url = `/api/feedback?objectId=${encodeURIComponent(objectId)}&layerId=${encodeURIComponent(layerId)}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (isSubscribed && Array.isArray(data.items)) {
+          onData(data.items);
         }
-      });
-
-      items.sort((a, b) => {
-        const tA = a.createdAt?.toMillis?.() || 0;
-        const tB = b.createdAt?.toMillis?.() || 0;
-        return tB - tA;
-      });
-
-      onData(items);
-    },
-    (err) => {
-      console.warn('Lỗi lắng nghe phản ánh:', err);
-      if (onError) onError(err);
+      } else {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch (err) {
+      if (isSubscribed && onError) {
+        onError(err);
+      }
     }
-  );
+  };
 
-  return unsubscribe;
+  // Immediate fetch
+  fetchItems();
+
+  // Smart Polling interval: 15 seconds while modal is open
+  const intervalId = setInterval(fetchItems, 15000);
+
+  // Poll immediately on window focus
+  const handleFocus = () => {
+    fetchItems();
+  };
+  window.addEventListener('focus', handleFocus);
+
+  return () => {
+    isSubscribed = false;
+    clearInterval(intervalId);
+    window.removeEventListener('focus', handleFocus);
+  };
 }
 
 export async function deleteFeedback(feedbackId: string): Promise<void> {
-  const docRef = doc(db, 'PhanAnh', feedbackId);
-  await deleteDoc(docRef);
+  const res = await fetch('/api/feedback/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feedbackId }),
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || 'Xóa góp ý thất bại');
+  }
 }
 
 export async function updateFeedbackStatus(
   feedbackId: string,
   status: FeedbackStatus
 ): Promise<void> {
-  const docRef = doc(db, 'PhanAnh', feedbackId);
-  await updateDoc(docRef, { TrangThai: status });
+  const res = await fetch('/api/feedback/update-status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feedbackId, status }),
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || 'Cập nhật trạng thái góp ý thất bại');
+  }
 }

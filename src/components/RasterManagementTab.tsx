@@ -1,7 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
-import { ref, listAll, getDownloadURL, getMetadata } from 'firebase/storage';
-import { db, storage } from '../firebase';
 import { RasterLayer, RasterFileItem, LatLngBoundsBox, RasterLoadingStatus, computeCombinedBounds } from '../types';
 import {
   Cloud,
@@ -19,6 +16,7 @@ import {
   Layers,
   Eye,
   EyeOff,
+  Eraser,
 } from 'lucide-react';
 import { parseGeoTiffMetadata } from '../utils/geotiffLoader';
 import { fetchGitHubReleaseAssets } from '../utils/githubRelease';
@@ -74,8 +72,11 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
 
-  // Layer refreshing / deleting state
-  const [refreshingLayerId, setRefreshingLayerId] = useState<string | null>(null);
+  // Layer action state (rescan, reset-bbox, reset-cache)
+  const [activeAction, setActiveAction] = useState<{
+    layerId: string;
+    type: 'rescan' | 'reset-bbox' | 'reset-cache';
+  } | null>(null);
   const [deletingLayerId, setDeletingLayerId] = useState<string | null>(null);
 
   // Notification state
@@ -113,56 +114,43 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
     }
   };
 
-  // Scan files and extract bounding boxes from Firebase Storage
+  // Scan files and extract bounding boxes from Firebase Storage via server
   const scanFirebaseStorage = async (rawPath: string, existingFiles?: RasterFileItem[]) => {
     let cleanPath = rawPath.trim();
-    // Support gs://bucket/path or https://... URLs seamlessly
-    if (cleanPath.startsWith('gs://')) {
-      cleanPath = cleanPath.replace(/^gs:\/\/[^/]+\/?/, '');
-    } else if (cleanPath.includes('firebasestorage.googleapis.com')) {
-      const match = cleanPath.match(/\/o\/([^?#]+)/);
-      if (match) {
-        cleanPath = decodeURIComponent(match[1]);
-      }
-    }
-    cleanPath = cleanPath.replace(/^\/+|\/+$/g, '');
     if (!cleanPath) {
       throw new Error('Vui lòng nhập đường dẫn thư mục trên Firebase Storage.');
     }
 
-    const folderRef = ref(storage, cleanPath);
-    const result = await listAll(folderRef);
-    const rasterItems = result.items.filter((item) => {
-      const n = item.name.toLowerCase();
-      return n.endsWith('.tif') || n.endsWith('.tiff') || n.endsWith('.geotiff');
+    const res = await fetch('/api/storage/scan-firebase', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: cleanPath }),
     });
 
-    if (rasterItems.length === 0) {
-      throw new Error(`Không tìm thấy file GeoTIFF/COG (.tif, .tiff) trong thư mục "${cleanPath}".`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Không tìm thấy file GeoTIFF/COG (.tif, .tiff) trong thư mục "${cleanPath}".`);
     }
 
+    const data = await res.json();
     const existingBoundsMap = new Map((existingFiles || []).map((f) => [f.fileName, f.bounds]));
     const files: RasterFileItem[] = [];
     const boundsList: (LatLngBoundsBox | null)[] = [];
 
-    for (const itemRef of rasterItems) {
-      const url = await getDownloadURL(itemRef);
-      const meta = await getMetadata(itemRef).catch(() => null);
-      const fileSize = meta?.size || 0;
-
+    for (const item of (data.files || [])) {
       let bounds: LatLngBoundsBox | null = null;
       try {
-        const info = await parseGeoTiffMetadata(url);
+        const info = await parseGeoTiffMetadata(item.url);
         if (info && info.bounds) {
           bounds = info.bounds;
         }
       } catch (e) {
-        console.warn(`Không thể trích xuất BBox cho ${itemRef.name}:`, e);
+        console.warn(`Không thể trích xuất BBox cho ${item.fileName}:`, e);
       }
 
       // Preserve previously verified bounds if new scan could not read
-      if (!bounds && existingBoundsMap.has(itemRef.name)) {
-        bounds = (existingBoundsMap.get(itemRef.name) as LatLngBoundsBox) || null;
+      if (!bounds && existingBoundsMap.has(item.fileName)) {
+        bounds = (existingBoundsMap.get(item.fileName) as LatLngBoundsBox) || null;
       }
 
       if (bounds) {
@@ -171,18 +159,18 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       files.push({
         id: `fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        fileName: itemRef.name,
-        url,
-        fileSize,
+        fileName: item.fileName,
+        url: item.url,
+        fileSize: item.fileSize,
         bounds,
         format: 'COG',
-        uploadedAt: meta?.timeCreated || new Date().toISOString(),
+        uploadedAt: item.updatedAt || new Date().toISOString(),
         source: 'firebase',
       });
     }
 
     const combinedBounds = computeCombinedBounds(boundsList);
-    return { cleanPath, files, combinedBounds };
+    return { cleanPath: data.cleanPath || cleanPath, files, combinedBounds };
   };
 
   // Scan files and extract bounding boxes from GitHub Release
@@ -291,21 +279,32 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         }
       }
 
-      const docRef = await addDoc(collection(db, 'raster_layers'), {
-        name: finalName,
-        type: 'COG',
-        source: sourceType,
-        storagePath,
-        githubReleaseUrl,
-        files,
-        bounds: combinedBounds,
-        opacity: 1.0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      const saveRes = await fetch('/api/raster-layers/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layer: {
+            name: finalName,
+            type: 'COG',
+            source: sourceType,
+            storagePath,
+            githubReleaseUrl,
+            files,
+            bounds: combinedBounds,
+            opacity: 1.0,
+            enabled: true,
+          },
+        }),
       });
 
+      if (!saveRes.ok) {
+        const errData = await saveRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Không thể thêm lớp raster.');
+      }
+
+      const saveData = await saveRes.json();
       const newLayer: RasterLayer = {
-        id: docRef.id,
+        id: saveData.layerId || `layer_${Date.now()}`,
         name: finalName,
         type: 'COG',
         source: sourceType,
@@ -339,7 +338,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   const handleRescanLayer = async (layer: RasterLayer, fullScan: boolean = false) => {
     setErrorMessage(null);
     setSuccessMessage(null);
-    setRefreshingLayerId(layer.id);
+    setActiveAction({ layerId: layer.id, type: fullScan ? 'reset-bbox' : 'rescan' });
 
     try {
       let updatedFiles: RasterFileItem[] = [];
@@ -374,10 +373,16 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       // Invalidate cache for refreshed files
       removeCachedRasters(layer.files.map((f) => f.url));
 
-      await updateDoc(doc(db, 'raster_layers', layer.id), {
-        files: updatedFiles,
-        bounds: combinedBounds,
-        updatedAt: new Date().toISOString(),
+      await fetch('/api/raster-layers/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layer: {
+            ...layer,
+            files: updatedFiles,
+            bounds: combinedBounds,
+          },
+        }),
       });
 
       const updated = layers.map((l) =>
@@ -395,13 +400,59 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       saveCachedRasterLayers(updated);
       await setCachedData(CACHE_KEY_RASTER_LAYERS, updated);
       await notifyServerCacheInvalidation('raster_layers');
-      if (onLayersChange) onLayersChange(updated);
-      setSuccessMessage(`Đã quét lại lớp "${layer.name}" (${updatedFiles.length} tệp)`);
+      const countWithBounds = updatedFiles.filter((f) => !!f.bounds).length;
+      if (fullScan) {
+        setSuccessMessage(`Đã reset BBox lớp "${layer.name}": ${countWithBounds}/${updatedFiles.length} tệp có toạ độ BBox.`);
+      } else {
+        setSuccessMessage(`Đã quét cập nhật lớp "${layer.name}": ${countWithBounds}/${updatedFiles.length} tệp có toạ độ BBox.`);
+      }
     } catch (err: any) {
       console.error('Error rescanning layer:', err);
       setErrorMessage(err.message || 'Không thể quét lại lớp raster.');
     } finally {
-      setRefreshingLayerId(null);
+      setActiveAction(null);
+    }
+  };
+
+  // Handle Reset Cache for a layer (both client browser and server disk cache)
+  const handleResetLayerCache = async (layer: RasterLayer) => {
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setActiveAction({ layerId: layer.id, type: 'reset-cache' });
+
+    try {
+      const urls = (layer.files || []).map((f) => f.url).filter(Boolean);
+
+      // 1. Invalidate client-side Browser Cache API & IndexedDB
+      if (urls.length > 0) {
+        await removeCachedRasters(urls);
+      }
+
+      // 2. Call server endpoint to delete cached .tif files from /tmp/raster_cache
+      if (urls.length > 0) {
+        try {
+          await fetch('/api/raster-layers/clear-file-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls }),
+          });
+        } catch (serverErr) {
+          console.warn('Could not clear server disk cache for raster:', serverErr);
+        }
+      }
+
+      // 3. Notify server cache invalidation & trigger refresh
+      await notifyServerCacheInvalidation('raster_layers');
+      if (onLayersChange) {
+        onLayersChange([...layers]);
+      }
+
+      setSuccessMessage(`Đã reset toàn bộ cache của lớp "${layer.name}" (trình duyệt & máy chủ).`);
+    } catch (err: any) {
+      console.error('Error resetting raster cache:', err);
+      setErrorMessage(err.message || 'Không thể xóa cache của lớp raster.');
+    } finally {
+      setActiveAction(null);
     }
   };
 
@@ -409,9 +460,10 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   const handleToggleEnabled = async (layer: RasterLayer) => {
     const nextState = layer.enabled === false ? true : false;
     try {
-      await updateDoc(doc(db, 'raster_layers', layer.id), {
-        enabled: nextState,
-        updatedAt: new Date().toISOString(),
+      await fetch('/api/raster-layers/update-enabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ layerId: layer.id, enabled: nextState }),
       });
 
       const updated = layers.map((l) => (l.id === layer.id ? { ...l, enabled: nextState } : l));
@@ -435,9 +487,17 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
     }
 
     try {
-      await updateDoc(doc(db, 'raster_layers', layerId), {
-        name: trimmed,
-        updatedAt: new Date().toISOString(),
+      const targetLayer = layers.find((l) => l.id === layerId);
+      await fetch('/api/raster-layers/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layer: {
+            ...targetLayer,
+            id: layerId,
+            name: trimmed,
+          },
+        }),
       });
 
       const updated = layers.map((l) => (l.id === layerId ? { ...l, name: trimmed } : l));
@@ -461,7 +521,11 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
     setDeletingLayerId(layer.id);
     try {
-      await deleteDoc(doc(db, 'raster_layers', layer.id));
+      await fetch('/api/raster-layers/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: layer.id }),
+      });
       removeCachedRasters(layer.files.map((f) => f.url));
 
       const updated = layers.filter((l) => l.id !== layer.id);
@@ -613,7 +677,10 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         ) : (
           layers.map((layer) => {
             const isEditing = editingLayerId === layer.id;
-            const isRefreshing = refreshingLayerId === layer.id;
+            const isAnyActionRunning = activeAction?.layerId === layer.id;
+            const isRescanning = activeAction?.layerId === layer.id && activeAction?.type === 'rescan';
+            const isResettingBbox = activeAction?.layerId === layer.id && activeAction?.type === 'reset-bbox';
+            const isResettingCache = activeAction?.layerId === layer.id && activeAction?.type === 'reset-cache';
             const isDeleting = deletingLayerId === layer.id;
 
             const totalSize = (layer.files || []).reduce((acc, f) => acc + (f.fileSize || 0), 0);
@@ -705,6 +772,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                   <div className="flex items-center gap-1 shrink-0">
                     <button
                       onClick={() => handleToggleEnabled(layer)}
+                      disabled={isAnyActionRunning || isDeleting}
                       className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
                         isEnabled
                           ? 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
@@ -716,38 +784,43 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
                     </button>
                     <button
                       onClick={() => handleRescanLayer(layer, false)}
-                      disabled={isRefreshing}
-                      className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                      disabled={isAnyActionRunning || isDeleting}
+                      className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                       title="Quét cập nhật (Giữ nguyên BBox hiện có)"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
+                      <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin text-blue-600' : ''}`} />
                     </button>
                     <button
-                      onClick={() => {
-                        if (window.confirm('Xác nhận quét lại toàn bộ (Reset)? Thao tác này sẽ xóa mọi BBox cũ và quét lại từ đầu.')) {
-                          handleRescanLayer(layer, true);
-                        }
-                      }}
-                      disabled={isRefreshing}
-                      className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                      onClick={() => handleRescanLayer(layer, true)}
+                      disabled={isAnyActionRunning || isDeleting}
+                      className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                       title="Quét mới toàn bộ (Reset BBox)"
                     >
-                      <RotateCcw className="w-3.5 h-3.5" />
+                      <RotateCcw className={`w-3.5 h-3.5 ${isResettingBbox ? 'animate-spin text-red-600' : ''}`} />
+                    </button>
+                    <button
+                      onClick={() => handleResetLayerCache(layer)}
+                      disabled={isAnyActionRunning || isDeleting}
+                      className="p-1.5 text-slate-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                      title="Reset Cache"
+                    >
+                      <Eraser className={`w-3.5 h-3.5 ${isResettingCache ? 'animate-spin text-purple-600' : ''}`} />
                     </button>
                     <button
                       onClick={() => {
                         setEditingLayerId(layer.id);
                         setEditingName(layer.name);
                       }}
-                      className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                      disabled={isAnyActionRunning || isDeleting}
+                      className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                       title="Đổi tên"
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => handleDeleteLayer(layer)}
-                      disabled={isDeleting}
-                      className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                      disabled={isAnyActionRunning || isDeleting}
+                      className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                       title="Xóa"
                     >
                       {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-red-500" /> : <Trash2 className="w-3.5 h-3.5" />}

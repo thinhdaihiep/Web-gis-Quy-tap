@@ -20,7 +20,7 @@ service cloud.firestore {
     }
 
     function isValidFeature(data) {
-      return ('id' in data && data.id is string && data.id.size() <= 128)
+      return ('id' in data && ((data.id is string && data.id.size() <= 128) || data.id is int || data.id is float))
         && (!('layerId' in data) || (data.layerId is string && data.layerId.size() <= 128))
         && (!('type' in data) || (data.type is string && data.type.size() <= 64))
         && (!('coordinates' in data) || (data.coordinates is string && data.coordinates.size() <= 2097152) || data.coordinates is list)
@@ -86,7 +86,12 @@ service cloud.firestore {
       allow update, delete: if isValidId(feedbackId);
     }
 
-    // 8. Global default deny for any other collections
+    // 8. System background tasks state
+    match /system_tasks/{taskId} {
+      allow read, write: if isValidId(taskId);
+    }
+
+    // 9. Global default deny for any other collections
     match /{document=**} {
       allow read: if true;
       allow write: if false;

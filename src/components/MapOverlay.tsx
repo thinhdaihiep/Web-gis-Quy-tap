@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React from 'react';
 import { BaseMapType, RasterLayer } from '../types';
-import { Map, Satellite, Plus, Minus, LocateFixed, Loader2, Mountain, Layers, ListFilter, Check } from 'lucide-react';
+import { Map, Satellite, Plus, Minus, LocateFixed, Loader2, Mountain } from 'lucide-react';
 
 interface MapOverlayProps {
   currentBaseMap: BaseMapType;
@@ -32,26 +32,6 @@ export const MapOverlay: React.FC<MapOverlayProps> = ({
   isLocating = false,
   currentRole = 'guest',
 }) => {
-  const [isRasterMenuOpen, setIsRasterMenuOpen] = useState(false);
-  const rasterMenuRef = useRef<HTMLDivElement>(null);
-
-  // Close raster menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
-      if (rasterMenuRef.current && !rasterMenuRef.current.contains(e.target as Node)) {
-        setIsRasterMenuOpen(false);
-      }
-    };
-    if (isRasterMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('touchstart', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('touchstart', handleClickOutside);
-    };
-  }, [isRasterMenuOpen]);
-
   const canAccessFirebase = currentRole === 'admin' || currentRole === 'editor';
   const accessibleLayers = rasterLayers.filter((l) => {
     if (l.enabled === false) return false;
@@ -63,69 +43,43 @@ export const MapOverlay: React.FC<MapOverlayProps> = ({
   return (
     <div className="absolute top-4 right-4 z-[500] flex items-start gap-2 pointer-events-none">
       {/* 1. Điều khiển lớp Raster: Nằm bên trái thanh bản đồ nền */}
-      <div className="relative pointer-events-auto" ref={rasterMenuRef}>
-        <div className="bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-slate-200/90 flex items-center gap-1">
+      <div className="pointer-events-auto">
+        <div className="bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-2xl shadow-xl border border-slate-200/90 flex items-center gap-2">
           {/* Checkbox bật/tắt hiển thị lớp Raster */}
           <label
-            className="flex items-center gap-1 cursor-pointer select-none px-1.5 py-1 rounded-xl hover:bg-slate-100 transition shrink-0"
+            className="flex items-center cursor-pointer select-none"
             title={isRasterVisible ? 'Ẩn lớp raster' : 'Hiện lớp raster'}
           >
             <input
               type="checkbox"
               checked={isRasterVisible}
               onChange={(e) => onToggleRasterVisibility(e.target.checked)}
-              className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+              className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer shrink-0"
             />
-            <Layers className={`w-4 h-4 ${isRasterVisible ? 'text-blue-600' : 'text-slate-500'}`} />
           </label>
 
-          {/* Nút Icon chọn lớp Raster */}
-          <button
-            type="button"
-            onClick={() => setIsRasterMenuOpen(!isRasterMenuOpen)}
+          {/* Combobox chọn lớp Raster trực tiếp trên bản đồ */}
+          <select
+            value={activeRasterLayerId || (accessibleLayers.length > 0 ? accessibleLayers[0].id : '')}
+            onChange={(e) => {
+              if (onRasterChange) onRasterChange(e.target.value);
+              if (!isRasterVisible) onToggleRasterVisibility(true);
+            }}
             disabled={accessibleLayers.length === 0}
-            className={`p-1.5 rounded-xl transition cursor-pointer flex items-center justify-center ${
-              isRasterMenuOpen
-                ? 'bg-blue-600 text-white shadow-xs'
-                : accessibleLayers.length === 0
-                ? 'text-slate-300 cursor-not-allowed'
-                : isRasterVisible
-                ? 'text-blue-600 hover:bg-slate-100'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-            title="Chọn lớp raster"
+            className="text-xs bg-transparent border-none text-slate-800 font-semibold focus:outline-hidden cursor-pointer py-0.5 pl-0 pr-4 max-w-[130px] sm:max-w-[200px] truncate"
+            title="Chọn lớp bản đồ Raster"
           >
-            <ListFilter className="w-4 h-4" />
-          </button>
+            {accessibleLayers.length === 0 ? (
+              <option value="">(Chưa có raster)</option>
+            ) : (
+              accessibleLayers.map((layer) => (
+                <option key={layer.id} value={layer.id}>
+                  {layer.name}
+                </option>
+              ))
+            )}
+          </select>
         </div>
-
-        {/* Dropdown Menu dạng popup nổi chọn lớp raster */}
-        {isRasterMenuOpen && accessibleLayers.length > 0 && (
-          <div className="absolute top-full right-0 mt-2 z-[600] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200/90 py-1.5 px-1 min-w-[200px] max-w-[260px] flex flex-col gap-0.5 animate-in fade-in slide-in-from-top-1 pointer-events-auto">
-            {accessibleLayers.map((layer) => {
-              const isSelected = activeRasterLayerId === layer.id;
-              return (
-                <button
-                  key={layer.id}
-                  type="button"
-                  onClick={() => {
-                    if (onRasterChange) onRasterChange(layer.id);
-                    setIsRasterMenuOpen(false);
-                  }}
-                  className={`w-full text-left px-2.5 py-1.5 text-xs rounded-xl flex items-center justify-between gap-2 transition cursor-pointer ${
-                    isSelected
-                      ? 'bg-blue-50 text-blue-700 font-semibold'
-                      : 'text-slate-700 hover:bg-slate-100'
-                  }`}
-                  title={layer.name}
-                >
-                  <span className="truncate">{layer.name}</span>
-                  {isSelected && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
-                </button>
-              );
-            })}
-          </div>
-        )}
       </div>
 
       {/* 2. Cột bên phải: Thanh chọn Bản đồ nền dọc và Nút Zoom/GPS ở dưới */}

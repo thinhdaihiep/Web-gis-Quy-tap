@@ -17,8 +17,6 @@ import { LoginModal } from './components/LoginModal';
 import { SplashScreen } from './components/SplashScreen';
 import { PdfViewerModal } from './components/PdfViewerModal';
 import { WebsiteInfoModal } from './components/WebsiteInfoModal';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from './firebase';
 
 import { DEFAULT_LAYERS, INITIAL_MAP_FEATURES, BaseMapType, LayerConfig, UserRole, AppUser, GeoJsonFeatureItem, DuplicateStrategy, DrawToolMode, MapInteractionMode, RasterLayer, RasterLoadingStatus, LatLngBoundsBox, normalizeBoundsBox } from './types';
 import {
@@ -33,9 +31,10 @@ import {
   deleteFeatureFromFirestore,
   isDemoFeatureId,
   signOutUser,
-  getStoredUser
+  getStoredUser,
+  syncAllCachedDataIfOutdated
 } from './firebaseService';
-import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
+import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch, getFeatureDisplayCode } from './fieldAlias';
 import { OsmItem } from './utils/osmService';
 import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, CheckCircle2, Layers, Loader2 } from 'lucide-react';
 
@@ -182,25 +181,52 @@ export default function App() {
     layerName: '',
   });
 
-  // Lắng nghe realtime số thông báo chưa đọc cho Admin và Editor
+  // Smart Polling: Kiểm tra số lượng thông báo chưa đọc cho Admin và Editor
   useEffect(() => {
     if (effectiveRole !== 'admin' && effectiveRole !== 'editor') {
       setUnreadNotificationCount(0);
       return;
     }
 
-    const q = query(collection(db, 'notifications'), where('read', '==', false));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setUnreadNotificationCount(snapshot.size);
-      },
-      (err) => {
-        console.warn('Firestore unread notifications error:', err);
-      }
-    );
+    let isMounted = true;
 
-    return () => unsubscribe();
+    const fetchUnreadCount = async () => {
+      try {
+        const res = await fetch('/api/notifications/unread-count');
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && typeof data.count === 'number') {
+            setUnreadNotificationCount(data.count);
+          }
+        }
+      } catch (err) {
+        console.warn('Lỗi kiểm tra thông báo:', err);
+      }
+    };
+
+    fetchUnreadCount();
+
+    // Polling định kỳ mỗi 60 giây
+    const intervalId = setInterval(fetchUnreadCount, 60000);
+
+    // Kiểm tra ngay khi người dùng chuyển lại tab (focus / visibility) hoặc khi có thông báo mới
+    const handleFocus = () => fetchUnreadCount();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') fetchUnreadCount();
+    };
+    const handleNotificationUpdated = () => fetchUnreadCount();
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('webgis:notification-updated', handleNotificationUpdated);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('webgis:notification-updated', handleNotificationUpdated);
+    };
   }, [effectiveRole]);
 
   const [isWebsiteInfoModalOpen, setIsWebsiteInfoModalOpen] = useState<boolean>(false);
@@ -842,6 +868,19 @@ export default function App() {
           }
         }
 
+        // Kích hoạt đồng bộ nền thông minh qua Global Sync Registry (không chặn hiển thị UI)
+        syncAllCachedDataIfOutdated({
+          onRasterUpdated: (newRasters) => {
+            setRasterLayers(newRasters);
+          },
+          onFeaturesUpdated: (newFeatures) => {
+            setMapFeatures(newFeatures);
+          },
+          onConfigsUpdated: (newNames) => {
+            setLayers((prev) => prev.map((l) => (newNames[l.id] ? { ...l, name: newNames[l.id] } : l)));
+          },
+        });
+
         setSplashStatusText('Đang nạp và định vị bản đồ...');
       } catch (e) {
         console.warn('Lỗi nạp CSDL:', e);
@@ -850,6 +889,18 @@ export default function App() {
       }
     }
     initSharedDb();
+  }, []);
+
+  // Lắng nghe sự kiện cập nhật lớp raster nền từ luồng đối soát ngầm
+  useEffect(() => {
+    const handleRasterUpdate = (e: any) => {
+      const freshLayers = e.detail;
+      if (Array.isArray(freshLayers)) {
+        setRasterLayers(freshLayers);
+      }
+    };
+    window.addEventListener('webgis:raster-layers-updated', handleRasterUpdate);
+    return () => window.removeEventListener('webgis:raster-layers-updated', handleRasterUpdate);
   }, []);
 
   // Sync state to local storage backup whenever mapFeatures changes
@@ -986,6 +1037,37 @@ export default function App() {
     // Ensure left sidebar opens so user sees the active target layer
     setIsLeftSidebarOpen(true);
   };
+
+  const handleBatchUpdateFeatures = useCallback((featuresToUpdate: GeoJsonFeatureItem[]) => {
+    if (!featuresToUpdate || featuresToUpdate.length === 0) return;
+
+    setMapFeatures((prev) => {
+      const updateMap = new Map<string, GeoJsonFeatureItem>();
+      featuresToUpdate.forEach((f) => {
+        updateMap.set(String(f.id), f);
+        const uKey = getItemUniqueKey(f);
+        if (uKey) updateMap.set(uKey, f);
+      });
+
+      const nextList = prev.map((item) => {
+        const found = updateMap.get(String(item.id)) || updateMap.get(getItemUniqueKey(item));
+        return found ? found : item;
+      });
+
+      const dedupedList = deduplicateFeaturesList(nextList);
+
+      try {
+        localStorage.setItem('gis_local_map_features', JSON.stringify(dedupedList));
+      } catch (_) {}
+
+      // Background persist batch to Firestore
+      saveImportedFeaturesToFirestore(featuresToUpdate).catch((err) => {
+        console.warn('Lỗi đồng bộ tự động đặt tên theo đợt lên Firestore:', err);
+      });
+
+      return dedupedList;
+    });
+  }, []);
 
   // GPS Location & Cursor Position state
   const [isLocating, setIsLocating] = useState<boolean>(false);
@@ -2206,11 +2288,13 @@ export default function App() {
         defaultTab={databaseManagementActiveTab}
         layers={layers}
         existingFeatures={mapFeatures}
+        currentUser={user}
         onImportConfirm={handleImportConfirm}
         onAliasesUpdated={handleAliasesUpdated}
         onRasterLayersUpdated={handleRasterLayersUpdated}
         onSelectAndFlyToRaster={handleFlyToRaster}
         rasterStatus={rasterStatus}
+        onBatchUpdateFeatures={handleBatchUpdateFeatures}
       />
 
       {isNotificationModalOpen && (
@@ -2281,7 +2365,7 @@ export default function App() {
           </div>
           
           <p className="text-[12px] text-slate-300 leading-snug">
-            Thao tác <strong className="text-amber-200">{syncError.type === 'save' ? 'Lưu' : 'Xóa'}</strong> đối tượng <b className="text-white">{syncError.feature.name || syncError.feature.id}</b> đã hoàn thành nhưng gặp sự cố kết nối Firebase.
+            Thao tác <strong className="text-amber-200">{syncError.type === 'save' ? 'Lưu' : 'Xóa'}</strong> đối tượng <b className="text-white">{syncError.feature.name || getFeatureDisplayCode(syncError.feature)}</b> đã hoàn thành nhưng gặp sự cố kết nối Firebase.
           </p>
 
           <div className="flex items-center justify-end gap-2 pt-1">

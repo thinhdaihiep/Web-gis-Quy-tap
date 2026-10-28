@@ -15,7 +15,7 @@ import {
   Loader2,
   AlertTriangle,
 } from 'lucide-react';
-import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
+import { getFieldAlias, sortPropertyRows, isFieldHidden, getFeatureDisplayCode } from '../fieldAlias';
 import { cleanShapeProperties, isShapeProperty } from '../utils/shapeFieldUtils';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
 
@@ -458,9 +458,13 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
               <h3 className="font-bold text-sm text-slate-100 leading-tight flex items-center gap-2">
                 <span>Bảng cập nhật Thuộc tính đối tượng</span>
               </h3>
-              <p className="text-[11px] text-slate-400">
-                Hình học: <span className="font-bold text-amber-300">{feature.type}</span> | ID:{' '}
-                <span className="font-mono text-slate-300">{feature.id || 'Tạo mới'}</span>
+              <p className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                <span className="font-bold text-amber-300">{feature.type}</span>
+                <span>•</span>
+                <span>Mã:</span>
+                <span className="font-mono font-bold text-slate-200 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+                  {getFeatureDisplayCode(feature) || 'Mới'}
+                </span>
               </p>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import proj4, { convertAnyBBoxTo4326 } from './projections';
-import { getRasterProxyUrl } from './rasterCache';
+import { getRasterProxyUrl, isGithubUrl } from './rasterCache';
 import { LatLngBoundsBox } from '../types';
 
 export interface WorldFileTFW {
@@ -50,14 +50,14 @@ export function parseTFWContent(content: string): WorldFileTFW | null {
 }
 
 /**
- * Robust fetch for .tfw files trying backend proxy first to avoid any CORS errors
+ * Robust fetch for .tfw files using backend proxy for GitHub URLs to avoid any CORS errors
  */
 export async function fetchTFWText(url: string): Promise<string> {
-  const urlsToTry = [
-    url,
-    getRasterProxyUrl(url),
-    `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  ];
+  const isGithub = isGithubUrl(url);
+  const proxyUrl = getRasterProxyUrl(url);
+  const urlsToTry = isGithub
+    ? [proxyUrl]
+    : (proxyUrl !== url ? [url, proxyUrl] : [url]);
 
   let lastError: any = null;
   for (const targetUrl of urlsToTry) {

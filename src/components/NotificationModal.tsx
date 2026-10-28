@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   X,
   Bell,
@@ -10,8 +10,6 @@ import {
   Navigation,
   Clock,
 } from 'lucide-react';
-import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { Notification } from '../notificationService';
 
 interface NotificationModalProps {
@@ -27,31 +25,56 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 }) => {
   const [notifications, setNotifications] = useState<(Notification & { id: string })[]>([]);
 
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const res = await fetch('/api/notifications');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.notifications)) {
+          setNotifications(data.notifications);
+        }
+      }
+    } catch (err) {
+      console.warn('Error fetching notifications:', err);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isOpen) return;
 
-    const q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const items = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        } as Notification & { id: string }));
-        setNotifications(items);
-      },
-      (error) => {
-        console.warn('Firestore notification stream:', error?.message || error);
-      }
-    );
+    fetchNotifications();
 
-    return () => unsubscribe();
-  }, [isOpen]);
+    // Smart Polling: every 15s while modal is active
+    const timer = setInterval(fetchNotifications, 15000);
+
+    const handleFocus = () => {
+      fetchNotifications();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [isOpen, fetchNotifications]);
 
   const markAsRead = async (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     try {
-      await updateDoc(doc(db, 'notifications', id), { read: true });
+      // Optimistic UI update
+      setNotifications((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, read: true } : item))
+      );
+
+      await fetch('/api/notifications/mark-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('webgis:notification-updated'));
+      }
     } catch (err) {
       console.error('Lỗi khi đánh dấu đã đọc:', err);
     }
@@ -60,7 +83,18 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
   const deleteNotification = async (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     try {
-      await deleteDoc(doc(db, 'notifications', id));
+      // Optimistic UI update
+      setNotifications((prev) => prev.filter((item) => item.id !== id));
+
+      await fetch('/api/notifications/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('webgis:notification-updated'));
+      }
     } catch (err) {
       console.error('Lỗi khi xóa thông báo:', err);
     }
@@ -73,6 +107,22 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     if (onSelectNotification) {
       onSelectNotification(n);
     }
+  };
+
+  const formatTimestamp = (createdAt: any): string => {
+    if (!createdAt) return '';
+    try {
+      if (typeof createdAt === 'string') {
+        return new Date(createdAt).toLocaleString('vi-VN');
+      }
+      if (typeof createdAt?.toDate === 'function') {
+        return createdAt.toDate().toLocaleString('vi-VN');
+      }
+      if (typeof createdAt === 'number') {
+        return new Date(createdAt).toLocaleString('vi-VN');
+      }
+    } catch (_) {}
+    return '';
   };
 
   if (!isOpen) return null;
@@ -146,7 +196,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                       <div className="flex items-center gap-2 text-[10px] text-slate-400">
                         <span className="inline-flex items-center gap-1">
                           <Clock className="w-3 h-3" />
-                          {n.createdAt?.toDate ? n.createdAt.toDate().toLocaleString('vi-VN') : ''}
+                          {formatTimestamp(n.createdAt)}
                         </span>
                         {hasTarget && (
                           <span className="inline-flex items-center gap-0.5 text-sky-600 font-semibold bg-sky-100 px-1.5 py-0.2 rounded">

@@ -21,6 +21,16 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
+export function isGithubUrl(url: string): boolean {
+  if (!url) return false;
+  return (
+    url.includes('github.com') ||
+    url.includes('githubusercontent.com') ||
+    url.includes('raw.githubusercontent.com') ||
+    url.includes('objects.githubusercontent.com')
+  );
+}
+
 export function getRasterProxyUrl(url: string): string {
   if (!url) return '';
   if (url.startsWith('/api/proxy-raster') || url.startsWith('blob:') || url.startsWith('data:')) {
@@ -218,10 +228,14 @@ export async function fetchRasterWithCache(url: string, onProgress?: (percent: n
   }
 
   // URLs to try in order:
-  // 1. Direct URL first (Direct client-to-CDN download from GitHub Release / Firebase Storage - works on Vercel / serverless)
-  // 2. Express backend proxy (/api/proxy-raster) as fallback if direct fetch fails
+  // - For GitHub Releases/Raw: Direct browser fetch fails 100% due to CORS on redirected S3 blobs.
+  //   Completely bypass direct download and route 100% through Express backend proxy (/api/proxy-raster).
+  // - For other sources (e.g., Firebase Storage with CORS): Try direct URL first, fallback to proxy.
   const proxyUrl = getRasterProxyUrl(url);
-  const urlsToTry = proxyUrl !== url ? [url, proxyUrl] : [url];
+  const isGithub = isGithubUrl(url);
+  const urlsToTry = isGithub
+    ? [proxyUrl]
+    : (proxyUrl !== url ? [url, proxyUrl] : [url]);
 
   let lastError: any = null;
 

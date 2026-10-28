@@ -14,7 +14,7 @@ import {
   Loader2,
   AlertTriangle,
 } from 'lucide-react';
-import { getFieldAlias, sortPropertyRows, isFieldHidden } from '../fieldAlias';
+import { getFieldAlias, sortPropertyRows, isFieldHidden, getFeatureDisplayCode } from '../fieldAlias';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
 import { getSchemaForLayer } from '../FieldSchema';
 import { cleanShapeProperties, isShapeProperty } from '../utils/shapeFieldUtils';
@@ -457,9 +457,13 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
             <h3 className="font-bold text-xs text-slate-100 leading-tight truncate">
               Bảng thuộc tính đối tượng
             </h3>
-            <p className="text-[10px] text-slate-400 truncate">
-              Kiểu: <span className="text-amber-300 font-bold">{feature.type}</span> | ID:{' '}
-              <span className="font-mono">{feature.id}</span>
+            <p className="text-[10px] text-slate-400 truncate flex items-center gap-1.5">
+              <span className="text-amber-300 font-bold">{feature.type}</span>
+              <span>•</span>
+              <span>Mã:</span>
+              <span className="font-mono font-bold text-slate-200 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+                {getFeatureDisplayCode(feature)}
+              </span>
             </p>
           </div>
         </div>

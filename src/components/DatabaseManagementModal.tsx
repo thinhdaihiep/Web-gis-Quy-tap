@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   Database,
   Upload,
@@ -24,9 +24,10 @@ import {
 import proj4 from 'proj4';
 import { RasterManagementTab } from './RasterManagementTab';
 import { UserManagementTab } from './UserManagementTab';
-import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy, RasterLayer, LatLngBoundsBox, RasterLoadingStatus } from '../types';
+import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy, RasterLayer, LatLngBoundsBox, RasterLoadingStatus, AppUser } from '../types';
 import {
   extractObjectId,
+  getFeatureDisplayCode,
   getCustomAliasMap,
   getHiddenFieldsMap,
   saveCustomAliasMap,
@@ -84,17 +85,42 @@ function parseDmsToLatLng(toaDoStr: string): { lat: number; lng: number } | null
   return null;
 }
 
+function computePolygonCentroid(coords: any): { lat: number; lng: number } | null {
+  if (!coords) return null;
+  const pts: Array<[number, number]> = [];
+  const traverse = (arr: any) => {
+    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+      const [x, y] = arr;
+      if (Math.abs(x) > 90 && Math.abs(y) <= 90) pts.push([y, x]);
+      else pts.push([x, y]);
+    } else if (Array.isArray(arr)) {
+      arr.forEach(traverse);
+    }
+  };
+  traverse(coords);
+  if (pts.length === 0) return null;
+  let sumLng = 0;
+  let sumLat = 0;
+  pts.forEach(([lng, lat]) => {
+    sumLng += lng;
+    sumLat += lat;
+  });
+  return { lng: sumLng / pts.length, lat: sumLat / pts.length };
+}
+
 export interface DatabaseManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
   defaultTab?: 'import' | 'export' | 'attributes' | 'raster' | 'users';
   layers: LayerConfig[];
   existingFeatures: GeoJsonFeatureItem[];
+  currentUser?: AppUser | null;
   onImportConfirm: (
     targetLayerId: string,
     importedFeatures: GeoJsonFeatureItem[],
     strategy: DuplicateStrategy
   ) => void;
+  onBatchUpdateFeatures?: (featuresToUpdate: GeoJsonFeatureItem[]) => void;
   onAliasesUpdated?: () => void;
   onRasterLayersUpdated?: (layers: RasterLayer[]) => void;
   onSelectAndFlyToRaster?: (layerId: string, bounds?: LatLngBoundsBox | null) => void;
@@ -107,20 +133,32 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   defaultTab = 'import',
   layers,
   existingFeatures,
+  currentUser,
   onImportConfirm,
+  onBatchUpdateFeatures,
   onAliasesUpdated,
   onRasterLayersUpdated,
   onSelectAndFlyToRaster,
   rasterStatus,
 }) => {
+  const [hasMounted, setHasMounted] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isOpen && !hasMounted) {
+      setHasMounted(true);
+    }
+  }, [isOpen, hasMounted]);
+
   const [activeTab, setActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>(defaultTab);
 
-  // Sync activeTab when defaultTab changes or modal opens
+  // Sync activeTab when defaultTab changes
+  const prevDefaultTabRef = useRef(defaultTab);
   useEffect(() => {
-    if (isOpen) {
+    if (defaultTab !== prevDefaultTabRef.current) {
+      prevDefaultTabRef.current = defaultTab;
       setActiveTab(defaultTab);
     }
-  }, [isOpen, defaultTab]);
+  }, [defaultTab]);
 
   // --- TAB 1: IMPORT STATE ---
   const [selectedLayerId, setSelectedLayerId] = useState<string>(
@@ -137,7 +175,6 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   const [isImportingCommunes, setIsImportingCommunes] = useState<boolean>(false);
   const [communeImportProgress, setCommuneImportProgress] = useState<{ msg: string; percent: number } | null>(null);
   const [communeImportStatus, setCommuneImportStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
   // --- TAB 2: EXPORT STATE ---
   const [selectedExportLayer, setSelectedExportLayer] = useState<string>('all');
   const [prettyPrint, setPrettyPrint] = useState<boolean>(true);
@@ -153,17 +190,19 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   const [newAlias, setNewAlias] = useState<string>('');
   const [aliasSavedSuccess, setAliasSavedSuccess] = useState<boolean>(false);
 
+  const hasInitializedAttributesRef = useRef<boolean>(false);
   useEffect(() => {
-    if (isOpen && activeTab === 'attributes') {
+    if (hasMounted && activeTab === 'attributes' && !hasInitializedAttributesRef.current) {
+      hasInitializedAttributesRef.current = true;
       const initialMap = getCustomAliasMap();
       const initialHiddenMap = getHiddenFieldsMap();
       setDraftMap(initialMap);
       setDraftHiddenMap(initialHiddenMap);
       setRules(getAllAliasRules(initialMap, initialHiddenMap));
     }
-  }, [isOpen, activeTab]);
+  }, [hasMounted, activeTab]);
 
-  if (!isOpen) return null;
+  if (!hasMounted && !isOpen) return null;
 
   const targetLayer = layers.find((l) => l.id === selectedLayerId) || (layers.length > 0 ? layers[0] : null);
 
@@ -416,22 +455,110 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
         type: 'name',
         properties: { name: 'urn:ogc:def:crs:OGC:1.3:CRS84' },
       },
-      features: exportFeatures.map((f) => ({
-        type: 'Feature',
-        id: f.id,
-        geometry: {
-          type: f.type,
-          coordinates: f.coordinates,
-        },
-        properties: {
-          ...f.properties,
-          OBJECTID: f.code || f.properties?.OBJECTID || f.id,
-          Ten: f.name || f.properties?.Ten,
-          PhanLoai: f.status === 'xac_dinh' ? 1 : 2,
-          layerId: f.layerId,
-          updatedAt: f.updatedAt,
-        },
-      })),
+      features: exportFeatures.map((f) => {
+        // Xử lý tọa độ: parse chuỗi JSON nếu lưu dưới dạng string trong Firestore
+        let parsedCoordinates = f.coordinates;
+        if (typeof parsedCoordinates === 'string') {
+          try {
+            parsedCoordinates = JSON.parse(parsedCoordinates);
+          } catch (err) {
+            console.warn(`[Export GeoJSON] Lỗi parse tọa độ đối tượng ${f.id}:`, err);
+          }
+        }
+        parsedCoordinates = convertCoordinatesToWGS84(parsedCoordinates);
+
+        // Lọc bỏ các trường Shape_*, trường nội bộ, trường trạng thái tạm thời
+        const cleanedRawProps = cleanShapeProperties(f.properties || {});
+        const IGNORED_EXPORT_KEYS = new Set([
+          'layerid',
+          'updatedat',
+          '__deleted__',
+          'trangthaimoi',
+          'trang_thai_moi',
+          'trang_thai',
+          '_id',
+          'selected',
+          'highlighted',
+        ]);
+
+        const sanitizedProps: Record<string, any> = {};
+        for (const [key, val] of Object.entries(cleanedRawProps)) {
+          const normKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!IGNORED_EXPORT_KEYS.has(normKey) && !isShapeProperty(key)) {
+            sanitizedProps[key] = val;
+          }
+        }
+
+        // Chuẩn hóa OBJECTID và Ten
+        const objectId = sanitizedProps.OBJECTID ?? f.code ?? f.id;
+        sanitizedProps.OBJECTID = objectId;
+
+        const ten = sanitizedProps.Ten ?? f.name;
+        if (ten !== undefined && ten !== null) {
+          sanitizedProps.Ten = ten;
+        }
+
+        // Bảo tồn nguyên vẹn giá trị Phân loại thực tế (1, 2, 3, 4, 5...) nếu có
+        if (sanitizedProps.PhanLoai !== undefined && sanitizedProps.PhanLoai !== null && sanitizedProps.PhanLoai !== '') {
+          const num = Number(sanitizedProps.PhanLoai);
+          sanitizedProps.PhanLoai = isNaN(num) ? sanitizedProps.PhanLoai : num;
+        }
+
+        // Sắp xếp các trường thuộc tính theo thứ tự logic GIS chuẩn
+        const priorityKeys = [
+          'OBJECTID',
+          'Ten',
+          'PhanLoai',
+          'HienTrang',
+          'Xa',
+          'Huyen',
+          'Tinh',
+          'DiaDanh3C',
+          'TimDuoc',
+          'ChuaThay',
+          'QuyTap',
+          'ThoiGian',
+          'CapNhat',
+          'Nguon',
+          'NguoiSua',
+          'HoSo',
+          'DonVi',
+          'BenTa',
+          'BenDich',
+          'CongTrinh',
+          'GhiChu',
+          'ToaDo',
+          'DiaDiem',
+          'DiaChi',
+          'SoMo',
+          'MoCoTen',
+          'MoVoDanh',
+          'ThanhLap',
+          'DienThoai',
+        ];
+
+        const orderedProps: Record<string, any> = {};
+        for (const key of priorityKeys) {
+          if (key in sanitizedProps) {
+            orderedProps[key] = sanitizedProps[key];
+          }
+        }
+        for (const [key, val] of Object.entries(sanitizedProps)) {
+          if (!(key in orderedProps)) {
+            orderedProps[key] = val;
+          }
+        }
+
+        return {
+          type: 'Feature' as const,
+          id: f.id,
+          geometry: {
+            type: f.type,
+            coordinates: parsedCoordinates,
+          },
+          properties: orderedProps,
+        };
+      }),
     };
 
     const jsonString = prettyPrint
@@ -504,7 +631,12 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   );
 
   return (
-    <div className="fixed inset-0 z-[3000] bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div
+      className={`fixed inset-0 z-[3000] bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto ${
+        isOpen ? '' : 'hidden pointer-events-none'
+      }`}
+      aria-hidden={!isOpen}
+    >
       <div className="bg-white rounded-xl shadow-2xl border border-slate-300 w-full max-w-3xl h-[92vh] max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95">
         {/* Modal Header */}
         <div className="bg-slate-900 text-white p-4 flex justify-between items-center shrink-0 border-b border-slate-800">
@@ -818,7 +950,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
                               {feat.name}
                             </span>
                             <span className="font-mono text-slate-400 text-[10px]">
-                              ({feat.code || feat.id})
+                              ({getFeatureDisplayCode(feat)})
                             </span>
                           </div>
                           <span className="text-slate-500 text-[10px] font-mono shrink-0">

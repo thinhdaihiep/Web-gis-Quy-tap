@@ -1,6 +1,3 @@
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from './firebase';
-
 export interface Notification {
   id?: string;
   title?: string;
@@ -24,20 +21,25 @@ export async function addNotification(
   }
 ) {
   try {
-    const notificationsRef = collection(db, 'notifications');
-    const docData: any = {
+    const payload: any = {
       message,
       type,
-      createdAt: serverTimestamp(),
-      read: false,
     };
-    if (extra?.title) docData.title = extra.title;
-    if (extra?.objectId !== undefined && extra?.objectId !== null) docData.objectId = extra.objectId;
-    if (extra?.layerId) docData.layerId = extra.layerId;
-    if (extra?.feedbackId) docData.feedbackId = extra.feedbackId;
+    if (extra?.title) payload.title = extra.title;
+    if (extra?.objectId !== undefined && extra?.objectId !== null) payload.objectId = extra.objectId;
+    if (extra?.layerId) payload.layerId = extra.layerId;
+    if (extra?.feedbackId) payload.feedbackId = extra.feedbackId;
 
-    await addDoc(notificationsRef, docData);
+    await fetch('/api/notifications/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('webgis:notification-updated'));
+    }
   } catch (error) {
-    console.error('Lỗi khi thêm thông báo vào Firestore:', error);
+    console.error('Lỗi khi thêm thông báo:', error);
   }
 }

@@ -1,6 +1,6 @@
 {
-  "summary": "Kế hoạch hoàn thiện nâng cấp SearchPane thành tìm kiếm 2 Tab (Dữ liệu GIS & OpenStreetMap):\n1. utils/osmService.ts:\n   - Overpass QL chuẩn với out center tags (Node cho place, peak; Way cho waterway, ridge, valley, cemetery).\n   - Server-side regex name~\"từ khóa\",i khi có từ khóa; quét name khi để trống.\n   - Xoay vòng 3 máy chủ đã xác thực (overpass-api.de, overpass.kumi.systems, overpass.private.coffee), timeout 28s, AbortController.\n   - Khử trùng lặp < 50m, xuất chuẩn OsmItem và OsmGroup.\n2. SearchPane.tsx:\n   - Đầu bảng dùng chung: ô nhập, nút X, nút Search có animate-spin.\n   - Thanh 2 tab: Dữ liệu (Database) và Bản đồ (Globe) có đường viền xanh dương.\n   - ComboBox riêng cho từng tab:\n     + Tab 1: Tất cả và 4 lớp GIS.\n     + Tab 2: Tất cả (all), Hành chính (hanh_chinh), Sông núi (song_nui), Nghĩa trang & Di tích (di_tich).\n   - Cơ chế Cache:\n     + Lưu cachedOsmData = { bboxKey, keyword, allElements }.\n     + Kéo/zoom bản đồ: KHÔNG tự quét lại, GIỮ NGUYÊN kết quả cũ.\n     + Đổi ComboBox: lọc client-side tức thì bằng filterOsm.\n     + Chuyển tab: tự động tìm kiếm nếu tab mới chưa có kết quả.\n   - Thẻ kết quả Tab Bản đồ: Card compact với icon nhóm (Home/Mountain/Landmark), tên đậm + (ele), badge kind, tọa độ lat, lng (không khoảng cách).\n   - Cụm nút icon: Navigation (ghim marker nhấp nháy), Copy, MapPin (Google Maps), PlusCircle (Admin/Editor).\n3. App.tsx & AddFeatureModal.tsx:\n   - Truyền mapInstance, quản lý tempOsmLayerGroupRef (xóa sạch khi chọn điểm mới, đổi tab, đóng pane).\n   - Nâng cấp AddFeatureModal nhận initialName, initialLayerId, và markerLocation từ địa danh OSM.",
-  "updatedAt": "2026-10-16T02:06:37.469520068Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Kế hoạch nâng cấp bảo mật thuần Firebase Admin SDK và Kiến trúc Đồng bộ Bộ đệm Toàn diện (Global Metadata Version Registry) cho toàn bộ CSDL (mộ chí, raster, ranh giới xã, cấu hình, bí danh), giúp máy khách nhận biết tức thời và chỉ đồng bộ chính xác dữ liệu có thay đổi.",
+  "updatedAt":  "2026-10-27T00:31:48.542448279Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }

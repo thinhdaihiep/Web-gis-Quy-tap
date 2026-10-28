@@ -5,7 +5,7 @@ import parseGeoraster from 'georaster';
 import GeoRasterLayer from 'georaster-layer-for-leaflet';
 import L from 'leaflet';
 import proj4, { convertAnyBBoxTo4326 } from './projections';
-import { fetchRasterWithCache, getRasterProxyUrl, getCachedRaster } from './rasterCache';
+import { fetchRasterWithCache, getRasterProxyUrl, getCachedRaster, isGithubUrl } from './rasterCache';
 import { LatLngBoundsBox, normalizeBoundsBox } from '../types';
 // @ts-ignore
 import GeoTiffWorker from '../workers/geotiff.worker?worker';
@@ -93,7 +93,7 @@ export async function parseGeoTiffMetadata(input: ArrayBuffer | File | Blob | st
       }
     } catch (_) {}
 
-    const isGithub = input.includes('github.com') || input.includes('githubusercontent.com');
+    const isGithub = isGithubUrl(input);
 
     // 1. Direct Range Request via geotiff.js (Only for non-GitHub URLs like Firebase Storage that support direct CORS)
     if (!isGithub) {

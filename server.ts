@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -7,8 +10,9 @@ import { createServer as createViteServer } from 'vite';
 import { fromUrl, fromArrayBuffer } from 'geotiff';
 import proj4 from 'proj4';
 import bcrypt from 'bcryptjs';
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { initializeApp as initAdminApp, cert, type App as AdminApp, getApps as getAdminApps, getApp as getAdminApp } from 'firebase-admin/app';
+import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getStorage as getAdminStorage } from 'firebase-admin/storage';
 
 // Server-side cache directory for downloaded raster files
 const RASTER_CACHE_DIR = path.join('/tmp', 'raster_cache');
@@ -76,15 +80,179 @@ function convertBBox(minX: number, minY: number, maxX: number, maxY: number, eps
   return { south, west, north, east };
 }
 
-let serverDb: any = null;
+// =========================================================================
+// Pure Firebase Admin SDK Initialization (100% Server Administrative Access)
+// =========================================================================
+let adminApp: AdminApp | null = null;
+let adminDb: any = null;
+let adminInitError: string | null = null;
 
-// Function to automatically seed initial Admin account if none exists
-async function seedDefaultAdmin() {
-  if (!serverDb) return;
+function formatFirebasePrivateKey(key: string): string {
+  let cleaned = key.trim();
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  cleaned = cleaned.replace(/\\n/g, '\n');
+  if (!cleaned.includes('-----BEGIN PRIVATE KEY-----')) {
+    cleaned = `-----BEGIN PRIVATE KEY-----\n${cleaned}\n-----END PRIVATE KEY-----\n`;
+  }
+  return cleaned;
+}
+
+try {
+  const rawKey = process.env.FIREBASE_PRIVATE_KEY || process.env.firebase_private_key;
+  if (rawKey && rawKey.trim()) {
+    const formattedKey = formatFirebasePrivateKey(rawKey);
+    const projectId = 'alien-repeater-wn50x';
+    const clientEmail = 'firebase-adminsdk-fbsvc@alien-repeater-wn50x.iam.gserviceaccount.com';
+    const databaseId = 'ai-studio-hthngwebgistmkim-aaf22399-a445-427d-9141-71aeb2891a9b';
+
+    const existingApps = getAdminApps();
+    adminApp = existingApps.length > 0 ? getAdminApp() : initAdminApp(
+      {
+        credential: cert({
+          projectId,
+          clientEmail,
+          privateKey: formattedKey,
+        }),
+      }
+    );
+
+    adminDb = getAdminFirestore(adminApp, databaseId);
+    console.log('[Server] Firebase Admin SDK initialized successfully (100% Pure Admin SDK)');
+  } else {
+    console.warn('[Server] FIREBASE_PRIVATE_KEY is missing! Admin SDK cannot be initialized.');
+  }
+} catch (adminErr: any) {
+  adminInitError = adminErr?.message || String(adminErr);
+  console.warn('[Server] Cannot initialize Firebase Admin SDK:', adminErr);
+}
+
+// Global Sync Registry Interface & State
+export interface SyncRegistryData {
+  featuresVersion: number;
+  featuresUpdatedAt: string;
+  rasterVersion: number;
+  rasterUpdatedAt: string;
+  communesVersion: number;
+  communesUpdatedAt: string;
+  configsVersion: number;
+  configsUpdatedAt: string;
+  aliasesVersion: number;
+  aliasesUpdatedAt: string;
+}
+
+let cachedSyncRegistry: SyncRegistryData | null = null;
+let lastSyncRegistryFetch = 0;
+
+async function getSyncRegistry(): Promise<SyncRegistryData> {
+  const now = Date.now();
+  if (cachedSyncRegistry && now - lastSyncRegistryFetch < 3000) {
+    return cachedSyncRegistry;
+  }
+  if (!adminDb) {
+    return {
+      featuresVersion: 1,
+      featuresUpdatedAt: new Date().toISOString(),
+      rasterVersion: 1,
+      rasterUpdatedAt: new Date().toISOString(),
+      communesVersion: 1,
+      communesUpdatedAt: new Date().toISOString(),
+      configsVersion: 1,
+      configsUpdatedAt: new Date().toISOString(),
+      aliasesVersion: 1,
+      aliasesUpdatedAt: new Date().toISOString(),
+    };
+  }
+
   try {
-    const snap = await getDocs(collection(serverDb, 'users'));
+    const docRef = adminDb.collection('app_settings').doc('sync_registry');
+    const docSnap = await docRef.get();
+    if (docSnap.exists) {
+      const data = docSnap.data();
+      cachedSyncRegistry = {
+        featuresVersion: Number(data.featuresVersion) || 1,
+        featuresUpdatedAt: data.featuresUpdatedAt || new Date().toISOString(),
+        rasterVersion: Number(data.rasterVersion) || 1,
+        rasterUpdatedAt: data.rasterUpdatedAt || new Date().toISOString(),
+        communesVersion: Number(data.communesVersion) || 1,
+        communesUpdatedAt: data.communesUpdatedAt || new Date().toISOString(),
+        configsVersion: Number(data.configsVersion) || 1,
+        configsUpdatedAt: data.configsUpdatedAt || new Date().toISOString(),
+        aliasesVersion: Number(data.aliasesVersion) || 1,
+        aliasesUpdatedAt: data.aliasesUpdatedAt || new Date().toISOString(),
+      };
+    } else {
+      const initial: SyncRegistryData = {
+        featuresVersion: 1,
+        featuresUpdatedAt: new Date().toISOString(),
+        rasterVersion: 1,
+        rasterUpdatedAt: new Date().toISOString(),
+        communesVersion: 1,
+        communesUpdatedAt: new Date().toISOString(),
+        configsVersion: 1,
+        configsUpdatedAt: new Date().toISOString(),
+        aliasesVersion: 1,
+        aliasesUpdatedAt: new Date().toISOString(),
+      };
+      await docRef.set(initial);
+      cachedSyncRegistry = initial;
+    }
+    lastSyncRegistryFetch = now;
+    return cachedSyncRegistry;
+  } catch (err) {
+    console.warn('[SyncRegistry] Lỗi đọc sync_registry:', err);
+    return cachedSyncRegistry || {
+      featuresVersion: 1,
+      featuresUpdatedAt: new Date().toISOString(),
+      rasterVersion: 1,
+      rasterUpdatedAt: new Date().toISOString(),
+      communesVersion: 1,
+      communesUpdatedAt: new Date().toISOString(),
+      configsVersion: 1,
+      configsUpdatedAt: new Date().toISOString(),
+      aliasesVersion: 1,
+      aliasesUpdatedAt: new Date().toISOString(),
+    };
+  }
+}
+
+async function bumpSyncVersion(type: 'features' | 'raster' | 'configs' | 'aliases' | 'communes') {
+  if (!adminDb) return;
+  const now = new Date().toISOString();
+  try {
+    const current = await getSyncRegistry();
+    const versionKey = `${type}Version` as keyof SyncRegistryData;
+    const updatedKey = `${type}UpdatedAt` as keyof SyncRegistryData;
+    const nextVersion = ((current[versionKey] as number) || 1) + 1;
+
+    const updates = {
+      [versionKey]: nextVersion,
+      [updatedKey]: now,
+    };
+
+    await adminDb.collection('app_settings').doc('sync_registry').set(updates, { merge: true });
+    if (cachedSyncRegistry) {
+      (cachedSyncRegistry as any)[versionKey] = nextVersion;
+      (cachedSyncRegistry as any)[updatedKey] = now;
+      lastSyncRegistryFetch = Date.now();
+    }
+    console.log(`[SyncRegistry] Đã nhảy phiên bản ${type} -> v${nextVersion}`);
+  } catch (err) {
+    console.error(`[SyncRegistry] Lỗi nhảy phiên bản ${type}:`, err);
+  }
+}
+
+// Function to automatically seed initial Admin account if none exists using Admin SDK
+async function seedDefaultAdmin() {
+  if (!adminDb) return;
+  try {
+    const snap = await adminDb.collection('users').get();
     let hasAdmin = false;
-    snap.forEach((docSnap) => {
+    snap.docs.forEach((docSnap: any) => {
       const data = docSnap.data();
       if (data.role === 'admin' || (data.username && data.username.toLowerCase() === 'admin')) {
         hasAdmin = true;
@@ -101,30 +269,20 @@ async function seedDefaultAdmin() {
         password: hashedPassword,
         createdAt: new Date().toISOString(),
       };
-      await setDoc(doc(serverDb, 'users', 'user_admin'), adminDoc);
+      await adminDb.collection('users').doc('user_admin').set(adminDoc);
       console.log('----------------------------------------------------');
-      console.log('[Security Seed] Đã tự động tạo tài khoản admin mặc định:');
+      console.log('[Security Seed] Đã tự động tạo tài khoản admin mặc định (Admin SDK):');
       console.log(`[Security Seed] Username: admin`);
       console.log(`[Security Seed] Mật khẩu ban đầu: ${defaultPassword}`);
       console.log('----------------------------------------------------');
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error('[Security Seed] Lỗi khởi tạo admin mặc định:', err);
   }
 }
 
-try {
-  const cfgPath = path.join(process.cwd(), 'firebase-applet-config.json');
-  if (fs.existsSync(cfgPath)) {
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-    const fbApp = getApps().length > 0 ? getApp() : initializeApp(cfg);
-    serverDb = getFirestore(fbApp, cfg.firestoreDatabaseId);
-    console.log('[Server] Firebase Firestore initialized successfully');
-    seedDefaultAdmin();
-  }
-} catch (e) {
-  console.warn('[Server] Cannot initialize Firebase Firestore:', e);
-}
+// Execute seedDefaultAdmin
+seedDefaultAdmin();
 
 // Dynamic session tokens for active admin and editor sessions (Zero-Config authentication)
 interface ActiveSession {
@@ -239,6 +397,44 @@ async function startServer() {
   const PORT = process.env.NODE_ENV === 'production' && process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   app.use(express.json({ limit: '50mb' }));
+
+  // Status endpoint for Pure Firebase Admin SDK
+  app.get('/api/admin/firebase-status', (req, res) => {
+    res.json({
+      adminSdkActive: Boolean(adminDb),
+      keyDetected: Boolean(process.env.FIREBASE_PRIVATE_KEY || process.env.firebase_private_key),
+      error: adminInitError,
+      projectId: 'alien-repeater-wn50x',
+      databaseId: 'ai-studio-hthngwebgistmkim-aaf22399-a445-427d-9141-71aeb2891a9b',
+      serverMode: '100% Pure Firebase Admin SDK',
+    });
+  });
+
+  // Global Sync Registry endpoint (Client checks versions to sync selectively)
+  app.get('/api/sync/versions', async (req, res) => {
+    try {
+      const registry = await getSyncRegistry();
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.json({ success: true, versions: registry });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Lỗi đọc sync_registry' });
+    }
+  });
+
+  // Bump sync version manually (usable by dev server scripts or admin actions)
+  app.post('/api/sync/bump', requireEditorOrAdmin, async (req, res) => {
+    try {
+      const { type } = req.body || {};
+      if (!type || !['features', 'raster', 'configs', 'aliases', 'communes'].includes(type)) {
+        return res.status(400).json({ error: 'Loại dữ liệu không hợp lệ (features, raster, configs, aliases, communes)' });
+      }
+      await bumpSyncVersion(type as any);
+      const updated = await getSyncRegistry();
+      res.json({ success: true, updatedVersions: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Lỗi cập nhật phiên bản' });
+    }
+  });
 
   // ==========================================
   // OPENSTREETMAP SERVER PROXY & CACHE API
@@ -1036,17 +1232,17 @@ async function startServer() {
     }
   });
 
-  // User Management APIs (Direct Server-side Firestore Access)
+  // User Management APIs (100% Pure Firebase Admin SDK Access)
   app.get('/api/users', async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
-      const snap = await getDocs(collection(serverDb, 'users'));
+      const snap = await adminDb.collection('users').get();
       const userList: any[] = [];
       const seenUsernames = new Set<string>();
 
-      snap.forEach((docSnap) => {
+      snap.docs.forEach((docSnap: any) => {
         const data = docSnap.data();
         const uname = (data.username || data.email || '').trim();
         const unameLower = uname.toLowerCase();
@@ -1083,11 +1279,11 @@ async function startServer() {
     }
   });
 
-  // Secure Server-side Login endpoint using bcrypt
+  // Secure Server-side Login endpoint using bcrypt & Admin SDK
   app.post('/api/login', async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { username, password } = req.body;
       if (!username || !password) {
@@ -1096,7 +1292,7 @@ async function startServer() {
       const cleanUser = String(username).trim().toLowerCase();
       const cleanPass = String(password).trim();
 
-      const snap = await getDocs(collection(serverDb, 'users'));
+      const snap = await adminDb.collection('users').get();
       let matchedUser: any = null;
 
       for (const docSnap of snap.docs) {
@@ -1113,7 +1309,7 @@ async function startServer() {
             isValid = storedHash === cleanPass;
             if (isValid) {
               const newHash = await bcrypt.hash(cleanPass, 10);
-              await updateDoc(doc(serverDb, 'users', docSnap.id), { password: newHash });
+              await adminDb.collection('users').doc(docSnap.id).update({ password: newHash });
             }
           }
 
@@ -1163,11 +1359,11 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Create user (protected by requireAdmin, passwords hashed with bcrypt)
+  // Create user (protected by requireAdmin, passwords hashed with bcrypt, via Admin SDK)
   app.post('/api/users', requireAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { username, password, displayName, role } = req.body;
       if (!username || !password) {
@@ -1184,7 +1380,7 @@ async function startServer() {
         role: role || 'editor',
         createdAt: new Date().toISOString(),
       };
-      await setDoc(doc(serverDb, 'users', docId), newUserDoc);
+      await adminDb.collection('users').doc(docId).set(newUserDoc);
       res.json({
         success: true,
         user: {
@@ -1201,18 +1397,18 @@ async function startServer() {
     }
   });
 
-  // Update user role (protected by requireAdmin)
+  // Update user role (protected by requireAdmin, via Admin SDK)
   app.patch('/api/users/:uid/role', requireAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { uid } = req.params;
       const { role } = req.body;
       if (!role) {
         return res.status(400).json({ error: 'Role is required' });
       }
-      await updateDoc(doc(serverDb, 'users', uid), { role });
+      await adminDb.collection('users').doc(uid).update({ role });
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API PATCH /api/users/:uid/role] Error:', err);
@@ -1220,11 +1416,11 @@ async function startServer() {
     }
   });
 
-  // Reset user password (protected by requireAdmin, hashed with bcrypt)
+  // Reset user password (protected by requireAdmin, hashed with bcrypt, via Admin SDK)
   app.patch('/api/users/:uid/password', requireAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { uid } = req.params;
       const { password } = req.body;
@@ -1232,7 +1428,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Password is required' });
       }
       const hashedPassword = await bcrypt.hash(String(password).trim(), 10);
-      await updateDoc(doc(serverDb, 'users', uid), { password: hashedPassword });
+      await adminDb.collection('users').doc(uid).update({ password: hashedPassword });
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API PATCH /api/users/:uid/password] Error:', err);
@@ -1240,17 +1436,17 @@ async function startServer() {
     }
   });
 
-  // Delete user (protected by requireAdmin)
+  // Delete user (protected by requireAdmin, via Admin SDK)
   app.delete('/api/users/:uid', requireAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { uid } = req.params;
       if (uid === 'admin_static' || uid === 'user_admin') {
         return res.status(400).json({ error: 'Cannot delete default admin user' });
       }
-      await deleteDoc(doc(serverDb, 'users', uid));
+      await adminDb.collection('users').doc(uid).delete();
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API DELETE /api/users/:uid] Error:', err);
@@ -1259,7 +1455,7 @@ async function startServer() {
   });
 
   // ==========================================
-  // SERVER-SIDE FIRESTORE WRITE APIS (Editor & Admin only)
+  // SERVER-SIDE FIRESTORE WRITE APIS (Admin SDK - Editor & Admin only)
   // ==========================================
 
   function cleanShapePropertiesServer(props: Record<string, any> | undefined | null): Record<string, any> {
@@ -1282,18 +1478,17 @@ async function startServer() {
     return cleaned;
   }
 
-  // Save/Update a single map feature
+  // Save/Update a single map feature via Admin SDK
   app.post('/api/features/save', requireEditorOrAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { feature } = req.body;
       if (!feature || !feature.id) {
         return res.status(400).json({ error: 'Missing feature or feature id' });
       }
 
-      const docRef = doc(serverDb, 'map_features', String(feature.id));
       const rawCoords = feature.coordinates || feature.geometry?.coordinates || [];
       const coordsJsonStr = typeof rawCoords === 'string' ? rawCoords : JSON.stringify(rawCoords);
 
@@ -1308,7 +1503,9 @@ async function startServer() {
       };
       if (feature.code) cleanedDoc.code = feature.code;
 
-      await setDoc(docRef, cleanedDoc);
+      await adminDb.collection('map_features').doc(String(feature.id)).set(cleanedDoc, { merge: true });
+      cachedFeaturesResponse = null;
+      await bumpSyncVersion('features');
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/features/save] Error:', err);
@@ -1316,18 +1513,20 @@ async function startServer() {
     }
   });
 
-  // Delete a feature
+  // Delete a feature via Admin SDK
   app.post('/api/features/delete', requireEditorOrAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { id } = req.body;
       if (!id) {
         return res.status(400).json({ error: 'Missing feature id' });
       }
 
-      await deleteDoc(doc(serverDb, 'map_features', String(id)));
+      await adminDb.collection('map_features').doc(String(id)).delete();
+      cachedFeaturesResponse = null;
+      await bumpSyncVersion('features');
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/features/delete] Error:', err);
@@ -1335,16 +1534,16 @@ async function startServer() {
     }
   });
 
-  // Batch save / layer chunks save
+  // Batch save / layer chunks save via Admin SDK
   app.post('/api/features/batch', requireEditorOrAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { features, chunks } = req.body;
 
       if (Array.isArray(chunks) && chunks.length > 0) {
-        // Save as pre-bundled chunks
+        const batch = adminDb.batch();
         for (const chunk of chunks) {
           if (chunk.id && chunk.payloadJson) {
             let sanitizedPayload = chunk.payloadJson;
@@ -1359,38 +1558,51 @@ async function startServer() {
               }
             } catch (_) {}
 
-            await setDoc(doc(serverDb, 'layer_chunks', chunk.id), {
+            const chunkRef = adminDb.collection('layer_chunks').doc(chunk.id);
+            batch.set(chunkRef, {
               chunkIndex: chunk.chunkIndex,
               itemCount: chunk.itemCount,
               payloadJson: sanitizedPayload,
               updatedAt: new Date().toISOString(),
-            });
+            }, { merge: true });
           }
         }
+        await batch.commit();
+        cachedFeaturesResponse = null;
+        await bumpSyncVersion('features');
         return res.json({ success: true, count: features?.length || 0 });
       }
 
       if (Array.isArray(features)) {
-        for (const feat of features) {
-          if (feat && feat.id) {
-            const docRef = doc(serverDb, 'map_features', String(feat.id));
-            const rawCoords = feat.coordinates || feat.geometry?.coordinates || [];
-            const coordsJsonStr = typeof rawCoords === 'string' ? rawCoords : JSON.stringify(rawCoords);
-            await setDoc(
-              docRef,
-              {
-                id: String(feat.id),
-                layerId: feat.layerId || 'layer1_tim_kiem',
-                name: feat.name || '',
-                type: feat.type || feat.geometry?.type || 'Point',
-                coordinates: coordsJsonStr,
-                properties: cleanShapePropertiesServer(feat.properties || {}),
-                updatedAt: feat.updatedAt || new Date().toISOString(),
-              },
-              { merge: true }
-            );
+        // Chunk into 500 documents per batch commit
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < features.length; i += CHUNK_SIZE) {
+          const slice = features.slice(i, i + CHUNK_SIZE);
+          const batch = adminDb.batch();
+          for (const feat of slice) {
+            if (feat && feat.id) {
+              const docRef = adminDb.collection('map_features').doc(String(feat.id));
+              const rawCoords = feat.coordinates || feat.geometry?.coordinates || [];
+              const coordsJsonStr = typeof rawCoords === 'string' ? rawCoords : JSON.stringify(rawCoords);
+              batch.set(
+                docRef,
+                {
+                  id: String(feat.id),
+                  layerId: feat.layerId || 'layer1_tim_kiem',
+                  name: feat.name || '',
+                  type: feat.type || feat.geometry?.type || 'Point',
+                  coordinates: coordsJsonStr,
+                  properties: cleanShapePropertiesServer(feat.properties || {}),
+                  updatedAt: feat.updatedAt || new Date().toISOString(),
+                },
+                { merge: true }
+              );
+            }
           }
+          await batch.commit();
         }
+        cachedFeaturesResponse = null;
+        await bumpSyncVersion('features');
         return res.json({ success: true, count: features.length });
       }
 
@@ -1401,6 +1613,129 @@ async function startServer() {
     }
   });
 
+  // Server-side cache for map_features all
+  let cachedFeaturesResponse: {
+    payload: { features: any[] };
+    etag: string;
+    updatedAt: number;
+  } | null = null;
+
+  // GET all shared map features (layer_chunks and individual map_features merged) via Admin SDK
+  app.get('/api/features/all', async (req, res) => {
+    try {
+      if (cachedFeaturesResponse) {
+        const clientEtag = req.headers['if-none-match'];
+        if (clientEtag && clientEtag === cachedFeaturesResponse.etag) {
+          return res.status(304).end();
+        }
+        res.setHeader('Cache-Control', 'public, no-cache');
+        res.setHeader('ETag', cachedFeaturesResponse.etag);
+        return res.json(cachedFeaturesResponse.payload);
+      }
+
+      if (!adminDb) return res.json({ features: [] });
+
+      const itemsMap = new Map<string, any>();
+
+      // 1. Read layer_chunks
+      try {
+        const chunksSnap = await adminDb.collection('layer_chunks').get();
+        chunksSnap.docs.forEach((docSnap: any) => {
+          const data = docSnap.data();
+          if (data && data.payloadJson) {
+            try {
+              const list = JSON.parse(data.payloadJson);
+              if (Array.isArray(list)) {
+                list.forEach((item: any) => {
+                  if (item && item.id) {
+                    itemsMap.set(String(item.id), item);
+                  }
+                });
+              }
+            } catch (_) {}
+          }
+        });
+      } catch (cErr) {
+        console.warn('[API /api/features/all] Read layer_chunks warning:', cErr);
+      }
+
+      // 2. Read individual map_features (single edits override chunks)
+      try {
+        const indivSnap = await adminDb.collection('map_features').get();
+        indivSnap.docs.forEach((docSnap: any) => {
+          const data = docSnap.data();
+          const featId = data.id || docSnap.id;
+          let coords = data.coordinates;
+          if (typeof coords === 'string') {
+            try {
+              coords = JSON.parse(coords);
+            } catch (_) {
+              coords = [];
+            }
+          }
+          itemsMap.set(String(featId), {
+            id: featId,
+            layerId: data.layerId || 'layer1_tim_kiem',
+            name: data.name || '',
+            code: data.code || undefined,
+            type: data.type || 'Point',
+            coordinates: coords,
+            properties: data.properties || {},
+            updatedAt: data.updatedAt,
+          });
+        });
+      } catch (iErr) {
+        console.warn('[API /api/features/all] Read map_features warning:', iErr);
+      }
+
+      const features = Array.from(itemsMap.values());
+      const payload = { features };
+      const etag = `W/"features-${features.length}-${crypto.createHash('md5').update(JSON.stringify(features)).digest('hex').slice(0, 16)}"`;
+      cachedFeaturesResponse = { payload, etag, updatedAt: Date.now() };
+
+      const clientEtag = req.headers['if-none-match'];
+      if (clientEtag && clientEtag === etag) {
+        return res.status(304).end();
+      }
+
+      res.setHeader('Cache-Control', 'public, no-cache');
+      res.setHeader('ETag', etag);
+      return res.json(payload);
+    } catch (err: any) {
+      console.error('[API GET /api/features/all] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to load features' });
+    }
+  });
+
+  // GET single feature by ID via Admin SDK
+  app.get('/api/features/:id', async (req, res) => {
+    try {
+      if (!adminDb) return res.status(404).json({ error: 'Database not initialized' });
+      const { id } = req.params;
+      const docSnap = await adminDb.collection('map_features').doc(String(id)).get();
+      if (docSnap.exists) {
+        const data = docSnap.data();
+        let coords = data.coordinates;
+        if (typeof coords === 'string') {
+          try { coords = JSON.parse(coords); } catch (_) { coords = []; }
+        }
+        return res.json({
+          id: data.id || docSnap.id,
+          layerId: data.layerId || 'layer1_tim_kiem',
+          name: data.name || '',
+          code: data.code,
+          type: data.type || 'Point',
+          coordinates: coords,
+          properties: data.properties || {},
+          updatedAt: data.updatedAt,
+        });
+      }
+      return res.status(404).json({ error: 'Feature not found' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Server in-memory cache for commune administrative boundaries chunks
   let cachedCommuneChunksResponse: {
     payload: { chunks: any[] };
@@ -1408,19 +1743,19 @@ async function startServer() {
     updatedAt: number;
   } | null = null;
 
-  // Commune Administrative Boundaries Batch Upload
+  // Commune Administrative Boundaries Batch Upload via Admin SDK
   app.post('/api/communes/batch', requireEditorOrAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { chunks, meta, isLastBatch, clearExisting } = req.body;
 
       if (clearExisting) {
         try {
-          const oldChunks = await getDocs(collection(serverDb, 'commune_chunks'));
+          const oldChunks = await adminDb.collection('commune_chunks').get();
           for (const d of oldChunks.docs) {
-            await deleteDoc(doc(serverDb, 'commune_chunks', d.id));
+            await adminDb.collection('commune_chunks').doc(d.id).delete();
           }
         } catch (e) {
           console.warn('[API /api/communes/batch] Clear old chunks warning:', e);
@@ -1428,20 +1763,23 @@ async function startServer() {
       }
 
       if (Array.isArray(chunks) && chunks.length > 0) {
+        const batch = adminDb.batch();
         for (const chunk of chunks) {
           if (chunk.id && chunk.payloadJson) {
-            await setDoc(doc(serverDb, 'commune_chunks', chunk.id), {
+            const ref = adminDb.collection('commune_chunks').doc(chunk.id);
+            batch.set(ref, {
               chunkIndex: chunk.chunkIndex,
               itemCount: chunk.itemCount,
               payloadJson: chunk.payloadJson,
               updatedAt: new Date().toISOString(),
-            });
+            }, { merge: true });
           }
         }
+        await batch.commit();
       }
 
       if (meta) {
-        await setDoc(doc(serverDb, 'commune_meta', 'config'), {
+        await adminDb.collection('commune_meta').doc('config').set({
           ...meta,
           updatedAt: new Date().toISOString(),
         }, { merge: true });
@@ -1449,6 +1787,7 @@ async function startServer() {
 
       // Invalidate server in-memory cache upon upload so fresh data will be read
       cachedCommuneChunksResponse = null;
+      await bumpSyncVersion('communes');
 
       return res.json({ success: true, count: chunks?.length || 0 });
     } catch (err: any) {
@@ -1457,12 +1796,12 @@ async function startServer() {
     }
   });
 
-  // Commune Public Metadata and Chunks
+  // Commune Public Metadata and Chunks via Admin SDK
   app.get('/api/communes/meta', async (req, res) => {
     try {
-      if (!serverDb) return res.json({ totalFeatures: 0, totalChunks: 0 });
-      const metaDoc = await getDoc(doc(serverDb, 'commune_meta', 'config'));
-      if (metaDoc.exists()) {
+      if (!adminDb) return res.json({ totalFeatures: 0, totalChunks: 0 });
+      const metaDoc = await adminDb.collection('commune_meta').doc('config').get();
+      if (metaDoc.exists) {
         return res.json(metaDoc.data());
       }
       return res.json({ totalFeatures: 0, totalChunks: 0 });
@@ -1484,16 +1823,16 @@ async function startServer() {
         return res.json(cachedCommuneChunksResponse.payload);
       }
 
-      if (!serverDb) return res.json({ chunks: [] });
-      const snap = await getDocs(collection(serverDb, 'commune_chunks'));
-      const chunks = snap.docs.map((d) => ({
+      if (!adminDb) return res.json({ chunks: [] });
+      const snap = await adminDb.collection('commune_chunks').get();
+      const chunks = snap.docs.map((d: any) => ({
         id: d.id,
         chunkIndex: d.data().chunkIndex,
         itemCount: d.data().itemCount,
         payloadJson: d.data().payloadJson,
         updatedAt: d.data().updatedAt,
       }));
-      chunks.sort((a, b) => (a.chunkIndex || 0) - (b.chunkIndex || 0));
+      chunks.sort((a: any, b: any) => (a.chunkIndex || 0) - (b.chunkIndex || 0));
 
       const payload = { chunks };
       const etag = `W/"communes-${chunks.length}-${crypto.createHash('md5').update(JSON.stringify(chunks)).digest('hex').slice(0, 16)}"`;
@@ -1537,10 +1876,11 @@ async function startServer() {
     updatedAt: number;
   } | null = null;
 
-  // GET cached raster layers (Read-through server RAM cache with ETag & 304 support)
+  // GET cached raster layers (Read-through server RAM cache with ETag & 304 support via Admin SDK)
   app.get('/api/raster-layers', async (req, res) => {
     try {
-      if (cachedRasterLayersResponse) {
+      const isFresh = req.query.fresh === '1' || req.query.fresh === 'true';
+      if (!isFresh && cachedRasterLayersResponse) {
         const clientEtag = req.headers['if-none-match'];
         if (clientEtag && clientEtag === cachedRasterLayersResponse.etag) {
           return res.status(304).end();
@@ -1550,10 +1890,10 @@ async function startServer() {
         return res.json(cachedRasterLayersResponse.payload);
       }
 
-      if (!serverDb) return res.json({ layers: [] });
-      const snap = await getDocs(collection(serverDb, 'raster_layers'));
+      if (!adminDb) return res.json({ layers: [] });
+      const snap = await adminDb.collection('raster_layers').get();
       const layers: any[] = [];
-      snap.forEach((d) => {
+      snap.docs.forEach((d: any) => {
         const data = d.data();
         let files = Array.isArray(data.files) ? data.files : [];
         if (files.length === 0 && data.url) {
@@ -1594,7 +1934,7 @@ async function startServer() {
       };
 
       const clientEtag = req.headers['if-none-match'];
-      if (clientEtag && clientEtag === etag) {
+      if (!isFresh && clientEtag && clientEtag === etag) {
         return res.status(304).end();
       }
 
@@ -1607,7 +1947,7 @@ async function startServer() {
     }
   });
 
-  // GET cached layer configurations
+  // GET cached layer configurations via Admin SDK
   app.get('/api/layers/configs', async (req, res) => {
     try {
       if (cachedLayerConfigsResponse) {
@@ -1620,9 +1960,9 @@ async function startServer() {
         return res.json(cachedLayerConfigsResponse.payload);
       }
 
-      if (!serverDb) return res.json({ layerNames: null });
-      const docSnap = await getDoc(doc(serverDb, 'app_settings', 'layer_configs'));
-      const layerNames = docSnap.exists() ? (docSnap.data()?.layerNames || null) : null;
+      if (!adminDb) return res.json({ layerNames: null });
+      const docSnap = await adminDb.collection('app_settings').doc('layer_configs').get();
+      const layerNames = docSnap.exists ? (docSnap.data()?.layerNames || null) : null;
       const payload = { layerNames };
       const etag = `W/"layer-configs-${crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex').slice(0, 16)}"`;
       cachedLayerConfigsResponse = { payload, etag, updatedAt: Date.now() };
@@ -1641,7 +1981,7 @@ async function startServer() {
     }
   });
 
-  // GET cached field aliases
+  // GET cached field aliases via Admin SDK
   app.get('/api/aliases', async (req, res) => {
     try {
       if (cachedAliasesResponse) {
@@ -1654,9 +1994,9 @@ async function startServer() {
         return res.json(cachedAliasesResponse.payload);
       }
 
-      if (!serverDb) return res.json({ aliases: {}, hiddenFields: {} });
-      const docSnap = await getDoc(doc(serverDb, 'app_settings', 'field_aliases'));
-      const data = docSnap.exists() ? docSnap.data() : null;
+      if (!adminDb) return res.json({ aliases: {}, hiddenFields: {} });
+      const docSnap = await adminDb.collection('app_settings').doc('field_aliases').get();
+      const data = docSnap.exists ? docSnap.data() : null;
       const payload = {
         aliases: data?.aliases || {},
         hiddenFields: data?.hiddenFields || {},
@@ -1685,6 +2025,9 @@ async function startServer() {
       if (!target || target === 'all' || target === 'raster_layers') {
         cachedRasterLayersResponse = null;
       }
+      if (!target || target === 'all' || target === 'features') {
+        cachedFeaturesResponse = null;
+      }
       if (!target || target === 'all' || target === 'layer_configs') {
         cachedLayerConfigsResponse = null;
       }
@@ -1700,22 +2043,23 @@ async function startServer() {
     }
   });
 
-  // Save layer configs (custom layer names)
+  // Save layer configs (custom layer names) via Admin SDK
   app.post('/api/layers/save', requireEditorOrAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { layerNames } = req.body;
       if (!layerNames) {
         return res.status(400).json({ error: 'Missing layerNames' });
       }
 
-      await setDoc(doc(serverDb, 'app_settings', 'layer_configs'), {
+      await adminDb.collection('app_settings').doc('layer_configs').set({
         layerNames,
         updatedAt: new Date().toISOString(),
-      });
+      }, { merge: true });
       cachedLayerConfigsResponse = null;
+      await bumpSyncVersion('configs');
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/layers/save] Error:', err);
@@ -1723,19 +2067,20 @@ async function startServer() {
     }
   });
 
-  // Save field aliases
+  // Save field aliases via Admin SDK
   app.post('/api/aliases/save', requireEditorOrAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { aliases, hiddenFields } = req.body;
-      await setDoc(doc(serverDb, 'app_settings', 'field_aliases'), {
+      await adminDb.collection('app_settings').doc('field_aliases').set({
         aliases: aliases || {},
         hiddenFields: hiddenFields || {},
         updatedAt: new Date().toISOString(),
-      });
+      }, { merge: true });
       cachedAliasesResponse = null;
+      await bumpSyncVersion('aliases');
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/aliases/save] Error:', err);
@@ -1743,26 +2088,387 @@ async function startServer() {
     }
   });
 
-  // Update raster layer enabled state
+  // Update raster layer enabled state via Admin SDK
   app.post('/api/raster-layers/update-enabled', requireEditorOrAdmin, async (req, res) => {
     try {
-      if (!serverDb) {
-        return res.status(500).json({ error: 'Firestore server not initialized' });
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
       const { layerId, enabled } = req.body;
       if (!layerId) {
         return res.status(400).json({ error: 'Missing layerId' });
       }
 
-      await updateDoc(doc(serverDb, 'raster_layers', layerId), {
+      await adminDb.collection('raster_layers').doc(layerId).update({
         enabled: enabled !== false,
         updatedAt: new Date().toISOString(),
       });
       cachedRasterLayersResponse = null;
+      await bumpSyncVersion('raster');
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/raster-layers/update-enabled] Error:', err);
       res.status(500).json({ error: err.message || 'Failed to update raster layer status' });
+    }
+  });
+
+  // Clear server disk cache for specific raster URLs
+  app.post('/api/raster-layers/clear-file-cache', async (req, res) => {
+    try {
+      const { urls } = req.body;
+      let deletedCount = 0;
+      if (Array.isArray(urls)) {
+        for (const url of urls) {
+          if (typeof url === 'string' && url.trim()) {
+            const urlHash = crypto.createHash('sha256').update(url.trim()).digest('hex');
+            const cachedFilePath = path.join(RASTER_CACHE_DIR, `${urlHash}.tif`);
+            if (fs.existsSync(cachedFilePath)) {
+              try {
+                fs.unlinkSync(cachedFilePath);
+                deletedCount++;
+              } catch (_) {}
+            }
+          }
+        }
+      }
+      cachedRasterLayersResponse = null;
+      return res.json({ success: true, deletedCount });
+    } catch (err: any) {
+      console.warn('[API /api/raster-layers/clear-file-cache] Error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to clear raster cache' });
+    }
+  });
+
+  // Save / Update raster layer via Admin SDK
+  app.post('/api/raster-layers/save', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
+      }
+      const { layer } = req.body;
+      if (!layer) {
+        return res.status(400).json({ error: 'Missing layer payload' });
+      }
+
+      const layerData: Record<string, any> = {
+        name: layer.name || 'Bản đồ Raster',
+        type: layer.type || 'COG',
+        source: layer.source || 'github',
+        storagePath: layer.storagePath || '',
+        githubReleaseUrl: layer.githubReleaseUrl || '',
+        files: Array.isArray(layer.files) ? layer.files : [],
+        bounds: layer.bounds || null,
+        opacity: layer.opacity ?? 1.0,
+        enabled: layer.enabled !== false,
+        updatedAt: new Date().toISOString(),
+      };
+
+      let layerId = layer.id;
+      if (layerId) {
+        await adminDb.collection('raster_layers').doc(String(layerId)).set(layerData, { merge: true });
+      } else {
+        layerData.createdAt = new Date().toISOString();
+        const docRef = await adminDb.collection('raster_layers').add(layerData);
+        layerId = docRef.id;
+      }
+
+      cachedRasterLayersResponse = null;
+      await bumpSyncVersion('raster');
+      res.json({ success: true, layerId });
+    } catch (err: any) {
+      console.error('[API POST /api/raster-layers/save] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to save raster layer' });
+    }
+  });
+
+  // Delete raster layer via Admin SDK
+  app.post('/api/raster-layers/delete', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!adminDb) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
+      }
+      const { id } = req.body;
+      if (!id) {
+        return res.status(400).json({ error: 'Missing raster layer id' });
+      }
+
+      await adminDb.collection('raster_layers').doc(String(id)).delete();
+      cachedRasterLayersResponse = null;
+      await bumpSyncVersion('raster');
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/raster-layers/delete] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to delete raster layer' });
+    }
+  });
+
+  // Scan Firebase Storage folder for GeoTIFF files via Admin Storage SDK
+  app.post('/api/storage/scan-firebase', async (req, res) => {
+    try {
+      if (!adminApp) {
+        return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
+      }
+      let rawPath = (req.body?.path || '').trim();
+      if (rawPath.startsWith('gs://')) {
+        rawPath = rawPath.replace(/^gs:\/\/[^/]+\/?/, '');
+      } else if (rawPath.includes('firebasestorage.googleapis.com')) {
+        const match = rawPath.match(/\/o\/([^?#]+)/);
+        if (match) {
+          rawPath = decodeURIComponent(match[1]);
+        }
+      }
+      const cleanPath = rawPath.replace(/^\/+|\/+$/g, '');
+      if (!cleanPath) {
+        return res.status(400).json({ error: 'Vui lòng cung cấp đường dẫn thư mục' });
+      }
+
+      const bucket = getAdminStorage(adminApp).bucket('alien-repeater-wn50x.firebasestorage.app');
+      const [allFiles] = await bucket.getFiles({ prefix: cleanPath });
+
+      const rasterFiles = allFiles.filter((file: any) => {
+        const n = file.name.toLowerCase();
+        return n.endsWith('.tif') || n.endsWith('.tiff') || n.endsWith('.geotiff');
+      });
+
+      if (rasterFiles.length === 0) {
+        return res.status(404).json({ error: `Không tìm thấy file GeoTIFF/COG (.tif, .tiff) trong "${cleanPath}".` });
+      }
+
+      const files = rasterFiles.map((file: any) => {
+        const fileName = path.basename(file.name);
+        const encodedName = encodeURIComponent(file.name);
+        const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedName}?alt=media`;
+        return {
+          fileName,
+          url: downloadUrl,
+          fileSize: Number(file.metadata?.size) || 0,
+          updatedAt: file.metadata?.updated || new Date().toISOString(),
+        };
+      });
+
+      res.json({ success: true, cleanPath, files });
+    } catch (err: any) {
+      console.error('[API POST /api/storage/scan-firebase] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi quét Firebase Storage' });
+    }
+  });
+
+  // GET notifications (latest 50) via Admin SDK
+  app.get('/api/notifications', async (req, res) => {
+    try {
+      if (!adminDb) return res.json({ notifications: [] });
+      const snap = await adminDb.collection('notifications').orderBy('createdAt', 'desc').limit(50).get();
+      const notifications = snap.docs.map((docSnap: any) => {
+        const data = docSnap.data();
+        let createdAt = data.createdAt;
+        if (createdAt && typeof createdAt.toDate === 'function') {
+          createdAt = createdAt.toDate().toISOString();
+        }
+        return {
+          id: docSnap.id,
+          ...data,
+          createdAt,
+        };
+      });
+      res.json({ success: true, notifications });
+    } catch (err: any) {
+      console.error('[API GET /api/notifications] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi tải danh sách thông báo' });
+    }
+  });
+
+  // GET unread notifications count via Admin SDK
+  app.get('/api/notifications/unread-count', async (req, res) => {
+    try {
+      if (!adminDb) return res.json({ count: 0 });
+      const snap = await adminDb.collection('notifications').where('read', '==', false).get();
+      res.json({ success: true, count: snap.size });
+    } catch (err: any) {
+      console.warn('[API GET /api/notifications/unread-count] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi đếm thông báo chưa đọc' });
+    }
+  });
+
+  // Mark notification as read via Admin SDK
+  app.post('/api/notifications/mark-read', async (req, res) => {
+    try {
+      if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
+      const { id } = req.body;
+      if (!id) return res.status(400).json({ error: 'Missing notification id' });
+      await adminDb.collection('notifications').doc(String(id)).update({ read: true });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/notifications/mark-read] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi cập nhật thông báo' });
+    }
+  });
+
+  // Delete notification via Admin SDK
+  app.post('/api/notifications/delete', async (req, res) => {
+    try {
+      if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
+      const { id } = req.body;
+      if (!id) return res.status(400).json({ error: 'Missing notification id' });
+      await adminDb.collection('notifications').doc(String(id)).delete();
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/notifications/delete] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi xóa thông báo' });
+    }
+  });
+
+  // Add notification via Admin SDK
+  app.post('/api/notifications/add', async (req, res) => {
+    try {
+      if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
+      const { message, type = 'info', title, objectId, layerId, feedbackId } = req.body;
+      if (!message) return res.status(400).json({ error: 'Missing notification message' });
+
+      const docData: Record<string, any> = {
+        message,
+        type,
+        read: false,
+        createdAt: FieldValue.serverTimestamp(),
+      };
+      if (title) docData.title = title;
+      if (objectId !== undefined && objectId !== null) docData.objectId = objectId;
+      if (layerId) docData.layerId = layerId;
+      if (feedbackId) docData.feedbackId = feedbackId;
+
+      const docRef = await adminDb.collection('notifications').add(docData);
+      res.json({ success: true, id: docRef.id });
+    } catch (err: any) {
+      console.error('[API POST /api/notifications/add] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi thêm thông báo' });
+    }
+  });
+
+  // Create user feedback via Admin SDK (and notify admins/editors)
+  app.post('/api/feedback', async (req, res) => {
+    try {
+      if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
+      const { OBJECTID, Lop, TenLop, TenDoiTuong, Ten, DienThoai, NoiDung } = req.body;
+      if (!OBJECTID || !Lop || !NoiDung) {
+        return res.status(400).json({ error: 'Thiếu dữ liệu góp ý cần thiết' });
+      }
+
+      const now = new Date();
+      const timeFormatted = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+
+      const feedbackData = {
+        OBJECTID,
+        Lop,
+        TenLop: TenLop || '',
+        TenDoiTuong: TenDoiTuong || '',
+        Ten: Ten || '',
+        DienThoai: DienThoai || '',
+        NoiDung,
+        ThoiGian: timeFormatted,
+        TrangThai: 'moi',
+        createdAt: FieldValue.serverTimestamp(),
+      };
+
+      const docRef = await adminDb.collection('PhanAnh').add(feedbackData);
+
+      // Add notification automatically
+      try {
+        await adminDb.collection('notifications').add({
+          message: `[${Ten || 'Người dùng'}] góp ý trên "${TenDoiTuong || 'Đối tượng'}" (${TenLop || Lop})`,
+          type: 'feedback',
+          title: 'Góp ý mới',
+          objectId: OBJECTID,
+          layerId: Lop,
+          feedbackId: docRef.id,
+          read: false,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      } catch (nErr) {
+        console.warn('Could not create notification for feedback:', nErr);
+      }
+
+      res.json({ success: true, id: docRef.id });
+    } catch (err: any) {
+      console.error('[API POST /api/feedback] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi gửi góp ý' });
+    }
+  });
+
+  // GET feedback list by objectId and layerId via Admin SDK
+  app.get('/api/feedback', async (req, res) => {
+    try {
+      if (!adminDb) return res.json({ items: [] });
+      const { objectId, layerId } = req.query;
+      if (!layerId) return res.json({ items: [] });
+
+      const snap = await adminDb.collection('PhanAnh').where('Lop', '==', String(layerId)).get();
+      const items: any[] = [];
+      const targetObjId = objectId !== undefined && objectId !== null ? String(objectId).toLowerCase().trim() : null;
+
+      snap.docs.forEach((docSnap: any) => {
+        const d = docSnap.data();
+        if (targetObjId && String(d.OBJECTID).toLowerCase().trim() !== targetObjId) {
+          return;
+        }
+        let createdAt = d.createdAt;
+        let createdAtMillis = 0;
+        if (createdAt && typeof createdAt.toMillis === 'function') {
+          createdAtMillis = createdAt.toMillis();
+          createdAt = createdAt.toDate().toISOString();
+        } else if (createdAt && typeof createdAt.toDate === 'function') {
+          createdAtMillis = createdAt.toDate().getTime();
+          createdAt = createdAt.toDate().toISOString();
+        }
+        items.push({
+          id: docSnap.id,
+          OBJECTID: d.OBJECTID,
+          Lop: d.Lop,
+          TenLop: d.TenLop || '',
+          TenDoiTuong: d.TenDoiTuong || '',
+          Ten: d.Ten || '',
+          DienThoai: d.DienThoai || '',
+          NoiDung: d.NoiDung || '',
+          ThoiGian: d.ThoiGian || '',
+          TrangThai: d.TrangThai || 'moi',
+          createdAt,
+          createdAtMillis,
+        });
+      });
+
+      items.sort((a, b) => (b.createdAtMillis || 0) - (a.createdAtMillis || 0));
+      res.json({ success: true, items });
+    } catch (err: any) {
+      console.error('[API GET /api/feedback] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi tải danh sách góp ý' });
+    }
+  });
+
+  // Update feedback status via Admin SDK
+  app.post('/api/feedback/update-status', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
+      const { feedbackId, status } = req.body;
+      if (!feedbackId || !status) return res.status(400).json({ error: 'Thiếu thông tin cập nhật' });
+
+      await adminDb.collection('PhanAnh').doc(String(feedbackId)).update({ TrangThai: status });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/feedback/update-status] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi cập nhật trạng thái góp ý' });
+    }
+  });
+
+  // Delete feedback via Admin SDK
+  app.post('/api/feedback/delete', requireEditorOrAdmin, async (req, res) => {
+    try {
+      if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
+      const { feedbackId } = req.body;
+      if (!feedbackId) return res.status(400).json({ error: 'Thiếu ID góp ý' });
+
+      await adminDb.collection('PhanAnh').doc(String(feedbackId)).delete();
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API POST /api/feedback/delete] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi xóa góp ý' });
     }
   });
 
@@ -2179,6 +2885,59 @@ async function startServer() {
       }
     } finally {
       req.off('close', onClose);
+    }
+  });
+
+  // In-memory cache for elevation queries (grid rounded to 4 decimals ~ 11m resolution)
+  const elevationCache = new Map<string, number>();
+
+  app.get('/api/elevation', async (req, res) => {
+    try {
+      const lat = parseFloat(req.query.lat as string);
+      const lng = parseFloat(req.query.lng as string);
+
+      if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return res.status(400).json({ error: 'Toạ độ không hợp lệ' });
+      }
+
+      // Round to 4 decimal places (~11 meters grid)
+      const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+      if (elevationCache.has(cacheKey)) {
+        return res.json({ success: true, elevation: elevationCache.get(cacheKey) });
+      }
+
+      // Query Open-Meteo elevation API (free, global Copernicus / SRTM)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const apiUrl = `https://api.open-meteo.com/v1/elevation?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}`;
+      const response = await fetch(apiUrl, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'WebGIS-Elevation/1.0' },
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Elevation API returned status ${response.status}`);
+      }
+
+      const data = (await response.json()) as any;
+      const elevationVal = Array.isArray(data?.elevation) ? data.elevation[0] : data?.elevation;
+
+      if (typeof elevationVal === 'number' && !isNaN(elevationVal)) {
+        const roundedElevation = Math.round(elevationVal);
+        elevationCache.set(cacheKey, roundedElevation);
+        // Keep cache bounded
+        if (elevationCache.size > 3000) {
+          const firstKey = elevationCache.keys().next().value;
+          if (firstKey) elevationCache.delete(firstKey);
+        }
+        return res.json({ success: true, elevation: roundedElevation });
+      }
+
+      return res.status(502).json({ error: 'Không lấy được dữ liệu độ cao' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Lỗi tra cứu độ cao', message: err.message });
     }
   });
 

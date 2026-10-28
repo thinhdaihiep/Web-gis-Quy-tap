@@ -27,6 +27,7 @@ import {
   isFeatureMatch,
   deduplicateFeaturesList,
   extractObjectId,
+  getFeatureDisplayCode,
 } from '../fieldAlias';
 import { getSchemaForLayer } from '../FieldSchema';
 import { cleanShapeProperties } from '../utils/shapeFieldUtils';
@@ -2141,7 +2142,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px;">
-                  <span style="color: #64748b; font-size: 11px;">Mã số: <b>${currentFeat.code || currentFeat.id}</b></span>
+                  <span style="color: #64748b; font-size: 11px;">Mã: <b>${getFeatureDisplayCode(currentFeat)}</b></span>
                   ${hoSoButtonHtml}
                 </div>
                 ${
@@ -2339,7 +2340,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px;">
-                  <span style="color: #64748b; font-size: 11px;">Mã số: <b>${currentFeat.code || currentFeat.id}</b></span>
+                  <span style="color: #64748b; font-size: 11px;">Mã: <b>${getFeatureDisplayCode(currentFeat)}</b></span>
                   ${hoSoButtonHtml}
                 </div>
                 ${

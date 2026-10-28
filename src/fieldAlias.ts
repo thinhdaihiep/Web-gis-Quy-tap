@@ -311,6 +311,59 @@ export function extractObjectId(feature: any): string | null {
 }
 
 /**
+ * Utility to get layer business prefix:
+ * layer1_tim_kiem -> TKQT
+ * layer2_tran_danh -> TD
+ * layer3_mo_chi -> MLS
+ * layer4_nghia_trang -> NT
+ */
+export function getLayerCodePrefix(layerId?: string): string {
+  if (!layerId) return 'DT';
+  const l = String(layerId).toLowerCase();
+  if (l.includes('tim_kiem') || l.includes('quy_tap') || l.includes('quytap')) return 'TKQT';
+  if (l.includes('tran_danh') || l.includes('trandanh') || l.includes('chien_dich')) return 'TD';
+  if (l.includes('mo_chi') || l.includes('mo_liet_si') || l.includes('molietsi') || l.includes('mo')) return 'MLS';
+  if (l.includes('nghia_trang') || l.includes('nghiatrang')) return 'NT';
+  return 'DT';
+}
+
+/**
+ * Returns a friendly, concise business display code for a feature (e.g. "TKQT-5377")
+ * instead of raw internal technical strings like "feat_layer1_tim_kiem_5377_1793068145200".
+ */
+export function getFeatureDisplayCode(feat: any, includePrefix: boolean = true): string {
+  if (!feat) return '';
+  const prefix = getLayerCodePrefix(feat.layerId);
+  const objId = extractObjectId(feat);
+
+  // If a clean business code is explicitly defined and isn't a raw internal feat_ ID
+  if (feat.code && typeof feat.code === 'string' && !feat.code.startsWith('feat_')) {
+    return feat.code;
+  }
+
+  // If properties.OBJECTID is available
+  if (objId) {
+    return includePrefix ? `${prefix}-${objId}` : String(objId);
+  }
+
+  // If feat.id is a generated feat_ ID, try to extract the objectId portion
+  const idStr = feat.id !== undefined && feat.id !== null ? String(feat.id) : '';
+  if (idStr.startsWith('feat_')) {
+    const parts = idStr.split('_');
+    // Pattern: feat_layer1_tim_kiem_5377_1793068145200 -> second-to-last part is objectId if numeric
+    if (parts.length >= 3) {
+      const candidate = parts[parts.length - 2];
+      if (/^\d+$/.test(candidate)) {
+        return includePrefix ? `${prefix}-${candidate}` : candidate;
+      }
+    }
+  }
+
+  // Fallback to code or id if no pattern matched
+  return feat.code || feat.id || '';
+}
+
+/**
  * Utility to compute a unique key for a map feature based on layerId + OBJECTID or id.
  */
 export function getItemUniqueKey(feat: any): string {

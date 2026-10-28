@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Crosshair, Copy, Check, Navigation, ChevronDown, ArrowLeftRight, MapPin } from 'lucide-react';
+import { Crosshair, Copy, Check, Navigation, ChevronDown, ArrowLeftRight, MapPin, Mountain } from 'lucide-react';
 import {
   smartParseCoordinateInput,
   convertWGS84ToTargetCRS,
@@ -71,6 +71,53 @@ export const Footer: React.FC<FooterProps> = ({
 
     return () => {
       isCancelled = true;
+    };
+  }, [activeLoc?.lat, activeLoc?.lng]);
+
+  // Elevation state & query whenever marker/cursor location changes
+  const [elevation, setElevation] = useState<number | null>(null);
+  const [isLoadingElevation, setIsLoadingElevation] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!activeLoc) {
+      setElevation(null);
+      setIsLoadingElevation(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsLoadingElevation(true);
+
+    const controller = new AbortController();
+    const timerId = setTimeout(() => {
+      fetch(`/api/elevation?lat=${activeLoc.lat}&lng=${activeLoc.lng}`, {
+        signal: controller.signal,
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error('Elevation request failed');
+          return res.json();
+        })
+        .then((data) => {
+          if (!isCancelled && typeof data.elevation === 'number') {
+            setElevation(data.elevation);
+          }
+        })
+        .catch((err) => {
+          if (!isCancelled && err.name !== 'AbortError') {
+            console.warn('Tra cứu độ cao thất bại:', err);
+          }
+        })
+        .finally(() => {
+          if (!isCancelled) {
+            setIsLoadingElevation(false);
+          }
+        });
+    }, 150);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timerId);
+      controller.abort();
     };
   }, [activeLoc?.lat, activeLoc?.lng]);
 
@@ -360,8 +407,8 @@ export const Footer: React.FC<FooterProps> = ({
 
   return (
     <footer className="min-h-[28px] h-auto py-1 sm:py-0 safe-area-bottom bg-slate-900 text-slate-200 border-t border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between px-2 sm:px-4 gap-y-1 gap-x-2 text-[10px] sm:text-[11px] shrink-0 z-[3000] font-medium w-full">
-      {/* Left side: Coordinates */}
-      <div className="flex items-center w-full sm:w-auto">
+      {/* Left side: Coordinates & Elevation */}
+      <div className="flex items-center gap-1.5 w-full sm:w-auto">
         {/* Cursor Coordinates Interactive Input */}
         <div
           className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-0.5 rounded border transition-colors w-full sm:w-auto ${
@@ -549,6 +596,23 @@ export const Footer: React.FC<FooterProps> = ({
             >
               <MapPin className="w-3 h-3" />
             </button>
+          )}
+        </div>
+
+        {/* Elevation Display Badge (Markpoint Elevation) */}
+        <div
+          className="flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border border-slate-700/60 bg-slate-800/80 text-slate-200 shrink-0 select-none"
+          title="Độ cao địa hình (DEM - mét)"
+        >
+          <Mountain className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+          {isLoadingElevation ? (
+            <span className="font-mono text-[10px] sm:text-[11px] text-slate-400 animate-pulse">...</span>
+          ) : elevation !== null ? (
+            <span className="font-mono text-[10px] sm:text-[11px] font-bold text-cyan-300">
+              {elevation.toLocaleString('vi-VN')} m
+            </span>
+          ) : (
+            <span className="font-mono text-[10px] sm:text-[11px] text-slate-500">-- m</span>
           )}
         </div>
       </div>
