@@ -45,7 +45,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-2xl p-2 bg-gradient-to-b from-slate-900/90 to-slate-950/95 border border-slate-700/60 shadow-2xl shadow-black/80 flex items-center justify-center backdrop-blur-md">
             <img
               src="/logo.png"
-              alt="Logo Hệ thống GIS"
+              alt="Logo"
               className="w-full h-full object-contain filter drop-shadow-[0_2px_8px_rgba(0,0,0,0.6)]"
               onError={(e) => {
                 // Fallback nếu cần
