@@ -1,102 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions for validating data payloads
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
-    }
-
-    function isValidUser(data) {
-      return (!('username' in data) || (data.username is string && data.username.size() <= 128))
-        && (!('role' in data) || (data.role in ['admin', 'editor']))
-        && (!('password' in data) || (data.password is string && data.password.size() <= 256));
-    }
-
-    // 1. Users collection (passwords hashed with bcrypt, managed via server)
-    match /users/{userId} {
-      allow read: if isValidId(userId);
-      allow create, update: if isValidId(userId) && isValidUser(request.resource.data);
-      allow delete: if isValidId(userId);
-    }
-
-    function isValidFeature(data) {
-      return ('id' in data && ((data.id is string && data.id.size() <= 128) || data.id is int || data.id is float))
-        && (!('layerId' in data) || (data.layerId is string && data.layerId.size() <= 128))
-        && (!('type' in data) || (data.type is string && data.type.size() <= 64))
-        && (!('coordinates' in data) || (data.coordinates is string && data.coordinates.size() <= 2097152) || data.coordinates is list)
-        && (!('properties' in data) || data.properties is map);
-    }
-
-    function isValidChunk(data) {
-      return (!('payloadJson' in data) || (data.payloadJson is string && data.payloadJson.size() <= 2097152))
-        && (!('chunkIndex' in data) || data.chunkIndex is int)
-        && (!('itemCount' in data) || data.itemCount is int);
-    }
-
-    // 2. Map Features collection: individual feature objects
-    match /map_features/{featureId} {
-      allow read: if true;
-      allow create, update: if isValidId(featureId) && isValidFeature(request.resource.data);
-      allow delete: if isValidId(featureId);
-    }
-
-    // 3. Layer Chunks collection: batched layers
-    match /layer_chunks/{chunkId} {
-      allow read: if true;
-      allow create, update: if isValidId(chunkId) && isValidChunk(request.resource.data);
-      allow delete: if isValidId(chunkId);
-    }
-
-    // 4. Commune Chunks & Meta: administrative boundaries (public read)
-    match /commune_chunks/{chunkId} {
-      allow read: if true;
-      allow create, update: if isValidId(chunkId) && isValidChunk(request.resource.data);
-      allow delete: if isValidId(chunkId);
-    }
-
-    match /commune_meta/{metaId} {
-      allow read: if true;
-      allow create, update: if isValidId(metaId);
-      allow delete: if isValidId(metaId);
-    }
-
-    // 4. App settings: custom layer names, aliases, configuration
-    match /app_settings/{settingId} {
-      allow read: if true;
-      allow create, update: if isValidId(settingId) && request.resource.data.size() <= 200;
-      allow delete: if isValidId(settingId);
-    }
-
-    // 5. Raster layers metadata
-    match /raster_layers/{rasterId} {
-      allow read: if true;
-      allow create, update: if isValidId(rasterId);
-      allow delete: if isValidId(rasterId);
-    }
-
-    // 6. Admin notifications
-    match /notifications/{notificationId} {
-      allow read, write: if isValidId(notificationId);
-    }
-
-    // 7. User feedback collection [PhanAnh]
-    match /PhanAnh/{feedbackId} {
-      allow read: if true;
-      allow create: if isValidId(feedbackId);
-      allow update, delete: if isValidId(feedbackId);
-    }
-
-    // 8. System background tasks state
-    match /system_tasks/{taskId} {
-      allow read, write: if isValidId(taskId);
-    }
-
-    // 9. Global default deny for any other collections
+    // Toàn bộ truy xuất database đã được chuyển 100% sang Firebase Admin SDK trên Backend.
+    // Chặn triệt để mọi truy cập trực tiếp từ Web/Client để bảo vệ dữ liệu.
     match /{document=**} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if false;
     }
   }
 }
-
-

@@ -34,14 +34,10 @@ const getAdminHeaders = (): Record<string, string> => {
     }
   } catch (_) {}
 
-  const adminToken =
-    sessionToken ||
-    (import.meta as any).env?.VITE_ADMIN_API_TOKEN ||
-    'gis_admin_secret_token_default';
-
   return {
     'Content-Type': 'application/json',
-    'x-admin-token': adminToken,
+    'x-admin-token': sessionToken,
+    'x-session-token': sessionToken,
   };
 };
 

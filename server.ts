@@ -260,7 +260,7 @@ async function seedDefaultAdmin() {
     });
 
     if (!hasAdmin) {
-      const defaultPassword = process.env.ADMIN_DEFAULT_PASSWORD || '123';
+      const defaultPassword = process.env.ADMIN_DEFAULT_PASSWORD || getSecretToken() || 'GisAdmin@2026';
       const hashedPassword = await bcrypt.hash(defaultPassword, 10);
       const adminDoc = {
         username: 'admin',
@@ -271,9 +271,8 @@ async function seedDefaultAdmin() {
       };
       await adminDb.collection('users').doc('user_admin').set(adminDoc);
       console.log('----------------------------------------------------');
-      console.log('[Security Seed] Đã tự động tạo tài khoản admin mặc định (Admin SDK):');
-      console.log(`[Security Seed] Username: admin`);
-      console.log(`[Security Seed] Mật khẩu ban đầu: ${defaultPassword}`);
+      console.log('[Security Seed] Đã tự động tạo tài khoản admin mặc định (Admin SDK).');
+      console.log('[Security Seed] Username: admin (Mật khẩu thiết lập theo ADMIN_API_TOKEN)');
       console.log('----------------------------------------------------');
     }
   } catch (err: any) {
@@ -281,8 +280,11 @@ async function seedDefaultAdmin() {
   }
 }
 
-// Execute seedDefaultAdmin
-seedDefaultAdmin();
+// In-memory token revocation list (revoked upon logout)
+const revokedTokens = new Set<string>();
+
+// In-memory login rate limiter (max 5 failed attempts per IP, 15 minutes lockout)
+const loginRateLimiter = new Map<string, { count: number; lockedUntil: number }>();
 
 // Dynamic session tokens for active admin and editor sessions (Zero-Config authentication)
 interface ActiveSession {
@@ -297,35 +299,71 @@ const getSecretToken = (): string => {
 };
 
 // Cryptographic token helper to ensure user session survives server restarts
+// Format: v1.<role>.<base64url(username)>.<timestamp>.<full-64-char-hex-hmac>
 const createSignedToken = (username: string, role: 'admin' | 'editor'): string => {
   const secret = getSecretToken();
   const timestamp = Date.now();
-  const payload = `v1:${role}:${username}:${timestamp}`;
-  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
-  return `${payload}:${sig}`;
+  const usernameB64 = Buffer.from(username, 'utf8').toString('base64url');
+  const payload = `v1.${role}.${usernameB64}.${timestamp}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  return `${payload}.${sig}`;
 };
 
 const verifySignedToken = (token: string): ActiveSession | null => {
-  if (!token || !token.startsWith('v1:')) return null;
-  const parts = token.split(':');
-  if (parts.length !== 5) return null;
-  const [version, role, username, timestampStr, sig] = parts;
-  if (version !== 'v1' || (role !== 'admin' && role !== 'editor')) return null;
+  if (!token || revokedTokens.has(token)) return null;
 
-  const timestamp = parseInt(timestampStr, 10);
-  if (isNaN(timestamp)) return null;
+  // New format: v1.<role>.<usernameB64>.<timestamp>.<sig64>
+  if (token.startsWith('v1.')) {
+    const parts = token.split('.');
+    if (parts.length !== 5) return null;
+    const [version, role, usernameB64, timestampStr, sig] = parts;
+    if (version !== 'v1' || (role !== 'admin' && role !== 'editor')) return null;
 
-  // Max session lifetime: 30 days
-  const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-  if (Date.now() - timestamp > MAX_AGE_MS) return null;
+    const timestamp = parseInt(timestampStr, 10);
+    if (isNaN(timestamp)) return null;
 
-  const secret = getSecretToken();
-  const payload = `v1:${role}:${username}:${timestampStr}`;
-  const expectedSig = crypto.createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
+    // Max session lifetime: 30 days
+    const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+    if (Date.now() - timestamp > MAX_AGE_MS) return null;
 
-  if (sig === expectedSig) {
-    return { username, role: role as 'admin' | 'editor' };
+    const secret = getSecretToken();
+    const payload = `v1.${role}.${usernameB64}.${timestampStr}`;
+    const expectedSig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+
+    const sigBuf = Buffer.from(sig, 'utf8');
+    const expectedBuf = Buffer.from(expectedSig, 'utf8');
+    if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      try {
+        const decodedUser = Buffer.from(usernameB64, 'base64url').toString('utf8');
+        return { username: decodedUser, role: role as 'admin' | 'editor' };
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
   }
+
+  // Legacy format fallback during migration: v1:role:user:timestamp:sig32
+  if (token.startsWith('v1:')) {
+    const parts = token.split(':');
+    if (parts.length !== 5) return null;
+    const [version, role, username, timestampStr, sig] = parts;
+    if (version !== 'v1' || (role !== 'admin' && role !== 'editor')) return null;
+    const timestamp = parseInt(timestampStr, 10);
+    if (isNaN(timestamp)) return null;
+    const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+    if (Date.now() - timestamp > MAX_AGE_MS) return null;
+
+    const secret = getSecretToken();
+    const payload = `v1:${role}:${username}:${timestampStr}`;
+    const expectedSig = crypto.createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
+    const sigBuf = Buffer.from(sig, 'utf8');
+    const expectedBuf = Buffer.from(expectedSig, 'utf8');
+    if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return { username, role: role as 'admin' | 'editor' };
+    }
+  }
+
   return null;
 };
 
@@ -334,6 +372,10 @@ const requireEditorOrAdmin = (req: express.Request, res: express.Response, next:
   const token = (req.headers['x-session-token'] || req.headers['x-admin-token']) as string;
   if (!token) {
     return res.status(401).json({ error: 'Unauthorized: Thiếu mã phiên đăng nhập' });
+  }
+
+  if (revokedTokens.has(token)) {
+    return res.status(401).json({ error: 'Unauthorized: Phiên đăng nhập đã kết thúc' });
   }
 
   // 1. In-memory session check
@@ -352,45 +394,39 @@ const requireEditorOrAdmin = (req: express.Request, res: express.Response, next:
     return next();
   }
 
-  // 3. Static admin token check (from secrets/env)
-  const configuredToken = getSecretToken();
-  if ((configuredToken && token === configuredToken) || activeAdminSessions.has(token)) {
-    (req as any).user = { username: 'admin', role: 'admin' };
-    return next();
-  }
-
-  return res.status(403).json({ error: 'Forbidden: Bạn không có quyền ghi dữ liệu' });
+  return res.status(403).json({ error: 'Forbidden: Bạn không có quyền truy cập chức năng này' });
 };
 
 // Middleware to protect administrative user routes
 const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const adminTokenHeader = ((req.headers['x-admin-token'] || req.headers['x-session-token']) as string) || '';
-  if (!adminTokenHeader) {
+  const token = ((req.headers['x-admin-token'] || req.headers['x-session-token']) as string) || '';
+  if (!token) {
     return res.status(401).json({ error: 'Unauthorized: Thiếu token quản trị' });
   }
 
+  if (revokedTokens.has(token)) {
+    return res.status(401).json({ error: 'Unauthorized: Phiên đăng nhập đã kết thúc' });
+  }
+
   // 1. In-memory session check
-  const session = activeSessions.get(adminTokenHeader);
+  const session = activeSessions.get(token);
   if (session && session.role === 'admin') {
     return next();
   }
 
   // 2. Cryptographically signed token check
-  const verified = verifySignedToken(adminTokenHeader);
+  const verified = verifySignedToken(token);
   if (verified && verified.role === 'admin') {
-    activeSessions.set(adminTokenHeader, verified);
-    activeAdminSessions.add(adminTokenHeader);
+    activeSessions.set(token, verified);
+    activeAdminSessions.add(token);
     return next();
   }
 
-  // 3. Static admin token check
-  const configuredToken = getSecretToken();
-  if ((configuredToken && adminTokenHeader === configuredToken) || activeAdminSessions.has(adminTokenHeader)) {
-    return next();
-  }
-
-  return res.status(401).json({ error: 'Unauthorized: Invalid or missing admin session token' });
+  return res.status(401).json({ error: 'Unauthorized: Phiên làm việc không có quyền quản trị' });
 };
+
+// Execute seedDefaultAdmin
+seedDefaultAdmin();
 
 async function startServer() {
   const app = express();
@@ -977,7 +1013,7 @@ async function startServer() {
   }
 
   // Upload battle dossier PDF to Server
-  app.post('/api/battles/upload-hoso', async (req, res) => {
+  app.post('/api/battles/upload-hoso', requireEditorOrAdmin, async (req, res) => {
     try {
       const token = getEffectiveGitHubToken();
       if (!token) {
@@ -1104,7 +1140,7 @@ async function startServer() {
   });
 
   // Delete battle dossier PDF from GitHub Release
-  app.post('/api/battles/delete-hoso', async (req, res) => {
+  app.post('/api/battles/delete-hoso', requireEditorOrAdmin, async (req, res) => {
     try {
       const token = getEffectiveGitHubToken();
       const { fileUrl, fileName, objectId } = req.body;
@@ -1173,12 +1209,51 @@ async function startServer() {
     }
   });
 
+  // Helper to validate PDF proxy URLs and avoid SSRF attacks
+  function isSafePdfUpstream(urlStr: string): boolean {
+    try {
+      const parsed = new URL(urlStr);
+      if (parsed.protocol !== 'https:') return false;
+      const host = parsed.hostname.toLowerCase();
+      // Block loopback, link-local, and private IP ranges
+      if (
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '0.0.0.0' ||
+        host === '169.254.169.254' ||
+        host.startsWith('10.') ||
+        host.startsWith('192.168.') ||
+        /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
+      ) {
+        return false;
+      }
+      // Only allow GitHub and verified AWS S3 release assets
+      if (
+        host === 'github.com' ||
+        host === 'api.github.com' ||
+        host === 'objects.githubusercontent.com' ||
+        host === 'github-releases.githubusercontent.com' ||
+        host.endsWith('.githubusercontent.com') ||
+        host.endsWith('.amazonaws.com')
+      ) {
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // Proxy endpoint to stream PDF for in-app viewer (prevents cross-origin download forcing)
   app.get('/api/battles/proxy-pdf', async (req, res) => {
     try {
       const url = req.query.url as string;
       if (!url) {
         return res.status(400).json({ error: 'Missing url query parameter' });
+      }
+
+      if (!isSafePdfUpstream(url)) {
+        return res.status(403).json({ error: 'Forbidden: Địa chỉ PDF không hợp lệ hoặc không thuộc kho lưu trữ cho phép' });
       }
 
       const token = getEffectiveGitHubToken();
@@ -1188,11 +1263,17 @@ async function startServer() {
 
       // Handle redirect chain (GitHub releases redirect to AWS S3/CDN)
       while (hops < 6) {
+        if (!isSafePdfUpstream(currentUrl)) {
+          return res.status(403).json({ error: 'Forbidden: Địa chỉ chuyển hướng không an toàn' });
+        }
+
+        const parsedUrl = new URL(currentUrl);
         const headers: Record<string, string> = {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebGIS/1.0',
         };
-        // Only attach GitHub token to github.com / api.github.com, NOT AWS S3 redirected URLs!
-        if (token && (currentUrl.includes('github.com') || currentUrl.includes('api.github.com'))) {
+
+        // ONLY attach GitHub token to github.com / api.github.com, NEVER AWS S3 or third parties!
+        if (token && (parsedUrl.hostname === 'github.com' || parsedUrl.hostname === 'api.github.com')) {
           headers['Authorization'] = `Bearer ${token}`;
         }
 
@@ -1232,8 +1313,8 @@ async function startServer() {
     }
   });
 
-  // User Management APIs (100% Pure Firebase Admin SDK Access)
-  app.get('/api/users', async (req, res) => {
+  // User Management APIs (100% Pure Firebase Admin SDK Access - Admin Only)
+  app.get('/api/users', requireAdmin, async (req, res) => {
     try {
       if (!adminDb) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
@@ -1279,12 +1360,24 @@ async function startServer() {
     }
   });
 
-  // Secure Server-side Login endpoint using bcrypt & Admin SDK
+  // Secure Server-side Login endpoint using bcrypt & Admin SDK with rate limiting and direct query
   app.post('/api/login', async (req, res) => {
     try {
       if (!adminDb) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
+
+      // Rate limit check: max 5 failed attempts per IP, 15 min lockout
+      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      const now = Date.now();
+      const rateInfo = loginRateLimiter.get(ip);
+      if (rateInfo && rateInfo.lockedUntil > now) {
+        const remainingMinutes = Math.ceil((rateInfo.lockedUntil - now) / 60000);
+        return res.status(429).json({
+          error: `Quá nhiều lần thử sai. Tài khoản tạm khóa, vui lòng thử lại sau ${remainingMinutes} phút.`,
+        });
+      }
+
       const { username, password } = req.body;
       if (!username || !password) {
         return res.status(400).json({ error: 'Username and password are required' });
@@ -1292,57 +1385,66 @@ async function startServer() {
       const cleanUser = String(username).trim().toLowerCase();
       const cleanPass = String(password).trim();
 
-      const snap = await adminDb.collection('users').get();
-      let matchedUser: any = null;
+      // Direct document lookup first, followed by indexed limit(1) query (avoids reading entire collection)
+      let docSnap: any = null;
+      const directRef = adminDb.collection('users').doc(`user_${cleanUser}`);
+      const directSnap = await directRef.get();
+      if (directSnap.exists) {
+        docSnap = directSnap;
+      } else {
+        const querySnap = await adminDb.collection('users').where('username', '==', cleanUser).limit(1).get();
+        if (!querySnap.empty) {
+          docSnap = querySnap.docs[0];
+        }
+      }
 
-      for (const docSnap of snap.docs) {
+      if (docSnap && docSnap.exists) {
         const data = docSnap.data();
-        const uname = (data.username || data.email || '').trim().toLowerCase();
-        if (uname === cleanUser || docSnap.id === `user_${cleanUser}`) {
-          const storedHash = String(data.password || '');
-          let isValid = false;
+        const storedHash = String(data.password || '');
+        let isValid = false;
 
-          if (storedHash.startsWith('$2a$') || storedHash.startsWith('$2b$')) {
-            isValid = await bcrypt.compare(cleanPass, storedHash);
-          } else {
-            // Support transition for initial plain text password if any
-            isValid = storedHash === cleanPass;
-            if (isValid) {
-              const newHash = await bcrypt.hash(cleanPass, 10);
-              await adminDb.collection('users').doc(docSnap.id).update({ password: newHash });
-            }
+        if (storedHash.startsWith('$2a$') || storedHash.startsWith('$2b$')) {
+          isValid = await bcrypt.compare(cleanPass, storedHash);
+        }
+
+        if (isValid) {
+          // Reset rate limiter on successful login
+          loginRateLimiter.delete(ip);
+
+          const role = (data.role as 'admin' | 'editor') || 'editor';
+          const token = createSignedToken(data.username || cleanUser, role);
+
+          activeSessions.set(token, {
+            username: data.username || cleanUser,
+            role,
+          });
+
+          if (role === 'admin' || cleanUser === 'admin') {
+            activeAdminSessions.add(token);
           }
 
-          if (isValid) {
-            const role = (data.role as 'admin' | 'editor') || 'editor';
-            const token = createSignedToken(data.username || cleanUser, role);
-
-            activeSessions.set(token, {
-              username: data.username || cleanUser,
-              role,
-            });
-
-            if (role === 'admin' || cleanUser === 'admin') {
-              activeAdminSessions.add(token);
-            }
-
-            matchedUser = {
+          return res.json({
+            success: true,
+            user: {
               uid: docSnap.id,
               username: data.username || cleanUser,
               displayName: data.displayName || data.username || cleanUser,
               role,
               token,
-            };
-            break;
-          }
+            },
+          });
         }
       }
 
-      if (matchedUser) {
-        return res.json({ success: true, user: matchedUser });
+      // Record failed attempt
+      const attempts = (rateInfo?.count || 0) + 1;
+      if (attempts >= 5) {
+        loginRateLimiter.set(ip, { count: attempts, lockedUntil: now + 15 * 60 * 1000 });
+      } else {
+        loginRateLimiter.set(ip, { count: attempts, lockedUntil: 0 });
       }
 
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
     } catch (err: any) {
       console.error('[API /api/login] Error:', err);
       res.status(500).json({ error: err.message || 'Login failed' });
@@ -1353,6 +1455,7 @@ async function startServer() {
   app.post('/api/logout', (req, res) => {
     const token = (req.headers['x-session-token'] || req.headers['x-admin-token']) as string;
     if (token) {
+      revokedTokens.add(token);
       activeSessions.delete(token);
       activeAdminSessions.delete(token);
     }
@@ -2019,7 +2122,7 @@ async function startServer() {
   });
 
   // Invalidate server-side memory caches
-  app.post('/api/cache/invalidate', async (req, res) => {
+  app.post('/api/cache/invalidate', requireEditorOrAdmin, async (req, res) => {
     try {
       const { target } = req.body || {};
       if (!target || target === 'all' || target === 'raster_layers') {
@@ -2112,8 +2215,8 @@ async function startServer() {
     }
   });
 
-  // Clear server disk cache for specific raster URLs
-  app.post('/api/raster-layers/clear-file-cache', async (req, res) => {
+  // Clear server disk cache for specific raster URLs (Editor/Admin only)
+  app.post('/api/raster-layers/clear-file-cache', requireEditorOrAdmin, async (req, res) => {
     try {
       const { urls } = req.body;
       let deletedCount = 0;
@@ -2202,8 +2305,8 @@ async function startServer() {
     }
   });
 
-  // Scan Firebase Storage folder for GeoTIFF files via Admin Storage SDK
-  app.post('/api/storage/scan-firebase', async (req, res) => {
+  // Scan Firebase Storage folder for GeoTIFF files via Admin Storage SDK (Editor/Admin only)
+  app.post('/api/storage/scan-firebase', requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminApp) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
@@ -2253,8 +2356,8 @@ async function startServer() {
     }
   });
 
-  // GET notifications (latest 50) via Admin SDK
-  app.get('/api/notifications', async (req, res) => {
+  // GET notifications (latest 50) via Admin SDK (Editor/Admin only)
+  app.get('/api/notifications', requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) return res.json({ notifications: [] });
       const snap = await adminDb.collection('notifications').orderBy('createdAt', 'desc').limit(50).get();
@@ -2277,8 +2380,8 @@ async function startServer() {
     }
   });
 
-  // GET unread notifications count via Admin SDK
-  app.get('/api/notifications/unread-count', async (req, res) => {
+  // GET unread notifications count via Admin SDK (Editor/Admin only)
+  app.get('/api/notifications/unread-count', requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) return res.json({ count: 0 });
       const snap = await adminDb.collection('notifications').where('read', '==', false).get();
@@ -2289,8 +2392,8 @@ async function startServer() {
     }
   });
 
-  // Mark notification as read via Admin SDK
-  app.post('/api/notifications/mark-read', async (req, res) => {
+  // Mark notification as read via Admin SDK (Editor/Admin only)
+  app.post('/api/notifications/mark-read', requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
       const { id } = req.body;
@@ -2303,8 +2406,8 @@ async function startServer() {
     }
   });
 
-  // Delete notification via Admin SDK
-  app.post('/api/notifications/delete', async (req, res) => {
+  // Delete notification via Admin SDK (Admin only)
+  app.post('/api/notifications/delete', requireAdmin, async (req, res) => {
     try {
       if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
       const { id } = req.body;
@@ -2317,8 +2420,8 @@ async function startServer() {
     }
   });
 
-  // Add notification via Admin SDK
-  app.post('/api/notifications/add', async (req, res) => {
+  // Add notification via Admin SDK (Editor/Admin only)
+  app.post('/api/notifications/add', requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
       const { message, type = 'info', title, objectId, layerId, feedbackId } = req.body;
@@ -2343,7 +2446,7 @@ async function startServer() {
     }
   });
 
-  // Create user feedback via Admin SDK (and notify admins/editors)
+  // Create user feedback via Admin SDK (and notify admins/editors) - Publicly accessible for guest feedback
   app.post('/api/feedback', async (req, res) => {
     try {
       if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
@@ -2393,16 +2496,28 @@ async function startServer() {
     }
   });
 
-  // GET feedback list by objectId and layerId via Admin SDK
+  // GET feedback list via Admin SDK:
+  // - Public when filtered by objectId (view feedback for a map feature)
+  // - Restricted to Editor/Admin when listing all feedback
   app.get('/api/feedback', async (req, res) => {
     try {
       if (!adminDb) return res.json({ items: [] });
       const { objectId, layerId } = req.query;
       if (!layerId) return res.json({ items: [] });
 
+      const targetObjId = objectId !== undefined && objectId !== null ? String(objectId).toLowerCase().trim() : null;
+
+      // Full feedback list requires Editor or Admin session
+      if (!targetObjId) {
+        const token = (req.headers['x-session-token'] || req.headers['x-admin-token']) as string;
+        const session = token ? (activeSessions.get(token) || verifySignedToken(token)) : null;
+        if (!session || (session.role !== 'admin' && session.role !== 'editor')) {
+          return res.status(403).json({ error: 'Forbidden: Bạn cần quyền Quản trị hoặc Biên tập để xem toàn bộ góp ý' });
+        }
+      }
+
       const snap = await adminDb.collection('PhanAnh').where('Lop', '==', String(layerId)).get();
       const items: any[] = [];
-      const targetObjId = objectId !== undefined && objectId !== null ? String(objectId).toLowerCase().trim() : null;
 
       snap.docs.forEach((docSnap: any) => {
         const d = docSnap.data();
@@ -2441,6 +2556,7 @@ async function startServer() {
       res.status(500).json({ error: err.message || 'Lỗi tải danh sách góp ý' });
     }
   });
+
 
   // Update feedback status via Admin SDK
   app.post('/api/feedback/update-status', requireEditorOrAdmin, async (req, res) => {

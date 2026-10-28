@@ -2181,7 +2181,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               entry.feature = { ...entry.feature, coordinates: newCoords };
             }
             if (onFeatureGeometryUpdateRef.current) {
-              onFeatureGeometryUpdateRef.current(feat.id || featKey, newCoords);
+              onFeatureGeometryUpdateRef.current(featKey, newCoords);
             }
           };
 
@@ -2296,7 +2296,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                   entry.feature = { ...entry.feature, coordinates: newGeoCoords };
                 }
                 if (onFeatureGeometryUpdateRef.current) {
-                  onFeatureGeometryUpdateRef.current(feat.id || featKey, newGeoCoords);
+                  onFeatureGeometryUpdateRef.current(featKey, newGeoCoords);
                 }
               };
 
@@ -2471,7 +2471,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                   entry.feature = { ...entry.feature, coordinates: newGeoCoords };
                 }
                 if (onFeatureGeometryUpdateRef.current) {
-                  onFeatureGeometryUpdateRef.current(feat.id || featKey, newGeoCoords);
+                  onFeatureGeometryUpdateRef.current(featKey, newGeoCoords);
                 }
               };
 

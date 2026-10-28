@@ -1430,9 +1430,10 @@ export default function App() {
     };
 
     // 1. Immediately sync refs and selection state so unsaved badge/toolbar updates in 0ms
+    const targetKey = getItemUniqueKey(updatedFeat);
     originalSelectedFeatureRef.current = JSON.parse(JSON.stringify(updatedFeat));
     setSelectedFeature(updatedFeat);
-    if (editingFeature && isFeatureMatch(editingFeature, updatedFeat.id)) {
+    if (editingFeature && (getItemUniqueKey(editingFeature) === targetKey || isFeatureMatch(editingFeature, targetKey))) {
       setEditingFeature(updatedFeat);
     }
 
@@ -1441,9 +1442,8 @@ export default function App() {
 
     // 3. Instantly update React map features state and defer localStorage serialization to background macrotask
     setMapFeatures((prev) => {
-      const targetKey = getItemUniqueKey(updatedFeat);
       const idx = prev.findIndex(
-        (f) => isFeatureMatch(f, updatedFeat.id) || isFeatureMatch(f, targetKey) || getItemUniqueKey(f) === targetKey
+        (f) => getItemUniqueKey(f) === targetKey || isFeatureMatch(f, targetKey)
       );
       let updatedList: GeoJsonFeatureItem[];
       if (idx >= 0) {
@@ -1470,7 +1470,7 @@ export default function App() {
     saveSingleFeatureToFirestore(updatedFeat)
       .then((success) => {
         if (success) {
-          if (syncError && isFeatureMatch(syncError.feature, updatedFeat.id)) {
+          if (syncError && (getItemUniqueKey(syncError.feature) === targetKey || isFeatureMatch(syncError.feature, targetKey))) {
             setSyncError(null);
           }
         } else {

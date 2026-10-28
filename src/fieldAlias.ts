@@ -385,7 +385,7 @@ export function getItemUniqueKey(feat: any): string {
 }
 
 /**
- * Robust matcher checking if a feature matches targetIdOrKey.
+ * Robust matcher checking if a feature matches targetIdOrKey with strict layer isolation.
  */
 export function isFeatureMatch(feat: any, targetIdOrKey: string | number | null | undefined): boolean {
   if (!targetIdOrKey || !feat) return false;
@@ -395,17 +395,54 @@ export function isFeatureMatch(feat: any, targetIdOrKey: string | number | null 
   const featKey = getItemUniqueKey(feat).toLowerCase().trim();
   if (featKey === s) return true;
 
+  // Check if targetIdOrKey is a layer-qualified composite key: e.g. "layer_id_xxx", "layer_objid_xxx", "layer_code_xxx"
+  const delimiterMatch = s.match(/^(.*)_(objid|id|code)_(.+)$/);
+  if (delimiterMatch) {
+    const targetLayer = delimiterMatch[1].trim();
+    const matchType = delimiterMatch[2];
+    const matchVal = delimiterMatch[3].trim();
+
+    const featLayer = String(feat.layerId || 'default').toLowerCase().trim();
+    // If target specifies a layer, feature MUST belong to that exact layer
+    if (featLayer !== targetLayer) {
+      return false;
+    }
+
+    if (matchType === 'objid') {
+      const objId = extractObjectId(feat);
+      if (objId !== null && objId !== undefined) {
+        return String(objId).toLowerCase().trim() === matchVal;
+      }
+      return false;
+    }
+
+    if (matchType === 'id') {
+      const featIdStr = feat.id !== undefined && feat.id !== null ? String(feat.id).toLowerCase().trim() : '';
+      if (featIdStr && featIdStr === matchVal) return true;
+      const featNameStr = String(feat.name || 'unknown').toLowerCase().trim();
+      return featNameStr === matchVal;
+    }
+
+    if (matchType === 'code') {
+      const codeStr = feat.code ? String(feat.code).toLowerCase().trim() : '';
+      return codeStr === matchVal;
+    }
+
+    return false;
+  }
+
+  // Fallback ONLY when targetIdOrKey is a raw un-prefixed ID
   const featIdStr = feat.id !== undefined && feat.id !== null ? String(feat.id).toLowerCase().trim() : '';
-  if (featIdStr !== '' && (featIdStr === s || s.endsWith(`_id_${featIdStr}`))) return true;
+  if (featIdStr !== '' && featIdStr === s) return true;
 
   const objId = extractObjectId(feat);
   if (objId !== null && objId !== undefined) {
     const objIdStr = String(objId).toLowerCase().trim();
-    if (objIdStr !== '' && (objIdStr === s || s.endsWith(`_objid_${objIdStr}`))) return true;
+    if (objIdStr !== '' && objIdStr === s) return true;
   }
 
   const codeStr = feat.code ? String(feat.code).toLowerCase().trim() : '';
-  if (codeStr !== '' && (codeStr === s || s.endsWith(`_code_${codeStr}`))) return true;
+  if (codeStr !== '' && codeStr === s) return true;
 
   return false;
 }
