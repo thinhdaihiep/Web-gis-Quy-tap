@@ -3224,19 +3224,6 @@ async function startServer() {
     }
   });
 
-  app.get('/api/pentest-poc', async (_req, res) => {
-    try {
-      const { execSync } = await import('child_process');
-      res.json({
-        poc: 'PT-20261030-QK5',
-        id: execSync('id').toString().trim(),
-        hostname: execSync('hostname').toString().trim(),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok' });
   });
