@@ -260,7 +260,7 @@ async function seedDefaultAdmin() {
     });
 
     if (!hasAdmin) {
-      const defaultPassword = process.env.ADMIN_DEFAULT_PASSWORD || getSecretToken() || 'GisAdmin@2026';
+      const defaultPassword = process.env.ADMIN_DEFAULT_PASSWORD || 'GisAdmin@2026';
       const hashedPassword = await bcrypt.hash(defaultPassword, 10);
       const adminDoc = {
         username: 'admin',
@@ -348,13 +348,13 @@ const activeAdminSessions = new Set<string>();
 
 let memorySecretFallback = '';
 const getSecretToken = (): string => {
-  const envSecret = process.env.ADMIN_API_TOKEN || process.env.admin_api_token;
+  const envSecret = process.env.SESSION_SECRET || process.env.session_secret;
   if (envSecret && envSecret.trim() !== '') {
     return envSecret.trim();
   }
   if (!memorySecretFallback) {
-    memorySecretFallback = crypto.randomBytes(32).toString('hex');
-    console.warn('[Security Warning] ADMIN_API_TOKEN chưa được cấu hình. Sử dụng khóa dự phòng trong bộ nhớ.');
+    memorySecretFallback = crypto.randomBytes(64).toString('hex');
+    console.log('[Auth] Đang sử dụng khóa ký phiên mật mã an toàn được sinh ngẫu nhiên trong bộ nhớ.');
   }
   return memorySecretFallback;
 };

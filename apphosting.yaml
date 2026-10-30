@@ -15,5 +15,3 @@ scripts:
 env:
   - variable: NODE_ENV
     value: production
-  - variable: ADMIN_API_TOKEN
-    value: Bando@qk5
