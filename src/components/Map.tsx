@@ -1955,38 +1955,71 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       });
     };
 
+    function resolveFeatureLayer(
+      featItem: GeoJsonFeatureItem,
+      layerConfigs: LayerConfig[]
+    ): { layerId: string; layerName: string; layerColor: string } {
+      const rawLayerId = featItem.layerId ? String(featItem.layerId).trim() : '';
+      const match = layerConfigs.find((l) => l.id.toLowerCase() === rawLayerId.toLowerCase());
+      if (match) {
+        return { layerId: match.id, layerName: match.name, layerColor: match.color || '#3b82f6' };
+      }
+
+      // Handle legacy or alternate IDs
+      const lower = rawLayerId.toLowerCase();
+      if (lower === 'layer2_tran_danh' || lower === 'layer3_tran_danh_lich_su' || lower.includes('tran_danh')) {
+        const l = layerConfigs.find((x) => x.id === 'layer2_tran_danh') || layerConfigs.find((x) => x.name.toLowerCase().includes('trận đánh'));
+        return { layerId: 'layer2_tran_danh', layerName: l?.name || 'Các trận đánh lịch sử', layerColor: l?.color || '#f59e0b' };
+      }
+      if (lower === 'layer4_nghia_trang' || lower === 'layer2_nghia_trang' || lower === 'layer3_nghia_trang' || lower.includes('nghia_trang')) {
+        const l = layerConfigs.find((x) => x.id === 'layer4_nghia_trang') || layerConfigs.find((x) => x.name.toLowerCase().includes('nghĩa trang'));
+        return { layerId: 'layer4_nghia_trang', layerName: l?.name || 'Nghĩa trang liệt sĩ', layerColor: l?.color || '#6366f1' };
+      }
+      if (lower === 'layer3_mo_chi' || lower === 'layer1_mo_liet_si' || lower.includes('mo_chi') || lower.includes('mo_liet_si')) {
+        const l = layerConfigs.find((x) => x.id === 'layer3_mo_chi') || layerConfigs.find((x) => x.name.toLowerCase().includes('mộ'));
+        return { layerId: 'layer3_mo_chi', layerName: l?.name || 'Mộ liệt sĩ', layerColor: l?.color || '#10b981' };
+      }
+      if (lower === 'layer1_tim_kiem' || lower === 'layer4_khu_vuc_quy_tap' || lower.includes('tim_kiem') || lower.includes('quy_tap')) {
+        const l = layerConfigs.find((x) => x.id === 'layer1_tim_kiem') || layerConfigs.find((x) => x.name.toLowerCase().includes('tìm kiếm') || x.name.toLowerCase().includes('quy tập'));
+        return { layerId: 'layer1_tim_kiem', layerName: l?.name || 'Khu vực tìm kiếm, quy tập', layerColor: l?.color || '#ef4444' };
+      }
+
+      return { layerId: rawLayerId || 'default', layerName: 'Vị trí GIS', layerColor: '#3b82f6' };
+    }
+
     activeFeatures.forEach((feat) => {
       const featKey = getItemUniqueKey(feat);
-      const parentLayer = (feat.layerId ? layerConfigMap.get(feat.layerId) : null) || (layers.length > 0 ? layers[0] : null);
+      const resolvedLayer = resolveFeatureLayer(feat, layers);
+      const parentLayer = layerConfigMap.get(resolvedLayer.layerId) || layers.find((l) => l.id === resolvedLayer.layerId) || null;
 
-      let featureColor = parentLayer?.color || '#10b981';
+      let featureColor = resolvedLayer.layerColor;
       const rawPhanLoai = feat.properties?.PhanLoai ?? feat.properties?.phanLoai;
       const phanLoaiNum = Number(rawPhanLoai);
 
       const isSearchAreaLayer =
-        feat.layerId === 'layer4_khu_vuc_quy_tap' ||
-        parentLayer?.id === 'layer4_khu_vuc_quy_tap' ||
-        parentLayer?.name?.toLowerCase().includes('tìm kiếm') ||
-        parentLayer?.name?.toLowerCase().includes('quy tập') ||
-        parentLayer?.name?.toLowerCase().includes('khu vực');
+        resolvedLayer.layerId === 'layer1_tim_kiem' ||
+        resolvedLayer.layerId === 'layer4_khu_vuc_quy_tap' ||
+        resolvedLayer.layerName.toLowerCase().includes('tìm kiếm') ||
+        resolvedLayer.layerName.toLowerCase().includes('quy tập');
 
       const isBattleLayer =
-        feat.layerId === 'layer2_tran_danh' ||
-        parentLayer?.id === 'layer2_tran_danh' ||
-        parentLayer?.name?.toLowerCase().includes('trận đánh') ||
-        parentLayer?.name?.toLowerCase().includes('tran danh');
+        resolvedLayer.layerId === 'layer2_tran_danh' ||
+        resolvedLayer.layerId === 'layer3_tran_danh_lich_su' ||
+        resolvedLayer.layerName.toLowerCase().includes('trận đánh') ||
+        resolvedLayer.layerName.toLowerCase().includes('tran danh');
 
       const isGraveLayer =
-        feat.layerId === 'layer1_mo_liet_si' ||
-        parentLayer?.id === 'layer1_mo_liet_si' ||
-        parentLayer?.name?.toLowerCase().includes('mộ') ||
-        parentLayer?.name?.toLowerCase().includes('mo');
+        resolvedLayer.layerId === 'layer3_mo_chi' ||
+        resolvedLayer.layerId === 'layer1_mo_liet_si' ||
+        resolvedLayer.layerName.toLowerCase().includes('mộ') ||
+        resolvedLayer.layerName.toLowerCase().includes('mo');
 
       const isCemeteryLayer =
-        feat.layerId === 'layer3_nghia_trang' ||
-        parentLayer?.id === 'layer3_nghia_trang' ||
-        parentLayer?.name?.toLowerCase().includes('nghĩa trang') ||
-        parentLayer?.name?.toLowerCase().includes('nghia trang');
+        resolvedLayer.layerId === 'layer4_nghia_trang' ||
+        resolvedLayer.layerId === 'layer2_nghia_trang' ||
+        resolvedLayer.layerId === 'layer3_nghia_trang' ||
+        resolvedLayer.layerName.toLowerCase().includes('nghĩa trang') ||
+        resolvedLayer.layerName.toLowerCase().includes('nghia trang');
 
       // CHỈ áp dụng màu phân loại và huy hiệu quy tập cho lớp Khu vực tìm kiếm quy tập (layer4), tuyệt đối không gán cho Trận đánh hay Mộ liệt sĩ
       if (isSearchAreaLayer && rawPhanLoai !== undefined && rawPhanLoai !== null && PHAN_LOAI_COLORS[phanLoaiNum]) {
@@ -2126,6 +2159,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
           pointMarker.bindPopup(() => {
             const currentFeat = featureLayerMapRef.current.get(featKey)?.feature || feat;
+            const currentResolved = resolveFeatureLayer(currentFeat, layers);
             const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(currentFeat);
             const hoSoUrl = currentFeat.properties?.HoSo || currentFeat.properties?.hoso || currentFeat.properties?.HOSO;
             const hoSoButtonHtml = hoSoUrl && String(hoSoUrl).trim() !== ''
@@ -2137,8 +2171,8 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
             return `
               <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 210px;">
-                <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
-                  ${parentLayer?.name || 'Vị trí GIS'}
+                <div style="background-color: ${currentResolved.layerColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
+                  ${currentResolved.layerName}
                 </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px;">
@@ -2147,13 +2181,13 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 </div>
                 ${
                   phanLoaiBadgeText
-                    ? `<div style="margin-top:4px;"><span style="background-color:${featureColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`
+                    ? `<div style="margin-top:4px;"><span style="background-color:${currentResolved.layerColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`
                     : ''
                 }
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(currentFeat, lat, lng, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
+                  ${renderPopupProperties(currentFeat, lat, lng, curHiddenKey, currentResolved.layerId)}
                 </div>
-                ${renderFeedbackButtonHtml(currentFeat, parentLayer?.name)}
+                ${renderFeedbackButtonHtml(currentFeat, currentResolved.layerName)}
               </div>
             `;
           });
@@ -2324,6 +2358,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
           polygon.bindPopup(() => {
             const currentFeat = featureLayerMapRef.current.get(featKey)?.feature || feat;
+            const currentResolved = resolveFeatureLayer(currentFeat, layers);
             const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(currentFeat);
             const hoSoUrl = currentFeat.properties?.HoSo || currentFeat.properties?.hoso || currentFeat.properties?.HOSO;
             const hoSoButtonHtml = hoSoUrl && String(hoSoUrl).trim() !== ''
@@ -2333,10 +2368,25 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                 </button>`
               : '';
 
+            const isCurSearchArea =
+              currentResolved.layerId === 'layer1_tim_kiem' ||
+              currentResolved.layerId === 'layer4_khu_vuc_quy_tap' ||
+              currentResolved.layerName.toLowerCase().includes('tìm kiếm') ||
+              currentResolved.layerName.toLowerCase().includes('quy tập');
+
+            const curRawPhanLoai = currentFeat.properties?.PhanLoai ?? currentFeat.properties?.phanLoai;
+            const curPhanLoaiNum = Number(curRawPhanLoai);
+            const phanLoaiConfig = (isCurSearchArea && curRawPhanLoai !== undefined && curRawPhanLoai !== null && PHAN_LOAI_COLORS[curPhanLoaiNum])
+              ? PHAN_LOAI_COLORS[curPhanLoaiNum]
+              : null;
+
+            const popupColor = phanLoaiConfig ? phanLoaiConfig.color : currentResolved.layerColor;
+            const badgeText = phanLoaiConfig ? phanLoaiConfig.label : phanLoaiBadgeText;
+
             return `
               <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 210px;">
-                <div style="background-color: ${featureColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
-                  ${parentLayer?.name || 'Khu vực GIS'}
+                <div style="background-color: ${popupColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
+                  ${currentResolved.layerName}
                 </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px;">
@@ -2344,14 +2394,14 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
                   ${hoSoButtonHtml}
                 </div>
                 ${
-                  phanLoaiBadgeText
-                    ? `<div style="margin-top:4px;"><span style="background-color:${featureColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${phanLoaiBadgeText}</span></div>`
+                  badgeText
+                    ? `<div style="margin-top:4px;"><span style="background-color:${popupColor}; color:#ffffff; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px;">${badgeText}</span></div>`
                     : ''
                 }
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
+                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey, currentResolved.layerId)}
                 </div>
-                ${renderFeedbackButtonHtml(currentFeat, parentLayer?.name)}
+                ${renderFeedbackButtonHtml(currentFeat, currentResolved.layerName)}
               </div>
             `;
           });
@@ -2499,14 +2549,18 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
           polyline.bindPopup(() => {
             const currentFeat = featureLayerMapRef.current.get(featKey)?.feature || feat;
+            const currentResolved = resolveFeatureLayer(currentFeat, layers);
             const { name: currentTitle, hiddenKey: curHiddenKey } = getFeatureName(currentFeat);
             return `
               <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; color: #0f172a; padding: 2px; min-width: 200px;">
+                <div style="background-color: ${currentResolved.layerColor}; color: #ffffff; padding: 4px 8px; font-weight: bold; font-size: 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; margin: -2px -2px 6px -2px;">
+                  ${currentResolved.layerName}
+                </div>
                 <strong style="font-size: 13px; color: #1e3a8a;">${currentTitle}</strong><br/>
                 <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
-                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey, currentFeat.layerId || parentLayer?.id)}
+                  ${renderPopupProperties(currentFeat, undefined, undefined, curHiddenKey, currentResolved.layerId)}
                 </div>
-                ${renderFeedbackButtonHtml(currentFeat, parentLayer?.name)}
+                ${renderFeedbackButtonHtml(currentFeat, currentResolved.layerName)}
               </div>
             `;
           });

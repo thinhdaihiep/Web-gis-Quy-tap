@@ -271,8 +271,7 @@ async function seedDefaultAdmin() {
       };
       await adminDb.collection('users').doc('user_admin').set(adminDoc);
       console.log('----------------------------------------------------');
-      console.log('[Security Seed] Đã tự động tạo tài khoản admin mặc định (Admin SDK).');
-      console.log('[Security Seed] Username: admin (Mật khẩu thiết lập theo ADMIN_API_TOKEN)');
+      console.log('[Security Seed] Đã tự động tạo tài khoản admin mặc định: admin');
       console.log('----------------------------------------------------');
     }
   } catch (err: any) {
@@ -280,11 +279,64 @@ async function seedDefaultAdmin() {
   }
 }
 
-// In-memory token revocation list (revoked upon logout)
-const revokedTokens = new Set<string>();
+// Helper to compute token SHA256 hash for storage/revocation lookup
+const hashToken = (tok: string): string => crypto.createHash('sha256').update(tok).digest('hex');
+
+// In-memory token revocation list (stores token hashes)
+const revokedTokenHashes = new Set<string>();
+
+const isTokenRevoked = (token: string): boolean => {
+  if (!token) return true;
+  const h = hashToken(token);
+  return revokedTokenHashes.has(h);
+};
+
+// Revoke a token both in-memory and in Firestore for distributed instances
+const revokeToken = async (token: string) => {
+  if (!token) return;
+  const h = hashToken(token);
+  revokedTokenHashes.add(h);
+  activeSessions.delete(token);
+  activeAdminSessions.delete(token);
+  if (adminDb) {
+    try {
+      await adminDb.collection('revoked_tokens').doc(h).set({
+        revokedAt: new Date().toISOString(),
+        expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+      });
+    } catch (_) {}
+  }
+};
+
+// Sync revoked tokens from Firestore on startup and in real-time across instances
+async function syncRevokedTokens() {
+  if (!adminDb) return;
+  try {
+    const snap = await adminDb.collection('revoked_tokens').get();
+    const now = Date.now();
+    snap.docs.forEach((doc: any) => {
+      const data = doc.data();
+      if (data.expiresAt && data.expiresAt > now) {
+        revokedTokenHashes.add(doc.id);
+      }
+    });
+
+    // Realtime listener for cross-instance token revocations
+    adminDb.collection('revoked_tokens').onSnapshot((snapshot: any) => {
+      snapshot.docChanges().forEach((change: any) => {
+        if (change.type === 'added' || change.type === 'modified') {
+          revokedTokenHashes.add(change.doc.id);
+        }
+      });
+    }, () => {});
+  } catch (_) {}
+}
 
 // In-memory login rate limiter (max 5 failed attempts per IP, 15 minutes lockout)
 const loginRateLimiter = new Map<string, { count: number; lockedUntil: number }>();
+
+// In-memory rate limiter for public feedback submissions (max 5 submissions per 60 seconds per IP)
+const feedbackRateLimiter = new Map<string, { count: number; resetAt: number }>();
 
 // Dynamic session tokens for active admin and editor sessions (Zero-Config authentication)
 interface ActiveSession {
@@ -294,8 +346,17 @@ interface ActiveSession {
 const activeSessions = new Map<string, ActiveSession>();
 const activeAdminSessions = new Set<string>();
 
+let memorySecretFallback = '';
 const getSecretToken = (): string => {
-  return process.env.ADMIN_API_TOKEN || process.env.admin_api_token || '';
+  const envSecret = process.env.ADMIN_API_TOKEN || process.env.admin_api_token;
+  if (envSecret && envSecret.trim() !== '') {
+    return envSecret.trim();
+  }
+  if (!memorySecretFallback) {
+    memorySecretFallback = crypto.randomBytes(32).toString('hex');
+    console.warn('[Security Warning] ADMIN_API_TOKEN chưa được cấu hình. Sử dụng khóa dự phòng trong bộ nhớ.');
+  }
+  return memorySecretFallback;
 };
 
 // Cryptographic token helper to ensure user session survives server restarts
@@ -310,7 +371,7 @@ const createSignedToken = (username: string, role: 'admin' | 'editor'): string =
 };
 
 const verifySignedToken = (token: string): ActiveSession | null => {
-  if (!token || revokedTokens.has(token)) return null;
+  if (!token || isTokenRevoked(token)) return null;
 
   // New format: v1.<role>.<usernameB64>.<timestamp>.<sig64>
   if (token.startsWith('v1.')) {
@@ -374,7 +435,7 @@ const requireEditorOrAdmin = (req: express.Request, res: express.Response, next:
     return res.status(401).json({ error: 'Unauthorized: Thiếu mã phiên đăng nhập' });
   }
 
-  if (revokedTokens.has(token)) {
+  if (isTokenRevoked(token)) {
     return res.status(401).json({ error: 'Unauthorized: Phiên đăng nhập đã kết thúc' });
   }
 
@@ -404,7 +465,7 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
     return res.status(401).json({ error: 'Unauthorized: Thiếu token quản trị' });
   }
 
-  if (revokedTokens.has(token)) {
+  if (isTokenRevoked(token)) {
     return res.status(401).json({ error: 'Unauthorized: Phiên đăng nhập đã kết thúc' });
   }
 
@@ -425,14 +486,24 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
   return res.status(401).json({ error: 'Unauthorized: Phiên làm việc không có quyền quản trị' });
 };
 
-// Execute seedDefaultAdmin
+// Execute seedDefaultAdmin and syncRevokedTokens
 seedDefaultAdmin();
+syncRevokedTokens();
 
 async function startServer() {
   const app = express();
   const PORT = process.env.NODE_ENV === 'production' && process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-  app.use(express.json({ limit: '50mb' }));
+  // Security Headers
+  app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
+
+  // Default body limit for standard endpoints to prevent memory exhaustion
+  app.use(express.json({ limit: '2mb' }));
 
   // Status endpoint for Pure Firebase Admin SDK
   app.get('/api/admin/firebase-status', (req, res) => {
@@ -1013,7 +1084,7 @@ async function startServer() {
   }
 
   // Upload battle dossier PDF to Server
-  app.post('/api/battles/upload-hoso', requireEditorOrAdmin, async (req, res) => {
+  app.post('/api/battles/upload-hoso', express.json({ limit: '50mb' }), requireEditorOrAdmin, async (req, res) => {
     try {
       const token = getEffectiveGitHubToken();
       if (!token) {
@@ -1025,6 +1096,15 @@ async function startServer() {
       const { fileName, fileBase64, objectId, battleName, oldFileUrl } = req.body;
       if (!fileBase64) {
         return res.status(400).json({ error: 'Thiếu nội dung file base64' });
+      }
+
+      // Convert base64 to Buffer
+      const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
+      const fileBuffer = Buffer.from(cleanBase64, 'base64');
+
+      // Validate PDF Magic bytes: must start with %PDF- (0x25, 0x50, 0x44, 0x46, 0x2D)
+      if (fileBuffer.length < 5 || fileBuffer.toString('utf8', 0, 5) !== '%PDF-') {
+        return res.status(400).json({ error: 'Tệp tải lên không phải là định dạng PDF hợp lệ (thiếu tiêu đề %PDF-).' });
       }
 
       // Format standard filename: [OBJECTID].[tên file upload]
@@ -1045,10 +1125,6 @@ async function startServer() {
           targetFileName = `${prefix}${uploadedName}`;
         }
       }
-
-      // Convert base64 to Buffer
-      const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
-      const fileBuffer = Buffer.from(cleanBase64, 'base64');
 
       // 1. Get or create release
       const release = await getOrCreateGitHubRelease(token);
@@ -1227,15 +1303,18 @@ async function startServer() {
       ) {
         return false;
       }
-      // Only allow GitHub and verified AWS S3 release assets
-      if (
-        host === 'github.com' ||
-        host === 'api.github.com' ||
+      // Only allow GitHub releases of the specific repo or verified GitHub / AWS release assets
+      const isAllowedRepoRelease =
+        (host === 'github.com' && parsed.pathname.startsWith(`/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`)) ||
+        (host === 'api.github.com' && parsed.pathname.startsWith(`/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`));
+
+      const isAllowedCdn =
         host === 'objects.githubusercontent.com' ||
         host === 'github-releases.githubusercontent.com' ||
         host.endsWith('.githubusercontent.com') ||
-        host.endsWith('.amazonaws.com')
-      ) {
+        host.endsWith('.amazonaws.com');
+
+      if (isAllowedRepoRelease || isAllowedCdn) {
         return true;
       }
       return false;
@@ -1452,12 +1531,10 @@ async function startServer() {
   });
 
   // Logout endpoint to revoke dynamic session token
-  app.post('/api/logout', (req, res) => {
+  app.post('/api/logout', async (req, res) => {
     const token = (req.headers['x-session-token'] || req.headers['x-admin-token']) as string;
     if (token) {
-      revokedTokens.add(token);
-      activeSessions.delete(token);
-      activeAdminSessions.delete(token);
+      await revokeToken(token);
     }
     res.json({ success: true });
   });
@@ -1581,6 +1658,46 @@ async function startServer() {
     return cleaned;
   }
 
+  function getServerFeatureUniqueKey(feat: any): string {
+    if (!feat) return 'default_unknown';
+    const layerId = feat.layerId || 'default';
+
+    // 1. Check OBJECTID in properties
+    let objId: any = null;
+    const props = feat.properties;
+    if (props && typeof props === 'object') {
+      for (const k of Object.keys(props)) {
+        const lower = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (lower === 'objectid' || lower === 'objectid1' || lower === 'objectid0' || lower === 'fid') {
+          const val = props[k];
+          if (val !== null && val !== undefined && String(val).trim() !== '') {
+            objId = val;
+            break;
+          }
+        }
+      }
+    }
+
+    if (objId !== null && objId !== undefined) {
+      return `${layerId}_objid_${String(objId).toLowerCase().trim()}`;
+    }
+
+    const idStr = feat.id !== undefined && feat.id !== null ? String(feat.id).toLowerCase().trim() : '';
+    if (idStr !== '') {
+      if (idStr.startsWith(String(layerId).toLowerCase() + '_')) {
+        return idStr;
+      }
+      return `${layerId}_id_${idStr}`;
+    }
+
+    const codeStr = feat.code ? String(feat.code).toLowerCase().trim() : '';
+    if (codeStr !== '') {
+      return `${layerId}_code_${codeStr}`;
+    }
+
+    return `${layerId}_id_${String(feat.name || 'unknown').toLowerCase().trim()}`;
+  }
+
   // Save/Update a single map feature via Admin SDK
   app.post('/api/features/save', requireEditorOrAdmin, async (req, res) => {
     try {
@@ -1606,10 +1723,11 @@ async function startServer() {
       };
       if (feature.code) cleanedDoc.code = feature.code;
 
-      await adminDb.collection('map_features').doc(String(feature.id)).set(cleanedDoc, { merge: true });
+      const docId = getServerFeatureUniqueKey(feature);
+      await adminDb.collection('map_features').doc(docId).set(cleanedDoc, { merge: true });
       cachedFeaturesResponse = null;
       await bumpSyncVersion('features');
-      res.json({ success: true });
+      res.json({ success: true, docId });
     } catch (err: any) {
       console.error('[API POST /api/features/save] Error:', err);
       res.status(500).json({ error: err.message || 'Failed to save feature' });
@@ -1622,12 +1740,16 @@ async function startServer() {
       if (!adminDb) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
-      const { id } = req.body;
+      const { id, layerId } = req.body;
       if (!id) {
         return res.status(400).json({ error: 'Missing feature id' });
       }
 
-      await adminDb.collection('map_features').doc(String(id)).delete();
+      await adminDb.collection('map_features').doc(String(id)).delete().catch(() => {});
+      if (layerId && !String(id).startsWith(String(layerId) + '_')) {
+        await adminDb.collection('map_features').doc(`${layerId}_id_${id}`).delete().catch(() => {});
+        await adminDb.collection('map_features').doc(`${layerId}_objid_${id}`).delete().catch(() => {});
+      }
       cachedFeaturesResponse = null;
       await bumpSyncVersion('features');
       res.json({ success: true });
@@ -1637,8 +1759,8 @@ async function startServer() {
     }
   });
 
-  // Batch save / layer chunks save via Admin SDK
-  app.post('/api/features/batch', requireEditorOrAdmin, async (req, res) => {
+  // Batch save / layer chunks save via Admin SDK (with dedicated 50mb limit for shapefile layers)
+  app.post('/api/features/batch', express.json({ limit: '50mb' }), requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
@@ -1750,8 +1872,9 @@ async function startServer() {
               const list = JSON.parse(data.payloadJson);
               if (Array.isArray(list)) {
                 list.forEach((item: any) => {
-                  if (item && item.id) {
-                    itemsMap.set(String(item.id), item);
+                  if (item) {
+                    const uniqueKey = getServerFeatureUniqueKey(item);
+                    itemsMap.set(uniqueKey, item);
                   }
                 });
               }
@@ -1776,7 +1899,7 @@ async function startServer() {
               coords = [];
             }
           }
-          itemsMap.set(String(featId), {
+          const item = {
             id: featId,
             layerId: data.layerId || 'layer1_tim_kiem',
             name: data.name || '',
@@ -1785,7 +1908,9 @@ async function startServer() {
             coordinates: coords,
             properties: data.properties || {},
             updatedAt: data.updatedAt,
-          });
+          };
+          const uniqueKey = getServerFeatureUniqueKey(item);
+          itemsMap.set(uniqueKey, item);
         });
       } catch (iErr) {
         console.warn('[API /api/features/all] Read map_features warning:', iErr);
@@ -1846,8 +1971,8 @@ async function startServer() {
     updatedAt: number;
   } | null = null;
 
-  // Commune Administrative Boundaries Batch Upload via Admin SDK
-  app.post('/api/communes/batch', requireEditorOrAdmin, async (req, res) => {
+  // Commune Administrative Boundaries Batch Upload via Admin SDK (with dedicated 50mb limit)
+  app.post('/api/communes/batch', express.json({ limit: '50mb' }), requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
@@ -2446,26 +2571,64 @@ async function startServer() {
     }
   });
 
+  function sanitizeInputText(str: any, maxLen: number = 1000): string {
+    if (typeof str !== 'string') return '';
+    return str
+      .slice(0, maxLen)
+      .replace(/[<>]/g, '')
+      .trim();
+  }
+
+  function maskPhoneNumber(phone?: string): string {
+    if (!phone) return '';
+    const trimmed = phone.trim();
+    if (trimmed.length <= 4) return '***';
+    if (trimmed.length <= 7) return trimmed.slice(0, 2) + '***' + trimmed.slice(-2);
+    return trimmed.slice(0, 3) + '****' + trimmed.slice(-3);
+  }
+
   // Create user feedback via Admin SDK (and notify admins/editors) - Publicly accessible for guest feedback
   app.post('/api/feedback', async (req, res) => {
     try {
       if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
+
+      // Rate limiting: max 5 feedback submissions per 60 seconds per IP
+      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      const nowTs = Date.now();
+      const clientRate = feedbackRateLimiter.get(ip);
+      if (clientRate && clientRate.resetAt > nowTs) {
+        if (clientRate.count >= 5) {
+          return res.status(429).json({ error: 'Bạn gửi góp ý quá nhanh. Vui lòng thử lại sau 1 phút.' });
+        }
+        clientRate.count++;
+      } else {
+        feedbackRateLimiter.set(ip, { count: 1, resetAt: nowTs + 60000 });
+      }
+
       const { OBJECTID, Lop, TenLop, TenDoiTuong, Ten, DienThoai, NoiDung } = req.body;
       if (!OBJECTID || !Lop || !NoiDung) {
         return res.status(400).json({ error: 'Thiếu dữ liệu góp ý cần thiết' });
       }
 
+      const cleanObjectId = sanitizeInputText(String(OBJECTID || ''), 100);
+      const cleanLop = sanitizeInputText(String(Lop || ''), 100);
+      const cleanTenLop = sanitizeInputText(String(TenLop || ''), 150);
+      const cleanTenDoiTuong = sanitizeInputText(String(TenDoiTuong || ''), 200);
+      const cleanTen = sanitizeInputText(String(Ten || ''), 100);
+      const cleanDienThoai = sanitizeInputText(String(DienThoai || ''), 30);
+      const cleanNoiDung = sanitizeInputText(String(NoiDung || ''), 2000);
+
       const now = new Date();
       const timeFormatted = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
 
       const feedbackData = {
-        OBJECTID,
-        Lop,
-        TenLop: TenLop || '',
-        TenDoiTuong: TenDoiTuong || '',
-        Ten: Ten || '',
-        DienThoai: DienThoai || '',
-        NoiDung,
+        OBJECTID: cleanObjectId,
+        Lop: cleanLop,
+        TenLop: cleanTenLop,
+        TenDoiTuong: cleanTenDoiTuong,
+        Ten: cleanTen,
+        DienThoai: cleanDienThoai,
+        NoiDung: cleanNoiDung,
         ThoiGian: timeFormatted,
         TrangThai: 'moi',
         createdAt: FieldValue.serverTimestamp(),
@@ -2476,11 +2639,11 @@ async function startServer() {
       // Add notification automatically
       try {
         await adminDb.collection('notifications').add({
-          message: `[${Ten || 'Người dùng'}] góp ý trên "${TenDoiTuong || 'Đối tượng'}" (${TenLop || Lop})`,
+          message: `[${cleanTen || 'Người dùng'}] góp ý trên "${cleanTenDoiTuong || 'Đối tượng'}" (${cleanTenLop || cleanLop})`,
           type: 'feedback',
           title: 'Góp ý mới',
-          objectId: OBJECTID,
-          layerId: Lop,
+          objectId: cleanObjectId,
+          layerId: cleanLop,
           feedbackId: docRef.id,
           read: false,
           createdAt: FieldValue.serverTimestamp(),
@@ -2497,8 +2660,8 @@ async function startServer() {
   });
 
   // GET feedback list via Admin SDK:
-  // - Public when filtered by objectId (view feedback for a map feature)
-  // - Restricted to Editor/Admin when listing all feedback
+  // - Public when filtered by objectId (view feedback for a map feature; masks phone number)
+  // - Restricted to Editor/Admin when listing all feedback (full details)
   app.get('/api/feedback', async (req, res) => {
     try {
       if (!adminDb) return res.json({ items: [] });
@@ -2507,13 +2670,13 @@ async function startServer() {
 
       const targetObjId = objectId !== undefined && objectId !== null ? String(objectId).toLowerCase().trim() : null;
 
+      const token = (req.headers['x-session-token'] || req.headers['x-admin-token']) as string;
+      const session = token ? (activeSessions.get(token) || verifySignedToken(token)) : null;
+      const isPrivileged = Boolean(session && (session.role === 'admin' || session.role === 'editor'));
+
       // Full feedback list requires Editor or Admin session
-      if (!targetObjId) {
-        const token = (req.headers['x-session-token'] || req.headers['x-admin-token']) as string;
-        const session = token ? (activeSessions.get(token) || verifySignedToken(token)) : null;
-        if (!session || (session.role !== 'admin' && session.role !== 'editor')) {
-          return res.status(403).json({ error: 'Forbidden: Bạn cần quyền Quản trị hoặc Biên tập để xem toàn bộ góp ý' });
-        }
+      if (!targetObjId && !isPrivileged) {
+        return res.status(403).json({ error: 'Forbidden: Bạn cần quyền Quản trị hoặc Biên tập để xem toàn bộ góp ý' });
       }
 
       const snap = await adminDb.collection('PhanAnh').where('Lop', '==', String(layerId)).get();
@@ -2533,6 +2696,10 @@ async function startServer() {
           createdAtMillis = createdAt.toDate().getTime();
           createdAt = createdAt.toDate().toISOString();
         }
+
+        const rawPhone = String(d.DienThoai || '').trim();
+        const displayPhone = isPrivileged ? rawPhone : maskPhoneNumber(rawPhone);
+
         items.push({
           id: docSnap.id,
           OBJECTID: d.OBJECTID,
@@ -2540,7 +2707,7 @@ async function startServer() {
           TenLop: d.TenLop || '',
           TenDoiTuong: d.TenDoiTuong || '',
           Ten: d.Ten || '',
-          DienThoai: d.DienThoai || '',
+          DienThoai: displayPhone,
           NoiDung: d.NoiDung || '',
           ThoiGian: d.ThoiGian || '',
           TrangThai: d.TrangThai || 'moi',

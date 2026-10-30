@@ -1367,7 +1367,7 @@ export default function App() {
       return;
     }
     if (selectedFeature && isUnsaved) {
-      if (feat && feat.id === selectedFeature.id) {
+      if (feat && (getItemUniqueKey(feat) === getItemUniqueKey(selectedFeature) || isFeatureMatch(feat, getItemUniqueKey(selectedFeature)))) {
         setIsAttributePaneOpen(true);
         return;
       }
@@ -1493,12 +1493,16 @@ export default function App() {
   };
 
   const handleDiscardSelection = () => {
-    if (selectedFeature && originalSelectedFeatureRef.current && originalSelectedFeatureRef.current.id === selectedFeature.id) {
-      const restored = originalSelectedFeatureRef.current;
-      setMapFeatures((prev) =>
-        prev.map((f) => (f.id === restored.id ? restored : f))
-      );
-      showToast('Đã khôi phục đối tượng về vị trí ban đầu.');
+    if (selectedFeature && originalSelectedFeatureRef.current) {
+      const origKey = getItemUniqueKey(originalSelectedFeatureRef.current);
+      const selKey = getItemUniqueKey(selectedFeature);
+      if (origKey === selKey || isFeatureMatch(selectedFeature, origKey)) {
+        const restored = originalSelectedFeatureRef.current;
+        setMapFeatures((prev) =>
+          prev.map((f) => (getItemUniqueKey(f) === origKey || isFeatureMatch(f, origKey) ? restored : f))
+        );
+        showToast('Đã khôi phục đối tượng về vị trí ban đầu.');
+      }
     }
     setSelectedFeature(null);
     setIsAttributePaneOpen(false);
@@ -1506,18 +1510,27 @@ export default function App() {
   };
 
   const handleDeleteFeature = (featureId: string) => {
-    const targetFeat = mapFeatures.find((f) => String(f.id) === String(featureId));
+    const targetFeat = mapFeatures.find(
+      (f) => getItemUniqueKey(f) === featureId || isFeatureMatch(f, featureId) || String(f.id) === String(featureId)
+    );
 
     // 1. Immediate local removal
     setMapFeatures((prev) => {
-      const updated = prev.filter((f) => String(f.id) !== String(featureId));
+      const updated = prev.filter(
+        (f) => getItemUniqueKey(f) !== featureId && !isFeatureMatch(f, featureId) && String(f.id) !== String(featureId)
+      );
       try {
         localStorage.setItem('gis_local_map_features', JSON.stringify(updated));
       } catch (e) {}
       return updated;
     });
 
-    if (selectedFeature && String(selectedFeature.id) === String(featureId)) {
+    if (
+      selectedFeature &&
+      (getItemUniqueKey(selectedFeature) === featureId ||
+        isFeatureMatch(selectedFeature, featureId) ||
+        String(selectedFeature.id) === String(featureId))
+    ) {
       setSelectedFeature(null);
       setIsAttributePaneOpen(false);
       originalSelectedFeatureRef.current = null;
@@ -1529,7 +1542,12 @@ export default function App() {
     deleteFeatureFromFirestore(featureId)
       .then((success) => {
         if (success) {
-          if (syncError && syncError.feature.id === featureId) {
+          if (
+            syncError &&
+            (syncError.feature.id === featureId ||
+              getItemUniqueKey(syncError.feature) === featureId ||
+              isFeatureMatch(syncError.feature, featureId))
+          ) {
             setSyncError(null);
           }
         } else if (targetFeat) {
@@ -1729,9 +1747,10 @@ export default function App() {
       let nextList: GeoJsonFeatureItem[];
       if (clipboard.mode === 'cut') {
         // Replace existing feature with updated position
-        const exists = prev.some((f) => f.id === featureToSave.id);
+        const targetKey = getItemUniqueKey(featureToSave);
+        const exists = prev.some((f) => getItemUniqueKey(f) === targetKey || isFeatureMatch(f, targetKey));
         if (exists) {
-          nextList = prev.map((f) => (f.id === featureToSave.id ? featureToSave : f));
+          nextList = prev.map((f) => (getItemUniqueKey(f) === targetKey || isFeatureMatch(f, targetKey) ? featureToSave : f));
         } else {
           nextList = [...prev, featureToSave];
         }
@@ -1759,7 +1778,12 @@ export default function App() {
     saveSingleFeatureToFirestore(featureToSave)
       .then((success) => {
         if (success) {
-          if (syncError && syncError.feature.id === featureToSave.id) {
+          if (
+            syncError &&
+            (syncError.feature.id === featureToSave.id ||
+              getItemUniqueKey(syncError.feature) === getItemUniqueKey(featureToSave) ||
+              isFeatureMatch(syncError.feature, getItemUniqueKey(featureToSave)))
+          ) {
             setSyncError(null);
           }
         } else {

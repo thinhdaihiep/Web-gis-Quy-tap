@@ -1,5 +1,5 @@
 import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole, RasterLayer, RasterFileItem } from './types';
-import { deduplicateFeaturesList, getItemUniqueKey } from './fieldAlias';
+import { deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
 import { cleanShapeProperties } from './utils/shapeFieldUtils';
 import { getCachedData, setCachedData, deleteCachedData } from './utils/indexedDbCache';
 
@@ -534,7 +534,9 @@ export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureI
 export async function deleteFeatureFromFirestore(featureId: string): Promise<boolean> {
   try {
     const currentLocal = getFromLocalStorage();
-    const updatedLocal = currentLocal.filter((f) => String(f.id) !== String(featureId));
+    const updatedLocal = currentLocal.filter(
+      (f) => getItemUniqueKey(f) !== featureId && !isFeatureMatch(f, featureId) && String(f.id) !== String(featureId)
+    );
     syncToLocalStorage(updatedLocal);
 
     const res = await fetch('/api/features/delete', {
