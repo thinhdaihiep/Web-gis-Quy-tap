@@ -267,7 +267,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
               {/* Nút gửi & Bộ đếm chống spam */}
               <div className="flex items-center justify-between pt-1">
                 <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                  {!isLoggedIn && (
+                  {!(currentRole === 'admin' || currentRole === 'editor') && (
                     <span className="inline-flex items-center gap-1 text-slate-400">
                       <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
                       SĐT được ẩn công khai
@@ -325,7 +325,8 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
             ) : (
               <div className="space-y-2">
                 {feedbacks.map((item) => {
-                  const displayPhone = isLoggedIn
+                  const canViewFullPhone = currentRole === 'admin' || currentRole === 'editor';
+                  const displayPhone = canViewFullPhone
                     ? item.DienThoai
                     : maskPhoneNumber(item.DienThoai);
 

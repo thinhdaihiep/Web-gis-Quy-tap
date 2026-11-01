@@ -143,3 +143,15 @@ export const CemeteryShapeBadge: React.FC<{ className?: string }> = ({
     <MonumentIcon className="w-2.5 h-2.5 text-purple-600" />
   </div>
 );
+
+// 5. Lớp nghiệp vụ: Viền đỏ nền vàng
+export const BusinessShapeBadge: React.FC<{ className?: string }> = ({
+  className = "w-5 h-5",
+}) => (
+  <div
+    className={`${className} rounded-full bg-amber-400 border-2 border-red-600 flex items-center justify-center shrink-0 shadow-2xs`}
+  >
+    <div className="w-1.5 h-1.5 rounded-full bg-red-600" />
+  </div>
+);
+

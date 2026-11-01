@@ -5,11 +5,11 @@ import {
   PHAN_LOAI_COLORS,
   AppUser,
 } from '../types';
-import { Plus, X, Check, Layers, AlertCircle } from 'lucide-react';
-import { getSchemaForLayer, FieldDefinition } from '../FieldSchema';
+import { Plus, X, Check, Layers, AlertCircle, MapPin, Pentagon } from 'lucide-react';
+import { getSchemaForLayer, FieldDefinition, sanitizePropertiesForLayer } from '../FieldSchema';
 import { generateRegularPolygonCoordinates } from '../utils/geoMeasure';
 import { findCommunesAtLatLng } from '../utils/communeLookup';
-import { getLayerCodePrefix } from '../fieldAlias';
+import { getLayerCodePrefix, extractObjectId } from '../fieldAlias';
 
 interface AddFeatureModalProps {
   isOpen: boolean;
@@ -36,6 +36,7 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
 }) => {
   const [selectedLayerId, setSelectedLayerId] = useState<string>('');
   const [objectId, setObjectId] = useState<string>('1');
+  const [businessGeomType, setBusinessGeomType] = useState<'Point' | 'Polygon'>('Point');
   const [formValues, setFormValues] = useState<Record<string, any>>({});
   const [errorMessage, setErrorMessage] = useState<string>('');
 
@@ -98,6 +99,7 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
       .filter((f) => f.layerId === layerId)
       .forEach((f) => {
         const idVal =
+          extractObjectId(f) ??
           f.properties?.OBJECTID ??
           f.properties?.objectid ??
           f.properties?.ObjectID ??
@@ -208,6 +210,11 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
     }
 
     const currentLayer = layers.find((l) => l.id === selectedLayerId);
+    const isBusinessLayer =
+      selectedLayerId === 'layer5_nghiep_vu' ||
+      (currentLayer?.name || '').toLowerCase().includes('nghiệp vụ') ||
+      (currentLayer?.name || '').toLowerCase().includes('nghiep vu');
+
     const isKhuVucQuyTap =
       selectedLayerId === 'layer1_tim_kiem' ||
       selectedLayerId === 'layer4_khu_vuc_quy_tap' ||
@@ -240,7 +247,21 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
     let geometryType: 'Polygon' | 'Point' = 'Point';
     let coordinates: any;
 
-    if (isKhuVucQuyTap) {
+    if (isBusinessLayer) {
+      if (businessGeomType === 'Polygon') {
+        geometryType = 'Polygon';
+        const ring = generateRegularPolygonCoordinates(
+          markerLocation.lat,
+          markerLocation.lng,
+          150, // bán kính 150m (đường kính 300m)
+          5
+        );
+        coordinates = [ring];
+      } else {
+        geometryType = 'Point';
+        coordinates = [markerLocation.lng, markerLocation.lat];
+      }
+    } else if (isKhuVucQuyTap) {
       // Regular pentagon polygon with diameter 300m (radius 150m) centered at marker
       geometryType = 'Polygon';
       const pentagonRing = generateRegularPolygonCoordinates(
@@ -263,7 +284,7 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
       code: cleanCode,
       type: geometryType,
       coordinates,
-      properties: finalProps,
+      properties: sanitizePropertiesForLayer(finalProps, selectedLayerId),
       updatedAt: new Date().toISOString(),
     };
 
@@ -273,8 +294,18 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
 
   if (!isOpen) return null;
 
+  const isBusinessLayer =
+    selectedLayerId === 'layer5_nghiep_vu' ||
+    selectedLayerId.includes('nghiep_vu');
+
   const currentSchema: FieldDefinition[] = getSchemaForLayer(selectedLayerId).filter(
-    (f) => f.name !== 'OBJECTID'
+    (f) => {
+      if (f.name === 'OBJECTID') return false;
+      if (isBusinessLayer) {
+        return f.name === 'Ten' || f.name === 'GhiChu';
+      }
+      return true;
+    }
   );
 
   return (
@@ -375,6 +406,46 @@ export const AddFeatureModal: React.FC<AddFeatureModalProps> = ({
                     </div>
                   </td>
                 </tr>
+
+                {/* Dòng 2.5: Dạng hình học (Chỉ hiển thị cho Lớp nghiệp vụ linh hoạt) */}
+                {isBusinessLayer && (
+                  <tr className="hover:bg-slate-50/80 transition">
+                    <td className="py-2.5 px-3 border-r border-slate-200 font-bold bg-slate-50 text-slate-700">
+                      <span>Loại hình</span>
+                      <span className="text-red-500 ml-0.5">*</span>
+                    </td>
+                    <td className="py-1.5 px-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setBusinessGeomType('Point')}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                            businessGeomType === 'Point'
+                              ? 'bg-amber-500 text-white shadow-xs'
+                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                          }`}
+                          title="Điểm"
+                        >
+                          <MapPin className="w-3.5 h-3.5" />
+                          <span>Điểm</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBusinessGeomType('Polygon')}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                            businessGeomType === 'Polygon'
+                              ? 'bg-amber-500 text-white shadow-xs'
+                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                          }`}
+                          title="Vùng"
+                        >
+                          <Pentagon className="w-3.5 h-3.5" />
+                          <span>Vùng</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
 
                 {/* Các dòng còn lại: Tùy lớp mà hiển thị các trường khác nhau theo đúng thứ tự 4 nhóm */}
                 {currentSchema

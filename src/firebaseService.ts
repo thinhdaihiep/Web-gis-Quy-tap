@@ -1,6 +1,7 @@
 import { GeoJsonFeatureItem, LayerConfig, AppUser, UserRole, RasterLayer, RasterFileItem } from './types';
 import { deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch } from './fieldAlias';
 import { cleanShapeProperties } from './utils/shapeFieldUtils';
+import { sanitizePropertiesForLayer } from './FieldSchema';
 import { getCachedData, setCachedData, deleteCachedData } from './utils/indexedDbCache';
 
 const COLLECTION_NAME = 'map_features';
@@ -108,7 +109,7 @@ export async function syncAllCachedDataIfOutdated(callbacks?: {
     const lFeat = Number(localVersions.featuresVersion) || 0;
     if (sFeat > lFeat || lFeat === 0) {
       try {
-        const freshFeatures = await loadSharedFeaturesFromFirestore();
+        const freshFeatures = await loadSharedFeaturesFromFirestore(true);
         if (freshFeatures && freshFeatures.length > 0) {
           saveLocalSyncVersions({ featuresVersion: sFeat, featuresUpdatedAt: serverVersions.featuresUpdatedAt });
           if (callbacks?.onFeaturesUpdated) callbacks.onFeaturesUpdated(freshFeatures);
@@ -254,7 +255,7 @@ export const getSessionToken = (): string | null => {
 /**
  * Get headers for server-side authenticated requests
  */
-function getAuthHeaders(): Record<string, string> {
+export function getAuthHeaders(): Record<string, string> {
   const token = getSessionToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -491,58 +492,141 @@ export async function saveImportedFeaturesToFirestore(
 
 /**
  * Load all shared features (supports both Chunked Layer bundles and Individual documents via server)
+ * Clean overwrite ensures that deleted or edited features reflect true server state.
  */
-export async function loadSharedFeaturesFromFirestore(): Promise<GeoJsonFeatureItem[]> {
-  const itemsMap = new Map<string, GeoJsonFeatureItem>();
-
-  // Load from LocalStorage first
-  const localItems = getFromLocalStorage();
-  localItems.forEach((item) => {
-    if (!isDemoFeatureId(item.id)) itemsMap.set(getItemUniqueKey(item), item);
-  });
+export async function loadSharedFeaturesFromFirestore(forceFresh = false): Promise<GeoJsonFeatureItem[]> {
+  let deletedKeys = new Set<string>();
+  try {
+    const rawDel = localStorage.getItem('gis_deleted_feature_keys');
+    if (rawDel) {
+      const arr = JSON.parse(rawDel);
+      if (Array.isArray(arr)) deletedKeys = new Set(arr.map((k) => String(k).toLowerCase().trim()));
+    }
+  } catch (_) {}
 
   try {
-    const res = await fetch('/api/features/all');
+    const url = forceFresh ? `/api/features/all?fresh=1&_t=${Date.now()}` : `/api/features/all?_t=${Date.now()}`;
+    const res = await fetch(url, {
+      cache: forceFresh ? 'no-store' : 'default',
+    });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.features)) {
+        const itemsMap = new Map<string, GeoJsonFeatureItem>();
+
+        const cleanedBusinessFeatures: GeoJsonFeatureItem[] = [];
+
         data.features.forEach((feat: any) => {
           if (!isDemoFeatureId(feat.id)) {
-            feat.properties = cleanShapeProperties(feat.properties || {});
-            itemsMap.set(getItemUniqueKey(feat), feat);
+            const uKey = getItemUniqueKey(feat).toLowerCase().trim();
+            const fId = String(feat.id || '').toLowerCase().trim();
+            const objId = String(feat.properties?.OBJECTID ?? feat.properties?.objectid ?? '').toLowerCase().trim();
+
+            if (!deletedKeys.has(uKey) && !deletedKeys.has(fId) && (!objId || !deletedKeys.has(objId))) {
+              feat.properties = cleanShapeProperties(feat.properties || {});
+
+              const isBusiness =
+                feat.layerId === 'layer5_nghiep_vu' ||
+                feat.layerId === 'layer_nghiep_vu' ||
+                (feat.layerId && (feat.layerId.includes('nghiep_vu') || feat.layerId.includes('nghiepvu')));
+
+              if (isBusiness) {
+                const prevKeysCount = Object.keys(feat.properties).length;
+                const sanitized = sanitizePropertiesForLayer(feat.properties, feat.layerId);
+                if (prevKeysCount !== Object.keys(sanitized).length) {
+                  feat.properties = sanitized;
+                  cleanedBusinessFeatures.push(feat);
+                } else {
+                  feat.properties = sanitized;
+                }
+              }
+
+              itemsMap.set(uKey, feat);
+            }
           }
         });
+
+        // Tự động chuẩn hóa và làm sạch 3 đối tượng thử nghiệm trên Firestore nếu có trường rác
+        if (cleanedBusinessFeatures.length > 0) {
+          fetch('/api/features/batch', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ features: cleanedBusinessFeatures }),
+          }).catch((err) => console.warn('Lỗi làm sạch đối tượng lớp nghiệp vụ trên Firestore:', err));
+        }
+
+        const allList = deduplicateFeaturesList(Array.from(itemsMap.values()));
+
+        // Clean overwrite LocalStorage cache with the server source of truth
+        try {
+          localStorage.setItem('gis_local_map_features', JSON.stringify(allList));
+        } catch (e) {}
+
+        return allList;
       }
     }
   } catch (err) {
-    console.warn('Lỗi tải /api/features/all (sử dụng LocalStorage cache):', err);
+    console.warn('Lỗi tải /api/features/all (sử dụng LocalStorage cache dự phòng):', err);
   }
 
-  const allList = deduplicateFeaturesList(Array.from(itemsMap.values()).filter((f) => !isDemoFeatureId(f.id)));
+  // Fallback to local storage ONLY if offline / server unreachable
+  const localItems = getFromLocalStorage();
+  const filteredLocal = localItems.filter((item) => {
+    if (isDemoFeatureId(item.id)) return false;
+    const uKey = getItemUniqueKey(item).toLowerCase().trim();
+    const fId = String(item.id || '').toLowerCase().trim();
+    const objId = String(item.properties?.OBJECTID ?? item.properties?.objectid ?? '').toLowerCase().trim();
+    return !deletedKeys.has(uKey) && !deletedKeys.has(fId) && (!objId || !deletedKeys.has(objId));
+  }).map((item) => {
+    const isBusiness =
+      item.layerId === 'layer5_nghiep_vu' ||
+      item.layerId === 'layer_nghiep_vu' ||
+      (item.layerId && (item.layerId.includes('nghiep_vu') || item.layerId.includes('nghiepvu')));
+    if (isBusiness) {
+      item.properties = sanitizePropertiesForLayer(item.properties || {}, item.layerId);
+    }
+    return item;
+  });
 
-  // Cache to LocalStorage
-  try {
-    localStorage.setItem('gis_local_map_features', JSON.stringify(allList));
-  } catch (e) {}
-
-  return allList;
+  return deduplicateFeaturesList(filteredLocal);
 }
 
 /**
  * Delete a feature from Firestore database and update local storage cache
  */
-export async function deleteFeatureFromFirestore(featureId: string): Promise<boolean> {
+export async function deleteFeatureFromFirestore(
+  target: string | { id: string; layerId?: string; objectId?: any; uniqueKey?: string }
+): Promise<boolean> {
+  const featId = typeof target === 'string' ? target : target.id;
+  const layerId = typeof target === 'object' ? target.layerId : undefined;
+  const objectId = typeof target === 'object' ? target.objectId : undefined;
+  const uniqueKey = typeof target === 'object' ? target.uniqueKey : undefined;
+
   try {
     const currentLocal = getFromLocalStorage();
     const updatedLocal = currentLocal.filter(
-      (f) => getItemUniqueKey(f) !== featureId && !isFeatureMatch(f, featureId) && String(f.id) !== String(featureId)
+      (f) =>
+        getItemUniqueKey(f) !== featId &&
+        !isFeatureMatch(f, featId) &&
+        String(f.id) !== String(featId) &&
+        (!uniqueKey || getItemUniqueKey(f) !== uniqueKey)
     );
     syncToLocalStorage(updatedLocal);
+
+    // Save to deleted tombstone in local storage to prevent reappearance
+    try {
+      const rawDeleted = localStorage.getItem('gis_deleted_feature_keys');
+      const deletedList: string[] = rawDeleted ? JSON.parse(rawDeleted) : [];
+      if (featId) deletedList.push(String(featId));
+      if (uniqueKey) deletedList.push(String(uniqueKey));
+      if (objectId !== undefined && objectId !== null) deletedList.push(String(objectId));
+      localStorage.setItem('gis_deleted_feature_keys', JSON.stringify(Array.from(new Set(deletedList))));
+    } catch (_) {}
 
     const res = await fetch('/api/features/delete', {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ id: featureId }),
+      body: JSON.stringify({ id: featId, layerId, objectId, uniqueKey }),
     });
 
     if (res.ok) {

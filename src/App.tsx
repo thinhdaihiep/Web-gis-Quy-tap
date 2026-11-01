@@ -32,9 +32,11 @@ import {
   isDemoFeatureId,
   signOutUser,
   getStoredUser,
+  getAuthHeaders,
   syncAllCachedDataIfOutdated
 } from './firebaseService';
 import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch, getFeatureDisplayCode } from './fieldAlias';
+import { sanitizePropertiesForLayer } from './FieldSchema';
 import { OsmItem } from './utils/osmService';
 import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, CheckCircle2, Layers, Loader2 } from 'lucide-react';
 
@@ -192,7 +194,10 @@ export default function App() {
 
     const fetchUnreadCount = async () => {
       try {
-        const res = await fetch('/api/notifications/unread-count');
+        const res = await fetch(`/api/notifications/unread-count?_t=${Date.now()}`, {
+          headers: getAuthHeaders(),
+          cache: 'no-store',
+        });
         if (res.ok) {
           const data = await res.json();
           if (isMounted && typeof data.count === 'number') {
@@ -788,7 +793,18 @@ export default function App() {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setMapFeatures((prev) => {
-            const list = [...prev, ...parsed].filter((f) => !isInvalidOrTargetToDeleteFeature(f));
+            const list = [...prev, ...parsed]
+              .filter((f) => !isInvalidOrTargetToDeleteFeature(f))
+              .map((f) => {
+                const isBusiness =
+                  f.layerId === 'layer5_nghiep_vu' ||
+                  f.layerId === 'layer_nghiep_vu' ||
+                  (f.layerId && (f.layerId.includes('nghiep_vu') || f.layerId.includes('nghiepvu')));
+                if (isBusiness) {
+                  f.properties = sanitizePropertiesForLayer(f.properties || {}, f.layerId);
+                }
+                return f;
+              });
             return deduplicateFeaturesList(list);
           });
         }
@@ -800,16 +816,13 @@ export default function App() {
     async function initSharedDb() {
       try {
         setSplashStatusText('Đang kết nối CSDL & tải dữ liệu không gian...');
-        // 1. Load shared map features
-        const dbFeatures = await loadSharedFeaturesFromFirestore();
+        // 1. Load shared map features with Clean Overwrite (CSDL là nguồn chân lý duy nhất)
+        const dbFeatures = await loadSharedFeaturesFromFirestore(true);
         if (dbFeatures && dbFeatures.length > 0) {
-          setMapFeatures((prev) => {
-            const merged = deduplicateFeaturesList([...prev, ...dbFeatures].filter((f) => !isInvalidOrTargetToDeleteFeature(f)));
-            try {
-              localStorage.setItem('gis_local_map_features', JSON.stringify(merged));
-            } catch (e) {}
-            return merged;
-          });
+          setMapFeatures(dbFeatures);
+          try {
+            localStorage.setItem('gis_local_map_features', JSON.stringify(dbFeatures));
+          } catch (e) {}
         }
 
         setSplashStatusText('Đang nạp bảng ánh xạ thuộc tính tiếng Việt...');
@@ -832,13 +845,16 @@ export default function App() {
         setSplashStatusText('Đang cấu hình danh mục lớp bản đồ...');
         // 3. Load shared layer configs (custom layer names) from Firestore
         const dbLayerNames = await loadLayerConfigsFromFirestore();
-        if (dbLayerNames && Object.keys(dbLayerNames).length > 0) {
-          setLayers((prevLayers) =>
-            prevLayers.map((l) =>
-              dbLayerNames[l.id] ? { ...l, name: dbLayerNames[l.id] } : l
-            )
-          );
-        }
+        setLayers((prevLayers) => {
+          return DEFAULT_LAYERS.map((def) => {
+            const existing = prevLayers.find((p) => p.id === def.id);
+            const customName = dbLayerNames && dbLayerNames[def.id];
+            return {
+              ...(existing || def),
+              name: customName || (existing ? existing.name : def.name),
+            };
+          });
+        });
 
         setSplashStatusText('Đang nạp dữ liệu Raster nền...');
         // 4. Load Raster layers
@@ -868,7 +884,7 @@ export default function App() {
           }
         }
 
-        // Kích hoạt đồng bộ nền thông minh qua Global Sync Registry (không chặn hiển thị UI)
+        // Kích hoạt đối soát phiên bản ban đầu qua Global Sync Registry
         syncAllCachedDataIfOutdated({
           onRasterUpdated: (newRasters) => {
             setRasterLayers(newRasters);
@@ -889,6 +905,37 @@ export default function App() {
       }
     }
     initSharedDb();
+  }, []);
+
+  // Phương án A: Thăm dò phiên bản thông minh qua Global Sync Registry (định kỳ 20s và khi Focus window)
+  useEffect(() => {
+    const runSmartSync = () => {
+      syncAllCachedDataIfOutdated({
+        onRasterUpdated: (newRasters) => {
+          setRasterLayers(newRasters);
+        },
+        onFeaturesUpdated: (newFeatures) => {
+          setMapFeatures(newFeatures);
+        },
+        onConfigsUpdated: (newNames) => {
+          setLayers((prev) => prev.map((l) => (newNames[l.id] ? { ...l, name: newNames[l.id] } : l)));
+        },
+      });
+    };
+
+    // Chu kỳ 20 giây một lần
+    const timer = setInterval(runSmartSync, 20000);
+
+    // Kích hoạt đối soát tức thì ngay khi người dùng bấm trở lại tab trình duyệt
+    const handleFocus = () => {
+      runSmartSync();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   // Lắng nghe sự kiện cập nhật lớp raster nền từ luồng đối soát ngầm
@@ -1514,10 +1561,17 @@ export default function App() {
       (f) => getItemUniqueKey(f) === featureId || isFeatureMatch(f, featureId) || String(f.id) === String(featureId)
     );
 
+    const targetKey = targetFeat ? getItemUniqueKey(targetFeat) : featureId;
+    const targetObjId = targetFeat ? extractObjectId(targetFeat) : undefined;
+    const targetLayerId = targetFeat?.layerId;
+
     // 1. Immediate local removal
     setMapFeatures((prev) => {
       const updated = prev.filter(
-        (f) => getItemUniqueKey(f) !== featureId && !isFeatureMatch(f, featureId) && String(f.id) !== String(featureId)
+        (f) =>
+          getItemUniqueKey(f) !== targetKey &&
+          !isFeatureMatch(f, targetKey) &&
+          String(f.id) !== String(featureId)
       );
       try {
         localStorage.setItem('gis_local_map_features', JSON.stringify(updated));
@@ -1527,8 +1581,8 @@ export default function App() {
 
     if (
       selectedFeature &&
-      (getItemUniqueKey(selectedFeature) === featureId ||
-        isFeatureMatch(selectedFeature, featureId) ||
+      (getItemUniqueKey(selectedFeature) === targetKey ||
+        isFeatureMatch(selectedFeature, targetKey) ||
         String(selectedFeature.id) === String(featureId))
     ) {
       setSelectedFeature(null);
@@ -1538,15 +1592,20 @@ export default function App() {
 
     showToast('Đã xóa đối tượng thành công!');
 
-    // 2. Background sync delete to Firebase
-    deleteFeatureFromFirestore(featureId)
+    // 2. Background sync delete to Firebase with full identifiers
+    deleteFeatureFromFirestore({
+      id: featureId,
+      layerId: targetLayerId,
+      objectId: targetObjId,
+      uniqueKey: targetKey,
+    })
       .then((success) => {
         if (success) {
           if (
             syncError &&
             (syncError.feature.id === featureId ||
-              getItemUniqueKey(syncError.feature) === featureId ||
-              isFeatureMatch(syncError.feature, featureId))
+              getItemUniqueKey(syncError.feature) === targetKey ||
+              isFeatureMatch(syncError.feature, targetKey))
           ) {
             setSyncError(null);
           }
@@ -2326,6 +2385,7 @@ export default function App() {
           isOpen={isNotificationModalOpen}
           onClose={() => setIsNotificationModalOpen(false)}
           onSelectNotification={handleSelectNotification}
+          currentRole={effectiveRole}
         />
       )}
 

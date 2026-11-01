@@ -1725,6 +1725,24 @@ async function startServer() {
 
       const docId = getServerFeatureUniqueKey(feature);
       await adminDb.collection('map_features').doc(docId).set(cleanedDoc, { merge: true });
+
+      // Remove from tombstones if previously marked as deleted
+      try {
+        const delRef = adminDb.collection('app_settings').doc('deleted_features');
+        const delSnap = await delRef.get();
+        if (delSnap.exists && Array.isArray(delSnap.data()?.keys)) {
+          const keys: string[] = delSnap.data().keys;
+          const targetKey = docId.toLowerCase();
+          const targetId = String(feature.id).toLowerCase();
+          const filtered = keys.filter(
+            (k) => k.toLowerCase() !== targetKey && k.toLowerCase() !== targetId
+          );
+          if (filtered.length !== keys.length) {
+            await delRef.set({ keys: filtered, updatedAt: new Date().toISOString() });
+          }
+        }
+      } catch (_) {}
+
       cachedFeaturesResponse = null;
       await bumpSyncVersion('features');
       res.json({ success: true, docId });
@@ -1734,22 +1752,128 @@ async function startServer() {
     }
   });
 
-  // Delete a feature via Admin SDK
+  // Delete a feature via Admin SDK with comprehensive cross-collection cleanup
   app.post('/api/features/delete', requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
       }
-      const { id, layerId } = req.body;
-      if (!id) {
-        return res.status(400).json({ error: 'Missing feature id' });
+      const { id, layerId, objectId, uniqueKey } = req.body;
+      if (!id && !objectId && !uniqueKey) {
+        return res.status(400).json({ error: 'Missing feature identifiers' });
       }
 
-      await adminDb.collection('map_features').doc(String(id)).delete().catch(() => {});
-      if (layerId && !String(id).startsWith(String(layerId) + '_')) {
-        await adminDb.collection('map_features').doc(`${layerId}_id_${id}`).delete().catch(() => {});
-        await adminDb.collection('map_features').doc(`${layerId}_objid_${id}`).delete().catch(() => {});
+      const strId = id ? String(id).trim() : '';
+      const strObjId = objectId !== undefined && objectId !== null ? String(objectId).trim() : '';
+      const strUniqueKey = uniqueKey ? String(uniqueKey).trim() : '';
+      const strLayerId = layerId ? String(layerId).trim() : '';
+
+      // 1. Candidate document IDs to delete directly in map_features
+      const candidateDocIds = new Set<string>();
+      if (strId) candidateDocIds.add(strId);
+      if (strUniqueKey) candidateDocIds.add(strUniqueKey);
+      if (strLayerId && strObjId) {
+        candidateDocIds.add(`${strLayerId}_objid_${strObjId.toLowerCase()}`);
+        candidateDocIds.add(`${strLayerId}_id_${strObjId.toLowerCase()}`);
       }
+      if (strLayerId && strId) {
+        candidateDocIds.add(`${strLayerId}_id_${strId.toLowerCase()}`);
+        candidateDocIds.add(`${strLayerId}_objid_${strId.toLowerCase()}`);
+      }
+
+      for (const candId of candidateDocIds) {
+        await adminDb.collection('map_features').doc(candId).delete().catch(() => {});
+      }
+
+      // 2. Query map_features to catch any documents matching id, code, or OBJECTID
+      try {
+        const matchesSnap = await adminDb.collection('map_features').get();
+        const batch = adminDb.batch();
+        let matchCount = 0;
+
+        matchesSnap.docs.forEach((docSnap: any) => {
+          const d = docSnap.data();
+          const docDocId = docSnap.id.toLowerCase();
+          const dId = String(d.id || '').toLowerCase();
+          const dCode = String(d.code || '').toLowerCase();
+          const dObjId = String(
+            d.properties?.OBJECTID ||
+            d.properties?.objectid ||
+            d.properties?.fid ||
+            ''
+          ).toLowerCase();
+
+          const isMatch =
+            (strId && (docDocId === strId.toLowerCase() || dId === strId.toLowerCase() || dCode === strId.toLowerCase())) ||
+            (strObjId && (dObjId === strObjId.toLowerCase() || dCode.includes(strObjId.toLowerCase()))) ||
+            (strUniqueKey && docDocId === strUniqueKey.toLowerCase());
+
+          if (isMatch) {
+            batch.delete(docSnap.ref);
+            matchCount++;
+          }
+        });
+
+        if (matchCount > 0) {
+          await batch.commit();
+        }
+      } catch (qErr) {
+        console.warn('[API /api/features/delete] Query map_features warning:', qErr);
+      }
+
+      // 3. Scan and remove from layer_chunks if present
+      try {
+        const chunksSnap = await adminDb.collection('layer_chunks').get();
+        for (const chunkDoc of chunksSnap.docs) {
+          const cData = chunkDoc.data();
+          if (cData && cData.payloadJson) {
+            let chunkList: any[] = [];
+            try { chunkList = JSON.parse(cData.payloadJson); } catch (_) {}
+
+            if (Array.isArray(chunkList) && chunkList.length > 0) {
+              const originalLen = chunkList.length;
+              const filteredList = chunkList.filter((item: any) => {
+                if (!item) return false;
+                const itemId = String(item.id || '').toLowerCase();
+                const itemCode = String(item.code || '').toLowerCase();
+                const itemObjId = String(
+                  item.properties?.OBJECTID ||
+                  item.properties?.objectid ||
+                  item.properties?.fid ||
+                  ''
+                ).toLowerCase();
+                const itemKey = getServerFeatureUniqueKey(item).toLowerCase();
+
+                if (strId && (itemId === strId.toLowerCase() || itemKey === strId.toLowerCase())) return false;
+                if (strUniqueKey && itemKey === strUniqueKey.toLowerCase()) return false;
+                if (strObjId && itemObjId === strObjId.toLowerCase()) return false;
+                return true;
+              });
+
+              if (filteredList.length !== originalLen) {
+                await chunkDoc.ref.update({
+                  payloadJson: JSON.stringify(filteredList),
+                  itemCount: filteredList.length,
+                  updatedAt: new Date().toISOString(),
+                });
+              }
+            }
+          }
+        }
+      } catch (chunkErr) {
+        console.warn('[API /api/features/delete] layer_chunks cleanup warning:', chunkErr);
+      }
+
+      // 4. Save tombstone in app_settings/deleted_features
+      try {
+        const delRef = adminDb.collection('app_settings').doc('deleted_features');
+        const delSnap = await delRef.get();
+        const existingKeys: string[] = delSnap.exists && Array.isArray(delSnap.data()?.keys) ? delSnap.data().keys : [];
+        const toAdd = [strId, strObjId, strUniqueKey].filter(Boolean);
+        const updatedKeys = Array.from(new Set([...existingKeys, ...toAdd])).slice(-1000);
+        await delRef.set({ keys: updatedKeys, updatedAt: new Date().toISOString() });
+      } catch (_) {}
+
       cachedFeaturesResponse = null;
       await bumpSyncVersion('features');
       res.json({ success: true });
@@ -1848,7 +1972,8 @@ async function startServer() {
   // GET all shared map features (layer_chunks and individual map_features merged) via Admin SDK
   app.get('/api/features/all', async (req, res) => {
     try {
-      if (cachedFeaturesResponse) {
+      const isFresh = req.query.fresh === '1' || req.headers['cache-control'] === 'no-cache';
+      if (cachedFeaturesResponse && !isFresh) {
         const clientEtag = req.headers['if-none-match'];
         if (clientEtag && clientEtag === cachedFeaturesResponse.etag) {
           return res.status(304).end();
@@ -1859,6 +1984,15 @@ async function startServer() {
       }
 
       if (!adminDb) return res.json({ features: [] });
+
+      // Read deleted tombstones
+      let deletedKeySet = new Set<string>();
+      try {
+        const delSnap = await adminDb.collection('app_settings').doc('deleted_features').get();
+        if (delSnap.exists && Array.isArray(delSnap.data()?.keys)) {
+          deletedKeySet = new Set(delSnap.data().keys.map((k: string) => String(k).toLowerCase()));
+        }
+      } catch (_) {}
 
       const itemsMap = new Map<string, any>();
 
@@ -1874,7 +2008,12 @@ async function startServer() {
                 list.forEach((item: any) => {
                   if (item) {
                     const uniqueKey = getServerFeatureUniqueKey(item);
-                    itemsMap.set(uniqueKey, item);
+                    const lowerKey = uniqueKey.toLowerCase();
+                    const lowerId = String(item.id || '').toLowerCase();
+                    const lowerObjId = String(item.properties?.OBJECTID || '').toLowerCase();
+                    if (!deletedKeySet.has(lowerKey) && !deletedKeySet.has(lowerId) && (!lowerObjId || !deletedKeySet.has(lowerObjId))) {
+                      itemsMap.set(uniqueKey, item);
+                    }
                   }
                 });
               }
@@ -1891,6 +2030,21 @@ async function startServer() {
         indivSnap.docs.forEach((docSnap: any) => {
           const data = docSnap.data();
           const featId = data.id || docSnap.id;
+          const uniqueKey = getServerFeatureUniqueKey(data);
+          const lowerKey = uniqueKey.toLowerCase();
+          const lowerId = String(featId).toLowerCase();
+          const lowerDocId = docSnap.id.toLowerCase();
+          const lowerObjId = String(data.properties?.OBJECTID || '').toLowerCase();
+
+          if (
+            deletedKeySet.has(lowerKey) ||
+            deletedKeySet.has(lowerId) ||
+            deletedKeySet.has(lowerDocId) ||
+            (lowerObjId && deletedKeySet.has(lowerObjId))
+          ) {
+            return;
+          }
+
           let coords = data.coordinates;
           if (typeof coords === 'string') {
             try {
@@ -1909,7 +2063,6 @@ async function startServer() {
             properties: data.properties || {},
             updatedAt: data.updatedAt,
           };
-          const uniqueKey = getServerFeatureUniqueKey(item);
           itemsMap.set(uniqueKey, item);
         });
       } catch (iErr) {
@@ -1921,12 +2074,14 @@ async function startServer() {
       const etag = `W/"features-${features.length}-${crypto.createHash('md5').update(JSON.stringify(features)).digest('hex').slice(0, 16)}"`;
       cachedFeaturesResponse = { payload, etag, updatedAt: Date.now() };
 
-      const clientEtag = req.headers['if-none-match'];
-      if (clientEtag && clientEtag === etag) {
-        return res.status(304).end();
+      if (!isFresh) {
+        const clientEtag = req.headers['if-none-match'];
+        if (clientEtag && clientEtag === etag) {
+          return res.status(304).end();
+        }
       }
 
-      res.setHeader('Cache-Control', 'public, no-cache');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.setHeader('ETag', etag);
       return res.json(payload);
     } catch (err: any) {
@@ -2485,20 +2640,30 @@ async function startServer() {
   app.get('/api/notifications', requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) return res.json({ notifications: [] });
-      const snap = await adminDb.collection('notifications').orderBy('createdAt', 'desc').limit(50).get();
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      const snap = await adminDb.collection('notifications').get();
       const notifications = snap.docs.map((docSnap: any) => {
         const data = docSnap.data();
         let createdAt = data.createdAt;
-        if (createdAt && typeof createdAt.toDate === 'function') {
+        let createdAtMillis = 0;
+        if (createdAt && typeof createdAt.toMillis === 'function') {
+          createdAtMillis = createdAt.toMillis();
           createdAt = createdAt.toDate().toISOString();
+        } else if (createdAt && typeof createdAt.toDate === 'function') {
+          createdAtMillis = createdAt.toDate().getTime();
+          createdAt = createdAt.toDate().toISOString();
+        } else if (typeof createdAt === 'string') {
+          createdAtMillis = new Date(createdAt).getTime() || 0;
         }
         return {
           id: docSnap.id,
           ...data,
           createdAt,
+          createdAtMillis,
         };
       });
-      res.json({ success: true, notifications });
+      notifications.sort((a, b) => (b.createdAtMillis || 0) - (a.createdAtMillis || 0));
+      res.json({ success: true, notifications: notifications.slice(0, 50) });
     } catch (err: any) {
       console.error('[API GET /api/notifications] Error:', err);
       res.status(500).json({ error: err.message || 'Lỗi tải danh sách thông báo' });
@@ -2509,6 +2674,7 @@ async function startServer() {
   app.get('/api/notifications/unread-count', requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) return res.json({ count: 0 });
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const snap = await adminDb.collection('notifications').where('read', '==', false).get();
       res.json({ success: true, count: snap.size });
     } catch (err: any) {
@@ -2665,6 +2831,7 @@ async function startServer() {
   app.get('/api/feedback', async (req, res) => {
     try {
       if (!adminDb) return res.json({ items: [] });
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const { objectId, layerId } = req.query;
       if (!layerId) return res.json({ items: [] });
 

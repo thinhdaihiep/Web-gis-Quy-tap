@@ -142,49 +142,55 @@ function renderPopupProperties(
   const rawProps = feat.properties || {};
   const props: Record<string, any> = cleanShapeProperties({ ...rawProps });
 
-  // Nạp các trường trong Schema của lớp (nếu có) để không bị thiếu trường (như Mộ vô danh, Số mộ...)
-  if (effectiveLayerId) {
-    const schemaFields = getSchemaForLayer(effectiveLayerId);
-    schemaFields.forEach((field) => {
-      const fieldName = field.name;
-      const exists = Object.keys(props).some(
-        (k) => k.toLowerCase() === fieldName.toLowerCase()
-      );
-      if (!exists) {
-        props[fieldName] = '';
+  // 1. Lấy Schema chuẩn theo lớp
+  const schemaFields = getSchemaForLayer(effectiveLayerId);
+
+  // Helper tìm giá trị thuộc tính không phân biệt hoa thường
+  const getPropValue = (key: string) => {
+    if (props[key] !== undefined && props[key] !== null) return props[key];
+    const lower = key.toLowerCase();
+    for (const [k, v] of Object.entries(props)) {
+      if (k.toLowerCase() === lower && v !== undefined && v !== null) {
+        return v;
       }
-    });
-  }
+    }
+    return '';
+  };
 
-  const entries = Object.entries(props);
   let hasToaDo = false;
-
   const validItems: { key: string; alias: string; value: string }[] = [];
 
-  entries.forEach(([k, v]) => {
-    // Chỉ loại trừ:
-    // 1. Trường đang được dùng làm tiêu đề lớn của popup (hiddenKey) để tránh trùng lặp thông tin
-    // 2. Trường bị đánh dấu ẩn theo Bảng ánh xạ (isFieldHidden(k))
-    if (hiddenKey && k.toLowerCase() === hiddenKey.toLowerCase()) {
+  // Tầng 1: Lặp theo đúng các trường được quy định trong Schema của lớp (Schema-driven Whitelist)
+  schemaFields.forEach((field) => {
+    const fieldName = field.name;
+
+    // 1. Loại trừ trường đang được dùng làm tiêu đề lớn của popup (hiddenKey) để tránh lặp thông tin
+    if (hiddenKey && fieldName.toLowerCase() === hiddenKey.toLowerCase()) {
       return;
     }
 
-    if (isFieldHidden(k)) {
+    // 2. Tầng 2: Kiểm tra Checkbox hiển thị ở Tab Field Alias (isFieldHidden)
+    // Nếu người dùng bỏ chọn checkbox thì ẩn trường này
+    if (isFieldHidden(fieldName) || (field.alias && isFieldHidden(field.alias))) {
       return;
     }
 
-    const alias = getFieldAlias(k) || k;
-    if (alias === 'Tọa độ') hasToaDo = true;
+    const val = getPropValue(fieldName);
+    const alias = getFieldAlias(fieldName) || field.alias || fieldName;
 
-    const formattedVal = formatDateForDisplay(v, k, alias);
+    if (alias === 'Tọa độ' || fieldName === 'ToaDo' || fieldName.toLowerCase() === 'toado') {
+      hasToaDo = true;
+    }
+
+    const formattedVal = formatDateForDisplay(val, fieldName, alias);
     const valStr =
       formattedVal !== ''
         ? formattedVal
-        : v !== null && v !== undefined && String(v).trim() !== ''
-        ? String(v)
+        : val !== null && val !== undefined && String(val).trim() !== ''
+        ? String(val)
         : '---';
 
-    validItems.push({ key: k, alias, value: valStr });
+    validItems.push({ key: fieldName, alias, value: valStr });
   });
 
   const sortedItems = sortPropertyRows(
@@ -198,7 +204,14 @@ function renderPopupProperties(
     </tr>`;
   });
 
-  if (!hasToaDo && !isFieldHidden('ToaDo') && !isFieldHidden('toado') && lat !== undefined && lng !== undefined) {
+  if (
+    !hasToaDo &&
+    !isFieldHidden('ToaDo') &&
+    !isFieldHidden('toado') &&
+    !isFieldHidden('Tọa độ') &&
+    lat !== undefined &&
+    lng !== undefined
+  ) {
     rows.push(`<tr style="border-bottom: 1px solid #f1f5f9;">
       <td style="padding: 3px 8px 3px 0; color: #475569; font-weight: 600; white-space: nowrap; vertical-align: top;">Tọa độ:</td>
       <td style="padding: 3px 0; color: #0f172a; font-weight: 700; text-align: right; font-family: monospace;">${lat.toFixed(6)}, ${lng.toFixed(6)}</td>
@@ -303,7 +316,7 @@ function leafletLatLngsToGeoJsonLine(latLngs: any): any {
 }
 
 function createPointIcon(
-  type: 'search' | 'battle' | 'grave' | 'cemetery' | 'default',
+  type: 'search' | 'battle' | 'grave' | 'cemetery' | 'business' | 'default',
   isSelected: boolean,
   color: string = '#10b981'
 ): L.DivIcon {
@@ -351,6 +364,20 @@ function createPointIcon(
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
       popupAnchor: [0, -10],
+    });
+  } else if (type === 'business') {
+    // Điểm nghiệp vụ: hình tròn viền đỏ nền vàng, kích thước = 2/3 điểm trận đánh (16px, selected 18px)
+    const bizSize = isSelected ? 18 : 16;
+    return L.divIcon({
+      html: `
+        <svg viewBox="0 0 24 24" width="${bizSize}" height="${bizSize}" class="marker-gis-svg ${isSelected ? 'is-selected' : ''}">
+          <circle cx="12" cy="12" r="9.5" fill="#facc15" stroke="${isSelected ? '#2563eb' : '#dc2626'}" stroke-width="${isSelected ? '2' : '1.8'}" />
+        </svg>
+      `,
+      className: `point-feature-marker ${isSelected ? 'point-feature-selected' : ''}`,
+      iconSize: [bizSize, bizSize],
+      iconAnchor: [bizSize / 2, bizSize / 2],
+      popupAnchor: [0, -8],
     });
   } else if (type === 'grave') {
     return L.divIcon({
@@ -412,7 +439,7 @@ function createPointIcon(
 const pointIconCache = new Map<string, L.DivIcon>();
 
 function getPointIcon(
-  type: 'search' | 'battle' | 'grave' | 'cemetery' | 'default',
+  type: 'search' | 'battle' | 'grave' | 'cemetery' | 'business' | 'default',
   isSelected: boolean,
   color: string = '#10b981'
 ): L.DivIcon {
@@ -1983,6 +2010,10 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         const l = layerConfigs.find((x) => x.id === 'layer1_tim_kiem') || layerConfigs.find((x) => x.name.toLowerCase().includes('tìm kiếm') || x.name.toLowerCase().includes('quy tập'));
         return { layerId: 'layer1_tim_kiem', layerName: l?.name || 'Khu vực tìm kiếm, quy tập', layerColor: l?.color || '#ef4444' };
       }
+      if (lower === 'layer5_nghiep_vu' || lower.includes('nghiep_vu') || lower.includes('nghiepvu')) {
+        const l = layerConfigs.find((x) => x.id === 'layer5_nghiep_vu') || layerConfigs.find((x) => x.name.toLowerCase().includes('nghiệp vụ'));
+        return { layerId: 'layer5_nghiep_vu', layerName: l?.name || 'Lớp nghiệp vụ', layerColor: l?.color || '#facc15' };
+      }
 
       return { layerId: rawLayerId || 'default', layerName: 'Vị trí GIS', layerColor: '#3b82f6' };
     }
@@ -2020,6 +2051,11 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         resolvedLayer.layerId === 'layer3_nghia_trang' ||
         resolvedLayer.layerName.toLowerCase().includes('nghĩa trang') ||
         resolvedLayer.layerName.toLowerCase().includes('nghia trang');
+
+      const isBusinessLayer =
+        resolvedLayer.layerId === 'layer5_nghiep_vu' ||
+        resolvedLayer.layerName.toLowerCase().includes('nghiệp vụ') ||
+        resolvedLayer.layerName.toLowerCase().includes('nghiep vu');
 
       // CHỈ áp dụng màu phân loại và huy hiệu quy tập cho lớp Khu vực tìm kiếm quy tập (layer4), tuyệt đối không gán cho Trận đánh hay Mộ liệt sĩ
       if (isSearchAreaLayer && rawPhanLoai !== undefined && rawPhanLoai !== null && PHAN_LOAI_COLORS[phanLoaiNum]) {
@@ -2073,7 +2109,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         featureLayerMapRef.current.delete(featKey);
       }
 
-      const shouldShowLabel = isBattleLayer;
+      const shouldShowLabel = isBattleLayer || isBusinessLayer;
 
       try {
         let pointCoords = feat.coordinates;
@@ -2118,7 +2154,9 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
           const { name: titleName, hiddenKey } = getFeatureName(feat);
 
-          const pointType: 'search' | 'battle' | 'grave' | 'cemetery' | 'default' = isSearchAreaLayer
+          const pointType: 'search' | 'battle' | 'grave' | 'cemetery' | 'business' | 'default' = isBusinessLayer
+            ? 'business'
+            : isSearchAreaLayer
             ? 'search'
             : isBattleLayer
             ? 'battle'
@@ -2197,7 +2235,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
               permanent: true,
               direction: 'bottom',
               offset: [0, 10],
-              className: 'battle-map-label',
+              className: isBusinessLayer ? 'business-map-label' : 'battle-map-label',
               interactive: true,
             });
             attachTooltipClickHandler(pointMarker, feat);
@@ -2298,19 +2336,29 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
           const { name: titleName, hiddenKey } = getFeatureName(feat);
 
+          const polyBorderColor = isSelected ? '#2563eb' : (isBusinessLayer ? '#dc2626' : featureColor);
+          const polyFillColor = isSelected ? '#3b82f6' : (isBusinessLayer ? '#facc15' : featureColor);
+          const polyFillOpacity = isSelected ? 0.6 : (isBusinessLayer ? 0.5 : 0.4);
+          const polyWeight = isSelected ? 2.5 : (isBusinessLayer ? 2 : 1.5);
+
           const polygon = L.polygon(leafletCoords, {
-            color: isSelected ? '#2563eb' : featureColor,
-            fillColor: isSelected ? '#3b82f6' : featureColor,
-            fillOpacity: isSelected ? 0.5 : 0.4,
-            weight: isSelected ? 2.5 : 1.5,
+            color: polyBorderColor,
+            fillColor: polyFillColor,
+            fillOpacity: polyFillOpacity,
+            weight: polyWeight,
           });
 
           const updatePolygonStyle = (selected: boolean, mode: MapInteractionMode) => {
+            const curBorderColor = selected ? '#2563eb' : (isBusinessLayer ? '#dc2626' : featureColor);
+            const curFillColor = selected ? '#3b82f6' : (isBusinessLayer ? '#facc15' : featureColor);
+            const curFillOpacity = selected ? 0.6 : (isBusinessLayer ? 0.5 : 0.4);
+            const curWeight = selected ? 2.5 : (isBusinessLayer ? 2 : 1.5);
+
             polygon.setStyle({
-              color: selected ? '#2563eb' : featureColor,
-              fillColor: selected ? '#3b82f6' : featureColor,
-              fillOpacity: selected ? 0.5 : 0.4,
-              weight: selected ? 2.5 : 1.5,
+              color: curBorderColor,
+              fillColor: curFillColor,
+              fillOpacity: curFillOpacity,
+              weight: curWeight,
             });
 
             if (mode === 'pointer' && selected && (polygon as any).pm) {
@@ -2410,7 +2458,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             polygon.bindTooltip(titleName, {
               permanent: true,
               direction: 'center',
-              className: 'battle-map-label',
+              className: isBusinessLayer ? 'business-map-label' : 'battle-map-label',
               interactive: true,
             });
             attachTooltipClickHandler(polygon, feat);

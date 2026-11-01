@@ -11,23 +11,30 @@ import {
   Clock,
 } from 'lucide-react';
 import { Notification } from '../notificationService';
+import { getAuthHeaders } from '../firebaseService';
+import { UserRole } from '../types';
 
 interface NotificationModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectNotification?: (notification: Notification & { id: string }) => void;
+  currentRole?: UserRole;
 }
 
 export const NotificationModal: React.FC<NotificationModalProps> = ({
   isOpen,
   onClose,
   onSelectNotification,
+  currentRole,
 }) => {
   const [notifications, setNotifications] = useState<(Notification & { id: string })[]>([]);
 
   const fetchNotifications = useCallback(async () => {
     try {
-      const res = await fetch('/api/notifications');
+      const res = await fetch(`/api/notifications?_t=${Date.now()}`, {
+        headers: getAuthHeaders(),
+        cache: 'no-store',
+      });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.notifications)) {
@@ -68,7 +75,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 
       await fetch('/api/notifications/mark-read', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ id }),
       });
 
@@ -88,7 +95,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 
       await fetch('/api/notifications/delete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ id }),
       });
 
@@ -218,14 +225,16 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                             <CheckCircle2 className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={(e) => deleteNotification(n.id, e)}
-                          className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded transition cursor-pointer"
-                          title="Xóa thông báo"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {currentRole === 'admin' && (
+                          <button
+                            type="button"
+                            onClick={(e) => deleteNotification(n.id, e)}
+                            className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded transition cursor-pointer"
+                            title="Xóa thông báo"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

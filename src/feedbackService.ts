@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './firebaseService';
+
 export type FeedbackStatus = 'moi' | 'dang_xu_ly' | 'da_xu_ly';
 
 export interface FeedbackItem {
@@ -27,7 +29,7 @@ export interface CreateFeedbackParams {
 export async function createFeedback(params: CreateFeedbackParams): Promise<string> {
   const res = await fetch('/api/feedback', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
 
@@ -58,8 +60,11 @@ export function subscribeFeedbacksForObject(
   const fetchItems = async () => {
     if (!isSubscribed) return;
     try {
-      const url = `/api/feedback?objectId=${encodeURIComponent(objectId)}&layerId=${encodeURIComponent(layerId)}`;
-      const res = await fetch(url);
+      const url = `/api/feedback?objectId=${encodeURIComponent(objectId)}&layerId=${encodeURIComponent(layerId)}&_t=${Date.now()}`;
+      const res = await fetch(url, {
+        headers: getAuthHeaders(),
+        cache: 'no-store',
+      });
       if (res.ok) {
         const data = await res.json();
         if (isSubscribed && Array.isArray(data.items)) {
@@ -97,7 +102,7 @@ export function subscribeFeedbacksForObject(
 export async function deleteFeedback(feedbackId: string): Promise<void> {
   const res = await fetch('/api/feedback/delete', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ feedbackId }),
   });
   if (!res.ok) {
@@ -112,7 +117,7 @@ export async function updateFeedbackStatus(
 ): Promise<void> {
   const res = await fetch('/api/feedback/update-status', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ feedbackId, status }),
   });
   if (!res.ok) {

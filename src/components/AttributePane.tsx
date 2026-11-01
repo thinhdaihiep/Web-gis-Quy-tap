@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { getFieldAlias, sortPropertyRows, isFieldHidden, getFeatureDisplayCode } from '../fieldAlias';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
-import { getSchemaForLayer } from '../FieldSchema';
+import { getSchemaForLayer, sanitizePropertiesForLayer } from '../FieldSchema';
 import { cleanShapeProperties, isShapeProperty } from '../utils/shapeFieldUtils';
 
 interface AttributePaneProps {
@@ -123,10 +123,23 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       delete existingProps['trangthaimoi'];
       delete existingProps['ChiHuy'];
       delete existingProps['chihuy'];
-      delete existingProps['chi_huy'];
       delete existingProps['KetQua'];
       delete existingProps['ketqua'];
       delete existingProps['ket_qua'];
+
+      const isBusinessLayer =
+        featLayerId === 'layer5_nghiep_vu' ||
+        featLayerId === 'layer_nghiep_vu' ||
+        (targetLayer?.name || '').toLowerCase().includes('nghiệp vụ') ||
+        (targetLayer?.name || '').toLowerCase().includes('nghiep vu');
+
+      if (isBusinessLayer) {
+        delete existingProps['QuyTap'];
+        delete existingProps['quytap'];
+        delete existingProps['quy_tap'];
+        delete existingProps['QUYTAP'];
+        delete existingProps['Kết quả quy tập'];
+      }
 
       if (isBattleLayer) {
         const hasBenTa = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'benta');
@@ -337,13 +350,25 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
 
     // Tự động đồng bộ và lưu ngay vào đối tượng
     const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+    const isTargetSearchArea =
+      selectedLayerId === 'layer1_tim_kiem' ||
+      selectedLayerId === 'layer4_khu_vuc_quy_tap' ||
+      (layers.find((l) => l.id === selectedLayerId)?.name || '').toLowerCase().includes('tìm kiếm') ||
+      (layers.find((l) => l.id === selectedLayerId)?.name || '').toLowerCase().includes('quy tập');
+
     const updatedProps: Record<string, any> = {
       ...(feature.properties || {}),
       Ten: name.trim() || feature.name || '',
-      PhanLoai: phanLoai,
       NguoiSua: currentUpdater,
       CapNhat: new Date().toISOString(),
     };
+    if (isTargetSearchArea) {
+      updatedProps.PhanLoai = phanLoai;
+    } else {
+      delete updatedProps['PhanLoai'];
+      delete updatedProps['phanLoai'];
+    }
+
     delete updatedProps['hoso'];
     delete updatedProps['HOSO'];
     delete updatedProps['ho_so'];
@@ -360,11 +385,13 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
       }
     });
 
+    const finalCleanProps = sanitizePropertiesForLayer(cleanShapeProperties(updatedProps), selectedLayerId);
+
     const updatedFeature: GeoJsonFeatureItem = {
       ...feature,
       layerId: selectedLayerId,
       name: (name.trim() || feature.name || '').trim(),
-      properties: cleanShapeProperties(updatedProps),
+      properties: finalCleanProps,
       updatedAt: new Date().toISOString(),
     };
     onSave(updatedFeature);
@@ -378,14 +405,24 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
     }
 
     const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+    const isTargetSearchArea =
+      selectedLayerId === 'layer1_tim_kiem' ||
+      selectedLayerId === 'layer4_khu_vuc_quy_tap' ||
+      (layers.find((l) => l.id === selectedLayerId)?.name || '').toLowerCase().includes('tìm kiếm') ||
+      (layers.find((l) => l.id === selectedLayerId)?.name || '').toLowerCase().includes('quy tập');
 
     const properties: Record<string, any> = {
       ...(feature.properties || {}),
       Ten: name.trim(),
-      PhanLoai: phanLoai,
       NguoiSua: currentUpdater,
       CapNhat: new Date().toISOString(),
     };
+    if (isTargetSearchArea) {
+      properties.PhanLoai = phanLoai;
+    } else {
+      delete properties['PhanLoai'];
+      delete properties['phanLoai'];
+    }
 
     delete properties['hoso'];
     delete properties['HOSO'];
@@ -411,11 +448,13 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
     properties['NguoiSua'] = currentUpdater;
     properties['CapNhat'] = new Date().toISOString();
 
+    const finalCleanProps = sanitizePropertiesForLayer(cleanShapeProperties(properties), selectedLayerId);
+
     const updatedFeature: GeoJsonFeatureItem = {
       ...feature,
       layerId: selectedLayerId,
       name: name.trim(),
-      properties: cleanShapeProperties(properties),
+      properties: finalCleanProps,
       updatedAt: new Date().toISOString(),
     };
 
@@ -423,10 +462,17 @@ export const AttributePane: React.FC<AttributePaneProps> = ({
   };
 
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
+  const isSearchAreaLayer =
+    selectedLayerId === 'layer1_tim_kiem' ||
+    selectedLayerId === 'layer4_khu_vuc_quy_tap' ||
+    (selectedLayer?.name || '').toLowerCase().includes('tìm kiếm') ||
+    (selectedLayer?.name || '').toLowerCase().includes('quy tập');
+
   const isPolygonLayer =
-    selectedLayer?.type === 'polygon' ||
-    feature.type === 'Polygon' ||
-    feature.type === 'MultiPolygon';
+    isSearchAreaLayer &&
+    (selectedLayer?.type === 'polygon' ||
+      feature.type === 'Polygon' ||
+      feature.type === 'MultiPolygon');
 
   return (
     <aside

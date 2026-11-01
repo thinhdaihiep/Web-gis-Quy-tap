@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { LayerConfig, UserRole, GeoJsonFeatureItem } from '../types';
 import { Layers, X, Info, ChevronDown, ChevronRight, Folder } from 'lucide-react';
-import { SearchAreaShapeBadge, BattleShapeBadge, GraveShapeBadge, CemeteryShapeBadge } from './GisIcons';
+import { SearchAreaShapeBadge, BattleShapeBadge, GraveShapeBadge, CemeteryShapeBadge, BusinessShapeBadge } from './GisIcons';
 
 interface LeftSidebarProps {
   layers: LayerConfig[];
@@ -102,6 +102,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       layerNameLower.includes('nghĩa trang') ||
       layerNameLower.includes('nghia trang');
 
+    const isBusiness =
+      layer.id === 'layer5_nghiep_vu' ||
+      layerNameLower.includes('nghiệp vụ') ||
+      layerNameLower.includes('nghiep vu');
+
     return features.filter((f) => {
       if (f.layerId === layer.id) return true;
       const fLayerLower = (f.layerId || '').toLowerCase();
@@ -116,6 +121,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       if (isBattle && fLayerLower.includes('tran_danh')) return true;
       if (isGrave && (fLayerLower.includes('mo_chi') || fLayerLower.includes('mo_liet_si'))) return true;
       if (isCemetery && fLayerLower.includes('nghia_trang')) return true;
+      if (isBusiness && fLayerLower.includes('nghiep_vu')) return true;
       return false;
     });
   };
@@ -143,6 +149,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       layer.id === 'layer3_nghia_trang' ||
       layerNameLower.includes('nghĩa trang') ||
       layerNameLower.includes('nghia trang');
+    const isBusiness =
+      layer.id === 'layer5_nghiep_vu' ||
+      layerNameLower.includes('nghiệp vụ') ||
+      layerNameLower.includes('nghiep vu');
 
     const isInfoActive = activeInfoLayerId === layer.id;
 
@@ -167,6 +177,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 <GraveShapeBadge className="w-4 h-4" />
               ) : isCemetery ? (
                 <CemeteryShapeBadge className="w-4 h-4" />
+              ) : isBusiness ? (
+                <BusinessShapeBadge className="w-4 h-4" />
               ) : (
                 <span
                   className="w-2.5 h-2.5 rounded-full block border border-slate-300"

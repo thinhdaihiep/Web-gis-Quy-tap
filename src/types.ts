@@ -16,7 +16,7 @@ export type BaseMapType = 'street' | 'esri_topo' | 'satellite';
 export interface LayerConfig {
   id: string;
   name: string;
-  type: 'polygon' | 'point';
+  type: 'polygon' | 'point' | 'mixed';
   visible: boolean;
   color?: string;
   icon?: string;
@@ -55,6 +55,14 @@ export const DEFAULT_LAYERS: LayerConfig[] = [
     visible: true,
     color: '#6366f1',
     description: 'Vị trí nghĩa trang liệt sĩ',
+  },
+  {
+    id: 'layer5_nghiep_vu',
+    name: 'Lớp nghiệp vụ',
+    type: 'mixed',
+    visible: true,
+    color: '#facc15',
+    description: 'Điểm và vùng đánh dấu nghiệp vụ',
   },
 ];
 

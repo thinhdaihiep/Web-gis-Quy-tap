@@ -124,7 +124,23 @@ export const NGHIA_TRANG_SCHEMA: FieldDefinition[] = [
 ];
 
 /**
- * Tổng hợp Schema 4 lớp dữ liệu
+ * 5. Lớp nghiệp vụ (Point / Polygon linh hoạt)
+ * Đơn giản hóa: Người dùng nhập Tên và Ghi chú, các trường khác tự động sinh
+ */
+export const NGHIEP_VU_SCHEMA: FieldDefinition[] = [
+  { name: 'OBJECTID', alias: 'Mã', type: 'Integer', length: 4 },
+  { name: 'Ten', alias: 'Tên', type: 'String', length: 255 },
+  { name: 'GhiChu', alias: 'Ghi chú', type: 'String', length: 500 },
+  { name: 'ToaDo', alias: 'Tọa độ', type: 'String', length: 50 },
+  { name: 'DiaDanh3C', alias: 'Hành chính cũ', type: 'String', length: 255 },
+  { name: 'Xa', alias: 'Xã (Phường)', type: 'String', length: 50 },
+  { name: 'Tinh', alias: 'Tỉnh (TP)', type: 'String', length: 50 },
+  { name: 'CapNhat', alias: 'TG cập nhật', type: 'Date', length: 8 },
+  { name: 'NguoiSua', alias: 'Người cập nhật', type: 'String', length: 50 },
+];
+
+/**
+ * Tổng hợp Schema các lớp dữ liệu
  */
 export const ALL_LAYER_SCHEMAS: Record<string, LayerSchema> = {
   layer1_tim_kiem: {
@@ -150,6 +166,12 @@ export const ALL_LAYER_SCHEMAS: Record<string, LayerSchema> = {
     layerName: 'Nghĩa trang',
     geometryType: 'Point',
     fields: NGHIA_TRANG_SCHEMA,
+  },
+  layer5_nghiep_vu: {
+    layerId: 'layer5_nghiep_vu',
+    layerName: 'Lớp nghiệp vụ',
+    geometryType: 'Point',
+    fields: NGHIEP_VU_SCHEMA,
   },
   // Tương thích ngược với các ID lớp phụ/cũ
   layer4_khu_vuc_quy_tap: {
@@ -184,6 +206,9 @@ export function getSchemaForLayer(layerId?: string): FieldDefinition[] {
     return ALL_LAYER_SCHEMAS[layerId].fields;
   }
   const l = layerId.toLowerCase();
+  if (l.includes('nghiep_vu') || l.includes('nghiepvu')) {
+    return NGHIEP_VU_SCHEMA;
+  }
   if (l.includes('tim_kiem') || l.includes('quy_tap') || l.includes('quytap')) {
     return TIM_KIEM_QUY_TAP_SCHEMA;
   }
@@ -198,3 +223,29 @@ export function getSchemaForLayer(layerId?: string): FieldDefinition[] {
   }
   return TIM_KIEM_QUY_TAP_SCHEMA;
 }
+
+/**
+ * Chuẩn hóa và làm sạch thuộc tính của đối tượng theo Schema của lớp.
+ * Đặc biệt đối với Lớp nghiệp vụ (layer5_nghiep_vu), chỉ giữ lại đúng 9 trường được định nghĩa trong NGHIEP_VU_SCHEMA.
+ */
+export function sanitizePropertiesForLayer(props: Record<string, any>, layerId?: string): Record<string, any> {
+  if (!props || typeof props !== 'object') return {};
+  const isBusiness =
+    layerId === 'layer5_nghiep_vu' ||
+    layerId === 'layer_nghiep_vu' ||
+    (layerId && (layerId.includes('nghiep_vu') || layerId.includes('nghiepvu')));
+
+  if (isBusiness) {
+    const allowed = new Set(NGHIEP_VU_SCHEMA.map((f) => f.name.toLowerCase()));
+    const result: Record<string, any> = {};
+    for (const [k, v] of Object.entries(props)) {
+      if (allowed.has(k.toLowerCase())) {
+        result[k] = v;
+      }
+    }
+    return result;
+  }
+
+  return { ...props };
+}
+

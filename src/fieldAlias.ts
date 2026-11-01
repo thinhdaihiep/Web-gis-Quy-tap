@@ -316,10 +316,12 @@ export function extractObjectId(feature: any): string | null {
  * layer2_tran_danh -> TD
  * layer3_mo_chi -> MLS
  * layer4_nghia_trang -> NT
+ * layer5_nghiep_vu -> NV
  */
 export function getLayerCodePrefix(layerId?: string): string {
   if (!layerId) return 'DT';
   const l = String(layerId).toLowerCase();
+  if (l.includes('nghiep_vu') || l.includes('nghiepvu')) return 'NV';
   if (l.includes('tim_kiem') || l.includes('quy_tap') || l.includes('quytap')) return 'TKQT';
   if (l.includes('tran_danh') || l.includes('trandanh') || l.includes('chien_dich')) return 'TD';
   if (l.includes('mo_chi') || l.includes('mo_liet_si') || l.includes('molietsi') || l.includes('mo')) return 'MLS';

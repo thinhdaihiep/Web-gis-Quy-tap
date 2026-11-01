@@ -18,6 +18,7 @@ import {
 import { getFieldAlias, sortPropertyRows, isFieldHidden, getFeatureDisplayCode } from '../fieldAlias';
 import { cleanShapeProperties, isShapeProperty } from '../utils/shapeFieldUtils';
 import { isDateField, formatDateForDisplay, toHtmlDateInputValue, parseDateInputToStorageValue } from '../utils/dateFormatter';
+import { sanitizePropertiesForLayer } from '../FieldSchema';
 
 interface FeatureEditModalProps {
   isOpen: boolean;
@@ -130,10 +131,23 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
         delete existingProps['trangthaimoi'];
         delete existingProps['ChiHuy'];
         delete existingProps['chihuy'];
-        delete existingProps['chi_huy'];
         delete existingProps['KetQua'];
         delete existingProps['ketqua'];
         delete existingProps['ket_qua'];
+
+        const isBusinessLayer =
+          initialLayerId === 'layer5_nghiep_vu' ||
+          initialLayerId === 'layer_nghiep_vu' ||
+          targetLayer?.name.toLowerCase().includes('nghiệp vụ') ||
+          targetLayer?.name.toLowerCase().includes('nghiep vu');
+
+        if (isBusinessLayer) {
+          delete existingProps['QuyTap'];
+          delete existingProps['quytap'];
+          delete existingProps['quy_tap'];
+          delete existingProps['QUYTAP'];
+          delete existingProps['Kết quả quy tập'];
+        }
 
         if (isBattleLayer) {
           const hasBenTa = Object.keys(existingProps).some((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === 'benta');
@@ -243,18 +257,39 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   // Hàm đồng bộ và chuẩn hóa thuộc tính đối tượng khi bấm Lưu hoặc khi cập nhật hồ sơ
   const buildFeatureToSave = (hoSoOverride?: string | null): GeoJsonFeatureItem => {
     const currentUpdater = currentUser?.displayName || currentUser?.username || 'Bản đồ qk5';
+    const targetLayer = layers.find((l) => l.id === selectedLayerId);
+    const isTargetSearchArea =
+      selectedLayerId === 'layer1_tim_kiem' ||
+      selectedLayerId === 'layer4_khu_vuc_quy_tap' ||
+      (targetLayer?.name || '').toLowerCase().includes('tìm kiếm') ||
+      (targetLayer?.name || '').toLowerCase().includes('quy tập');
+
+    const isBusinessLayer =
+      selectedLayerId === 'layer5_nghiep_vu' ||
+      selectedLayerId === 'layer_nghiep_vu' ||
+      (targetLayer?.name || '').toLowerCase().includes('nghiệp vụ') ||
+      (targetLayer?.name || '').toLowerCase().includes('nghiep vu');
 
     // Xây dựng danh sách thuộc tính sạch
     const properties: Record<string, any> = {
       ...(feature.properties || {}),
       Ten: name.trim() || feature.name || '',
-      PhanLoai: phanLoai,
-      ThoiGian: thoiGian.trim(),
-      DonVi: donVi.trim(),
       GhiChu: ghiChu.trim(),
       NguoiSua: currentUpdater,
       CapNhat: new Date().toISOString(),
     };
+
+    if (isTargetSearchArea) {
+      properties.PhanLoai = phanLoai;
+    } else {
+      delete properties['PhanLoai'];
+      delete properties['phanLoai'];
+    }
+
+    if (!isBusinessLayer) {
+      if (thoiGian.trim()) properties.ThoiGian = thoiGian.trim();
+      if (donVi.trim()) properties.DonVi = donVi.trim();
+    }
 
     // Loại bỏ triệt để mọi biến thể tên trường cũ của HoSo
     delete properties['hoso'];
@@ -284,13 +319,15 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
     properties['NguoiSua'] = currentUpdater;
     properties['CapNhat'] = new Date().toISOString();
 
+    const finalCleanProps = sanitizePropertiesForLayer(cleanShapeProperties(properties), selectedLayerId);
+
     return {
       id: feature.id || `feat-${Date.now()}`,
       layerId: selectedLayerId,
       name: (name.trim() || feature.name || '').trim(),
       type: feature.type || 'Point',
       coordinates: feature.coordinates || [108.3, 14.5],
-      properties: cleanShapeProperties(properties),
+      properties: finalCleanProps,
       updatedAt: new Date().toISOString(),
     };
   };
@@ -440,10 +477,17 @@ export const FeatureEditModal: React.FC<FeatureEditModalProps> = ({
   };
 
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
+  const isSearchAreaLayer =
+    selectedLayerId === 'layer1_tim_kiem' ||
+    selectedLayerId === 'layer4_khu_vuc_quy_tap' ||
+    (selectedLayer?.name || '').toLowerCase().includes('tìm kiếm') ||
+    (selectedLayer?.name || '').toLowerCase().includes('quy tập');
+
   const isPolygonLayer =
-    selectedLayer?.type === 'polygon' ||
-    feature.type === 'Polygon' ||
-    feature.type === 'MultiPolygon';
+    isSearchAreaLayer &&
+    (selectedLayer?.type === 'polygon' ||
+      feature.type === 'Polygon' ||
+      feature.type === 'MultiPolygon');
 
   return (
     <div className="fixed inset-0 z-[2500] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
