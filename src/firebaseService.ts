@@ -1111,9 +1111,31 @@ export async function saveCommuneChunksToFirestore(
 }
 
 /**
+ * Fast server-side point-in-polygon commune lookup API (single point query)
+ * Extremely fast (<50ms, response payload <500 bytes), avoiding 32MB download limits on Cloud Run
+ */
+export async function lookupCommuneFromServer(lat: number, lng: number): Promise<{
+  newCommune: any | null;
+  oldCommune: any | null;
+} | null> {
+  try {
+    const res = await fetch(`/api/communes/lookup?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.found && data.result) {
+        return data.result;
+      }
+    }
+  } catch (err) {
+    console.warn('Lỗi gọi /api/communes/lookup từ máy chủ:', err);
+  }
+  return null;
+}
+
+/**
  * Load all commune features from Firebase Firestore with tiered caching:
  * Tier 1: Client IndexedDB (0 network, 0 read, lưu vĩnh viễn không thời hạn)
- * Tier 2: Server-side RAM cache proxy (/api/communes/chunks, 0 Firestore read)
+ * Tier 2: Server-side RAM cache proxy (/api/communes/chunks with pagination, avoids Cloud Run 32MB limit)
  * Tier 3: Direct Firestore SDK read fallback
  */
 export async function loadCommuneChunksFromFirestore(forceRefresh = false): Promise<any[]> {
@@ -1128,28 +1150,37 @@ export async function loadCommuneChunksFromFirestore(forceRefresh = false): Prom
   }
 
   try {
-    // 2. Try server endpoint first (fastest, utilizes HTTP browser cache & server RAM)
-    try {
-      const res = await fetch('/api/communes/chunks');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.chunks) && data.chunks.length > 0) {
-          const allFeatures: any[] = [];
-          for (const chunk of data.chunks) {
-            if (chunk.payloadJson) {
-              try {
-                const parsed = JSON.parse(chunk.payloadJson);
-                if (Array.isArray(parsed)) allFeatures.push(...parsed);
-              } catch (_) {}
-            }
-          }
-          if (allFeatures.length > 0) {
-            await setCachedData(CACHE_KEY_COMMUNES, allFeatures);
-            return allFeatures;
+    // 2. Fetch from server endpoint using paginated chunks (avoiding Cloud Run 32MB payload limit)
+    const allFeatures: any[] = [];
+    let page = 0;
+    const pageSize = 10;
+    let totalPages = 1;
+
+    while (page < totalPages) {
+      const res = await fetch(`/api/communes/chunks?page=${page}&pageSize=${pageSize}`);
+      if (!res.ok) {
+        console.warn(`Lỗi tải commune chunk page ${page}:`, res.status);
+        break;
+      }
+      const data = await res.json();
+      if (Array.isArray(data.chunks) && data.chunks.length > 0) {
+        for (const chunk of data.chunks) {
+          if (chunk.payloadJson) {
+            try {
+              const parsed = JSON.parse(chunk.payloadJson);
+              if (Array.isArray(parsed)) allFeatures.push(...parsed);
+            } catch (_) {}
           }
         }
       }
-    } catch (_) {}
+      totalPages = typeof data.totalPages === 'number' ? data.totalPages : 1;
+      page++;
+    }
+
+    if (allFeatures.length > 0) {
+      await setCachedData(CACHE_KEY_COMMUNES, allFeatures);
+      return allFeatures;
+    }
 
     return [];
   } catch (err) {

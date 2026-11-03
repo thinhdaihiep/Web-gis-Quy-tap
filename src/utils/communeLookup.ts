@@ -111,7 +111,11 @@ async function setCachedCommunesToIDB(data: IndexedFeature[]): Promise<void> {
   }
 }
 
+// Client in-memory LRU cache for commune lookups
+const clientLookupCache = new Map<string, CommuneLookupResult>();
+
 export async function invalidateCommuneCache(): Promise<void> {
+  clientLookupCache.clear();
   cachedCommunes = null;
   loadPromise = null;
   lastFailedTimestamp = 0;
@@ -395,24 +399,90 @@ function queryPointInFeatures(
 }
 
 /**
- * Main query function to get commune info at (lat, lng) from Firebase
+ * Main query function to get commune info at (lat, lng) via Server-Side API & RAM Cache
+ * Returns exact 5 fields (XaCu, Huyen, TinhCu, XaMoi, TinhMoi)
  */
 export async function findCommunesAtLatLng(
   lat: number,
   lng: number
 ): Promise<CommuneLookupResult> {
-  const features = cachedCommunes || (await loadCapXa());
-
-  if (!features || features.length === 0) {
+  if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
     return {
       newCommune: null,
       oldCommune: null,
     };
   }
 
-  const matched = queryPointInFeatures(lng, lat, features);
-  if (matched) {
-    return extractCommuneProperties(matched.properties);
+  // 1. Fast client-side in-memory cache check (~11m resolution: 4 decimals)
+  const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  const cached = clientLookupCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  // 2. Query direct server API (/api/communes/lookup)
+  try {
+    const res = await fetch(`/api/communes/lookup?lat=${lat}&lng=${lng}`);
+    if (res.ok) {
+      const data: {
+        XaCu: string | null;
+        Huyen: string | null;
+        TinhCu: string | null;
+        XaMoi: string | null;
+        TinhMoi: string | null;
+      } = await res.json();
+
+      const xaCu = data.XaCu || '';
+      const huyen = data.Huyen || '';
+      const tinhCu = data.TinhCu || '';
+      const xaMoi = data.XaMoi || '';
+      const tinhMoi = data.TinhMoi || '';
+
+      const oldParts = [xaCu, huyen, tinhCu].filter(Boolean);
+      const oldText = oldParts.join(', ');
+
+      const newParts = [xaMoi, tinhMoi].filter(Boolean);
+      const newText = newParts.join(', ');
+
+      const result: CommuneLookupResult = {
+        newCommune: newText
+          ? {
+              ten: xaMoi || xaCu,
+              xaMoi: xaMoi || undefined,
+              tinhMoi: tinhMoi || undefined,
+              tinh: tinhMoi || tinhCu || undefined,
+              formattedText: newText,
+              rawProps: data,
+            }
+          : null,
+        oldCommune: oldText
+          ? {
+              ten: xaCu,
+              huyen: huyen || undefined,
+              tinh: tinhCu || undefined,
+              formattedText: oldText,
+              rawProps: data,
+            }
+          : null,
+      };
+
+      if (clientLookupCache.size > 1000) {
+        const keys = Array.from(clientLookupCache.keys()).slice(0, 200);
+        keys.forEach((k) => clientLookupCache.delete(k));
+      }
+      clientLookupCache.set(cacheKey, result);
+      return result;
+    }
+  } catch (err) {
+    console.warn('[CommuneLookup] Gọi API tra cứu xã thất bại, thử fallback cục bộ:', err);
+  }
+
+  // 3. Graceful fallback to client polygon features if already loaded
+  if (cachedCommunes && cachedCommunes.length > 0) {
+    const matched = queryPointInFeatures(lng, lat, cachedCommunes);
+    if (matched) {
+      return extractCommuneProperties(matched.properties);
+    }
   }
 
   return {

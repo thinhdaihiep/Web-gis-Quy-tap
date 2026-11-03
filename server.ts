@@ -24,6 +24,17 @@ try {
   console.warn('Could not initialize /tmp/raster_cache:', err);
 }
 
+// Server-side cache directory for commune spatial index snapshot
+const COMMUNES_CACHE_DIR = path.join('/tmp', 'communes_cache');
+const COMMUNES_SPATIAL_INDEX_FILE = path.join(COMMUNES_CACHE_DIR, 'spatial_index.json');
+try {
+  if (!fs.existsSync(COMMUNES_CACHE_DIR)) {
+    fs.mkdirSync(COMMUNES_CACHE_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.warn('Could not initialize /tmp/communes_cache:', err);
+}
+
 // Register projection definitions
 proj4.defs('EPSG:3857', '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs');
 proj4.defs('EPSG:4326', '+proj=longlat +datum=WGS84 +no_defs');
@@ -2409,7 +2420,15 @@ async function startServer() {
 
       // Invalidate server in-memory cache upon upload so fresh data will be read
       cachedCommuneChunksResponse = null;
+      serverCommunesIndex = null;
+      serverCommuneLookupCache.clear();
+      try {
+        if (fs.existsSync(COMMUNES_SPATIAL_INDEX_FILE)) {
+          fs.unlinkSync(COMMUNES_SPATIAL_INDEX_FILE);
+        }
+      } catch (_) {}
       await bumpSyncVersion('communes');
+      ensureCommunesIndexInitialized(true).catch(() => {});
 
       return res.json({ success: true, count: chunks?.length || 0 });
     } catch (err: any) {
@@ -2476,6 +2495,321 @@ async function startServer() {
       return res.json(payload);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ==========================================
+  // SERVER-SIDE COMMUNE SPATIAL INDEX & LOOKUP
+  // ==========================================
+  interface IndexedCommuneServerFeature {
+    bbox: [number, number, number, number]; // [minLng, minLat, maxLng, maxLat]
+    geometryType: 'Polygon' | 'MultiPolygon';
+    coordinates: any;
+    properties: {
+      XaCu: string;
+      Huyen: string;
+      TinhCu: string;
+      XaMoi: string;
+      TinhMoi: string;
+    };
+  }
+
+  let serverCommunesIndex: IndexedCommuneServerFeature[] | null = null;
+  let isIndexingCommunes = false;
+
+  interface CommuneLookupResponse {
+    XaCu: string | null;
+    Huyen: string | null;
+    TinhCu: string | null;
+    XaMoi: string | null;
+    TinhMoi: string | null;
+  }
+  const serverCommuneLookupCache = new Map<string, CommuneLookupResponse>();
+
+  function computeCommuneBoundingBox(type: string, coordinates: any): [number, number, number, number] | null {
+    let minLng = Infinity;
+    let minLat = Infinity;
+    let maxLng = -Infinity;
+    let maxLat = -Infinity;
+
+    const update = (lng: number, lat: number) => {
+      if (typeof lng === 'number' && typeof lat === 'number' && !isNaN(lng) && !isNaN(lat)) {
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+    };
+
+    if (type === 'Polygon') {
+      const rings = coordinates as number[][][];
+      if (!rings || !rings[0]) return null;
+      for (const pt of rings[0]) {
+        update(pt[0], pt[1]);
+      }
+    } else if (type === 'MultiPolygon') {
+      const polys = coordinates as number[][][][];
+      if (!polys) return null;
+      for (const poly of polys) {
+        if (poly && poly[0]) {
+          for (const pt of poly[0]) {
+            update(pt[0], pt[1]);
+          }
+        }
+      }
+    } else {
+      return null;
+    }
+
+    if (minLng === Infinity) return null;
+    return [minLng, minLat, maxLng, maxLat];
+  }
+
+  function isPointInRing(point: [number, number], ring: number[][]): boolean {
+    const [px, py] = point;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0];
+      const yi = ring[i][1];
+      const xj = ring[j][0];
+      const yj = ring[j][1];
+
+      const intersect = yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi;
+      if (intersect) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  function isPointInPolygon(point: [number, number], rings: number[][][]): boolean {
+    if (!rings || rings.length === 0) return false;
+    if (!isPointInRing(point, rings[0])) {
+      return false;
+    }
+    for (let i = 1; i < rings.length; i++) {
+      if (isPointInRing(point, rings[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function isPointInMultiPolygon(point: [number, number], polygons: number[][][][]): boolean {
+    if (!polygons) return false;
+    for (const poly of polygons) {
+      if (isPointInPolygon(point, poly)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function extractCommuneProperties(props: Record<string, any> | undefined | null) {
+    if (!props) {
+      return { XaCu: '', Huyen: '', TinhCu: '', XaMoi: '', TinhMoi: '' };
+    }
+    const getProp = (key1: string, key2: string) => {
+      if (props[key1] != null && String(props[key1]).trim() !== '') return String(props[key1]).trim();
+      if (props[key2] != null && String(props[key2]).trim() !== '') return String(props[key2]).trim();
+      return '';
+    };
+    const ten = getProp('Ten', 'ten');
+    const huyen = getProp('Huyen', 'huyen');
+    const tinh = getProp('Tinh', 'tinh');
+    const xaMoi = getProp('XaMoi', 'xaMoi');
+    const tinhMoi = getProp('TinhMoi', 'tinhMoi');
+
+    return {
+      XaCu: ten || '',
+      Huyen: huyen || '',
+      TinhCu: tinh || '',
+      XaMoi: xaMoi || ten || '',
+      TinhMoi: tinhMoi || tinh || '',
+    };
+  }
+
+  async function ensureCommunesIndexInitialized(forceReload = false): Promise<IndexedCommuneServerFeature[]> {
+    if (!forceReload && serverCommunesIndex && serverCommunesIndex.length > 0) {
+      return serverCommunesIndex;
+    }
+    if (isIndexingCommunes) {
+      let attempts = 0;
+      while (isIndexingCommunes && attempts < 40) {
+        await new Promise((r) => setTimeout(r, 50));
+        attempts++;
+      }
+      return serverCommunesIndex || [];
+    }
+
+    isIndexingCommunes = true;
+    try {
+      // 1. Tầng 1: Đọc nhanh từ file snapshot cục bộ tại /tmp (mất ~15ms, không tốn quota Firestore)
+      if (!forceReload && fs.existsSync(COMMUNES_SPATIAL_INDEX_FILE)) {
+        try {
+          const raw = await fs.promises.readFile(COMMUNES_SPATIAL_INDEX_FILE, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            serverCommunesIndex = parsed;
+            console.log(`[CommuneIndex] Đã nạp thành công ${parsed.length} polygon xã từ ổ đĩa tạm /tmp vào RAM`);
+            return parsed;
+          }
+        } catch (readErr) {
+          console.warn('[CommuneIndex] Lỗi đọc cache từ /tmp, chuyển sang nạp từ Firestore:', readErr);
+        }
+      }
+
+      // 2. Tầng 2: Nạp từ Firestore nếu chưa có cache tại /tmp hoặc khi forceReload
+      if (!adminDb) return [];
+      const snap = await adminDb.collection('commune_chunks').get();
+      const indexed: IndexedCommuneServerFeature[] = [];
+
+      for (const doc of snap.docs) {
+        const data = doc.data();
+        if (!data.payloadJson) continue;
+        try {
+          const features = JSON.parse(data.payloadJson);
+          if (!Array.isArray(features)) continue;
+          for (const feat of features) {
+            if (!feat) continue;
+            const geom = feat.geometry || feat;
+            if (!geom || !geom.type || !geom.coordinates) continue;
+            const type = geom.type;
+            if (type !== 'Polygon' && type !== 'MultiPolygon') continue;
+
+            const bbox = computeCommuneBoundingBox(type, geom.coordinates);
+            if (!bbox) continue;
+
+            const vals = extractCommuneProperties(feat.properties || {});
+            indexed.push({
+              bbox,
+              geometryType: type,
+              coordinates: geom.coordinates,
+              properties: vals,
+            });
+          }
+        } catch (_) {}
+      }
+
+      serverCommunesIndex = indexed;
+      console.log(`[CommuneIndex] Đã nạp ${indexed.length} polygon xã từ Firestore vào RAM`);
+
+      // 3. Ghi snapshot ra file /tmp/communes_cache/spatial_index.json để các lần khởi động sau dùng ngay
+      if (indexed.length > 0) {
+        try {
+          await fs.promises.writeFile(COMMUNES_SPATIAL_INDEX_FILE, JSON.stringify(indexed), 'utf-8');
+          console.log(`[CommuneIndex] Đã lưu snapshot dữ liệu xã ra file đĩa tạm: ${COMMUNES_SPATIAL_INDEX_FILE}`);
+        } catch (writeErr) {
+          console.warn('[CommuneIndex] Không thể ghi snapshot vào /tmp:', writeErr);
+        }
+      }
+
+      return indexed;
+    } catch (err) {
+      console.error('[CommuneIndex] Lỗi nạp dữ liệu polygon xã:', err);
+      return [];
+    } finally {
+      isIndexingCommunes = false;
+    }
+  }
+
+  // Direct Spatial Commune Lookup API on Server: Returns exact 5 fields (XaCu, Huyen, TinhCu, XaMoi, TinhMoi)
+  app.get('/api/communes/lookup', async (req, res) => {
+    try {
+      const lat = parseFloat(req.query.lat as string);
+      const lng = parseFloat(req.query.lng as string);
+
+      if (isNaN(lat) || isNaN(lng)) {
+        return res.status(400).json({ error: 'Toạ độ lat, lng không hợp lệ' });
+      }
+
+      // Check fast in-memory grid cache (~11m resolution: 4 decimals)
+      const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+      const cached = serverCommuneLookupCache.get(cacheKey);
+      if (cached) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.json(cached);
+      }
+
+      const index = await ensureCommunesIndexInitialized();
+      if (!index || index.length === 0) {
+        return res.json({
+          XaCu: null,
+          Huyen: null,
+          TinhCu: null,
+          XaMoi: null,
+          TinhMoi: null,
+        });
+      }
+
+      const pt: [number, number] = [lng, lat];
+      let matchedFeature: IndexedCommuneServerFeature | null = null;
+
+      for (const item of index) {
+        const [minLng, minLat, maxLng, maxLat] = item.bbox;
+        if (lng < minLng || lng > maxLng || lat < minLat || lat > maxLat) {
+          continue;
+        }
+
+        if (item.geometryType === 'Polygon') {
+          if (isPointInPolygon(pt, item.coordinates)) {
+            matchedFeature = item;
+            break;
+          }
+        } else if (item.geometryType === 'MultiPolygon') {
+          if (isPointInMultiPolygon(pt, item.coordinates)) {
+            matchedFeature = item;
+            break;
+          }
+        }
+      }
+
+      const responseData: CommuneLookupResponse = matchedFeature
+        ? {
+            XaCu: matchedFeature.properties.XaCu || null,
+            Huyen: matchedFeature.properties.Huyen || null,
+            TinhCu: matchedFeature.properties.TinhCu || null,
+            XaMoi: matchedFeature.properties.XaMoi || null,
+            TinhMoi: matchedFeature.properties.TinhMoi || null,
+          }
+        : {
+            XaCu: null,
+            Huyen: null,
+            TinhCu: null,
+            XaMoi: null,
+            TinhMoi: null,
+          };
+
+      // Keep cache size bounded
+      if (serverCommuneLookupCache.size > 10000) {
+        const keysToDelete = Array.from(serverCommuneLookupCache.keys()).slice(0, 2000);
+        keysToDelete.forEach((k) => serverCommuneLookupCache.delete(k));
+      }
+      serverCommuneLookupCache.set(cacheKey, responseData);
+
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.json(responseData);
+    } catch (err: any) {
+      console.error('[API /api/communes/lookup] Error:', err);
+      res.status(500).json({ error: err.message || 'Lỗi tra cứu xã' });
+    }
+  });
+
+  // Clear server disk cache & RAM cache for communes (Editor/Admin only)
+  app.post('/api/communes/clear-cache', requireEditorOrAdmin, async (req, res) => {
+    try {
+      cachedCommuneChunksResponse = null;
+      serverCommunesIndex = null;
+      serverCommuneLookupCache.clear();
+      if (fs.existsSync(COMMUNES_SPATIAL_INDEX_FILE)) {
+        try {
+          fs.unlinkSync(COMMUNES_SPATIAL_INDEX_FILE);
+        } catch (_) {}
+      }
+      ensureCommunesIndexInitialized(true).catch(() => {});
+      return res.json({ success: true, message: 'Đã xóa bộ đệm đĩa và RAM của dữ liệu xã' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Lỗi xóa cache xã' });
     }
   });
 
@@ -3671,6 +4005,9 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
     ensureFeatureStoreInitialized().catch((err) => {
       console.warn('[Server] Pre-warm feature store warning:', err?.message || err);
+    });
+    ensureCommunesIndexInitialized().catch((err) => {
+      console.warn('[Server] Pre-warm communes index warning:', err?.message || err);
     });
   });
 }
