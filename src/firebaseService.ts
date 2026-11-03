@@ -109,10 +109,49 @@ export async function syncAllCachedDataIfOutdated(callbacks?: {
     const lFeat = Number(localVersions.featuresVersion) || 0;
     if (sFeat > lFeat || lFeat === 0) {
       try {
-        const freshFeatures = await loadSharedFeaturesFromFirestore(true);
-        if (freshFeatures && freshFeatures.length > 0) {
-          saveLocalSyncVersions({ featuresVersion: sFeat, featuresUpdatedAt: serverVersions.featuresUpdatedAt });
-          if (callbacks?.onFeaturesUpdated) callbacks.onFeaturesUpdated(freshFeatures);
+        if (lFeat > 0) {
+          // Đồng bộ vi sai tăng dần (Incremental Delta Sync) - chỉ nạp các đối tượng thêm mới/sửa/xóa
+          const deltaRes = await fetch(`/api/features/delta?sinceVersion=${lFeat}`);
+          if (deltaRes.ok) {
+            const deltaData = await deltaRes.json();
+            if (deltaData.status === 'up_to_date') {
+              saveLocalSyncVersions({ featuresVersion: sFeat, featuresUpdatedAt: serverVersions.featuresUpdatedAt });
+            } else if (deltaData.status === 'delta' && Array.isArray(deltaData.upserted)) {
+              const cached = await getCachedMapFeatures();
+              const delSet = new Set<string>((deltaData.deletedKeys || []).map((k: string) => String(k).toLowerCase()));
+              const filtered = cached.filter((item) => {
+                const uKey = getItemUniqueKey(item).toLowerCase();
+                const fId = String(item.id || '').toLowerCase();
+                const objId = String(item.properties?.OBJECTID ?? item.properties?.objectid ?? '').toLowerCase();
+                return !delSet.has(uKey) && !delSet.has(fId) && (!objId || !delSet.has(objId));
+              });
+              const cleanedUpserted = deltaData.upserted.map((feat: any) => ({
+                ...feat,
+                properties: cleanShapeProperties(feat.properties || {}),
+              }));
+              const updatedList = deduplicateFeaturesList([...filtered, ...cleanedUpserted]);
+              await setCachedMapFeatures(updatedList);
+              saveLocalSyncVersions({ featuresVersion: sFeat, featuresUpdatedAt: serverVersions.featuresUpdatedAt });
+              if (callbacks?.onFeaturesUpdated) callbacks.onFeaturesUpdated(updatedList);
+            } else if (deltaData.status === 'full' && Array.isArray(deltaData.features)) {
+              const cleaned = deduplicateFeaturesList(
+                deltaData.features.map((feat: any) => ({
+                  ...feat,
+                  properties: cleanShapeProperties(feat.properties || {}),
+                }))
+              );
+              await setCachedMapFeatures(cleaned);
+              saveLocalSyncVersions({ featuresVersion: sFeat, featuresUpdatedAt: serverVersions.featuresUpdatedAt });
+              if (callbacks?.onFeaturesUpdated) callbacks.onFeaturesUpdated(cleaned);
+            }
+          }
+        } else {
+          // Lần đầu khởi tạo trên thiết bị: tải snapshot toàn bộ
+          const freshFeatures = await loadSharedFeaturesFromFirestore(true);
+          if (freshFeatures && freshFeatures.length > 0) {
+            saveLocalSyncVersions({ featuresVersion: sFeat, featuresUpdatedAt: serverVersions.featuresUpdatedAt });
+            if (callbacks?.onFeaturesUpdated) callbacks.onFeaturesUpdated(freshFeatures);
+          }
         }
       } catch (fErr) {
         console.warn('[Sync] Cập nhật map_features nền thất bại:', fErr);
@@ -287,22 +326,63 @@ export function isDemoFeatureId(id: string | number): boolean {
   return s.startsWith('demo_') || s.includes('demo_poly') || s.includes('demo_point');
 }
 
-// Helper to save features to LocalStorage cache
-function syncToLocalStorage(features: GeoJsonFeatureItem[]) {
+export const CACHE_KEY_FEATURES = 'gis_map_features';
+
+export async function getCachedMapFeatures(): Promise<GeoJsonFeatureItem[]> {
   try {
-    const existingRaw = localStorage.getItem('gis_local_map_features');
-    const existingList: GeoJsonFeatureItem[] = existingRaw ? JSON.parse(existingRaw) : [];
+    // 1. Thử đọc từ IndexedDB (dung lượng > 500MB, không bị giới hạn 5MB)
+    const fromIdb = await getCachedData<GeoJsonFeatureItem[]>(CACHE_KEY_FEATURES);
+    if (fromIdb && Array.isArray(fromIdb) && fromIdb.length > 0) {
+      return fromIdb.filter((f) => !isDemoFeatureId(f.id));
+    }
+
+    // 2. Tự động di chuyển (migration) từ LocalStorage cũ nếu có
+    const fromLs = getFromLocalStorage();
+    if (fromLs.length > 0) {
+      setCachedData(CACHE_KEY_FEATURES, fromLs).catch(() => {});
+      return fromLs;
+    }
+  } catch (_) {}
+  return [];
+}
+
+export async function setCachedMapFeatures(features: GeoJsonFeatureItem[]): Promise<void> {
+  const cleaned = deduplicateFeaturesList(
+    features.filter((f) => !isDemoFeatureId(f.id)).map((f) => ({
+      ...f,
+      properties: cleanShapeProperties(f.properties || {}),
+    }))
+  );
+
+  // Lưu vào IndexedDB
+  await setCachedData(CACHE_KEY_FEATURES, cleaned);
+
+  // Lưu dự phòng vào LocalStorage nếu kích thước nhỏ (< 2MB)
+  try {
+    const json = JSON.stringify(cleaned);
+    if (json.length < 2 * 1024 * 1024) {
+      localStorage.setItem('gis_local_map_features', json);
+    }
+  } catch (_) {}
+}
+
+export async function syncToLocalCache(features: GeoJsonFeatureItem[]) {
+  try {
+    const existing = await getCachedMapFeatures();
     const cleanedIncoming = features.map((f) => ({
       ...f,
       properties: cleanShapeProperties(f.properties || {}),
     }));
-    const merged = deduplicateFeaturesList([...existingList, ...cleanedIncoming].filter((f) => !isDemoFeatureId(f.id)));
-    localStorage.setItem('gis_local_map_features', JSON.stringify(merged));
+    const merged = deduplicateFeaturesList([...existing, ...cleanedIncoming].filter((f) => !isDemoFeatureId(f.id)));
+    await setCachedMapFeatures(merged);
   } catch (e) {
-    console.warn('Lỗi ghi LocalStorage cache:', e);
+    console.warn('Lỗi ghi cache không gian:', e);
   }
 }
 
+function syncToLocalStorage(features: GeoJsonFeatureItem[]) {
+  syncToLocalCache(features).catch(() => {});
+}
 
 function getFromLocalStorage(): GeoJsonFeatureItem[] {
   try {
@@ -504,8 +584,16 @@ export async function loadSharedFeaturesFromFirestore(forceFresh = false): Promi
     }
   } catch (_) {}
 
+  // 1. Nếu không yêu cầu ép buộc làm mới (forceFresh), nạp tức thì từ bộ nhớ đệm IndexedDB (0ms)
+  if (!forceFresh) {
+    const cached = await getCachedMapFeatures();
+    if (cached && cached.length > 0) {
+      return cached;
+    }
+  }
+
   try {
-    const url = forceFresh ? `/api/features/all?fresh=1&_t=${Date.now()}` : `/api/features/all?_t=${Date.now()}`;
+    const url = forceFresh ? `/api/features/all?fresh=1&_t=${Date.now()}` : `/api/features/all`;
     const res = await fetch(url, {
       cache: forceFresh ? 'no-store' : 'default',
     });
@@ -556,21 +644,17 @@ export async function loadSharedFeaturesFromFirestore(forceFresh = false): Promi
         }
 
         const allList = deduplicateFeaturesList(Array.from(itemsMap.values()));
-
-        // Clean overwrite LocalStorage cache with the server source of truth
-        try {
-          localStorage.setItem('gis_local_map_features', JSON.stringify(allList));
-        } catch (e) {}
+        await setCachedMapFeatures(allList);
 
         return allList;
       }
     }
   } catch (err) {
-    console.warn('Lỗi tải /api/features/all (sử dụng LocalStorage cache dự phòng):', err);
+    console.warn('Lỗi tải /api/features/all (sử dụng cache dự phòng):', err);
   }
 
-  // Fallback to local storage ONLY if offline / server unreachable
-  const localItems = getFromLocalStorage();
+  // Fallback to cache ONLY if offline / server unreachable
+  const localItems = await getCachedMapFeatures();
   const filteredLocal = localItems.filter((item) => {
     if (isDemoFeatureId(item.id)) return false;
     const uKey = getItemUniqueKey(item).toLowerCase().trim();
@@ -603,7 +687,7 @@ export async function deleteFeatureFromFirestore(
   const uniqueKey = typeof target === 'object' ? target.uniqueKey : undefined;
 
   try {
-    const currentLocal = getFromLocalStorage();
+    const currentLocal = await getCachedMapFeatures();
     const updatedLocal = currentLocal.filter(
       (f) =>
         getItemUniqueKey(f) !== featId &&
@@ -611,7 +695,7 @@ export async function deleteFeatureFromFirestore(
         String(f.id) !== String(featId) &&
         (!uniqueKey || getItemUniqueKey(f) !== uniqueKey)
     );
-    syncToLocalStorage(updatedLocal);
+    await setCachedMapFeatures(updatedLocal);
 
     // Save to deleted tombstone in local storage to prevent reappearance
     try {

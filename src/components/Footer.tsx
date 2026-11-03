@@ -408,10 +408,10 @@ export const Footer: React.FC<FooterProps> = ({
   return (
     <footer className="min-h-[28px] h-auto py-1 sm:py-0 safe-area-bottom bg-slate-900 text-slate-200 border-t border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between px-2 sm:px-4 gap-y-1 gap-x-2 text-[10px] sm:text-[11px] shrink-0 z-[3000] font-medium w-full">
       {/* Left side: Coordinates & Elevation */}
-      <div className="flex items-center gap-1.5 w-full sm:w-auto">
+      <div className="flex items-center gap-1.5 w-full sm:w-auto min-w-0">
         {/* Cursor Coordinates Interactive Input */}
         <div
-          className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-0.5 rounded border transition-colors w-full sm:w-auto ${
+          className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-0.5 rounded border transition-colors flex-1 sm:flex-initial min-w-0 ${
             inputError || badge.label.includes('?')
               ? 'bg-red-950/40 border-red-500/80 text-red-200 ring-1 ring-red-500/40'
               : isEditing
@@ -442,7 +442,7 @@ export const Footer: React.FC<FooterProps> = ({
               onBlur={handleBlur}
               onKeyDown={handleKeyDown}
               placeholder="Nhập WGS84 hoặc VN-2000..."
-              className={`font-mono text-[10px] sm:text-[11px] font-bold bg-transparent outline-none w-full sm:w-[220px] transition-colors min-w-[120px] ${
+              className={`font-mono text-[10px] sm:text-[11px] font-bold bg-transparent outline-none w-full sm:w-[220px] transition-colors min-w-[80px] ${
                 inputError || badge.label.includes('?')
                   ? 'text-red-400 placeholder-red-400/60'
                   : badge.textColorClass

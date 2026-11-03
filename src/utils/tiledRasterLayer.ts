@@ -1,6 +1,6 @@
 import L from 'leaflet';
 import { LatLngBoundsBox } from '../types';
-import { fetchRasterWithCache } from './rasterCache';
+import { fetchRasterWithCache, saveCachedTile } from './rasterCache';
 // @ts-ignore
 import RasterTilerWorker from '../workers/rasterTiler.worker?worker';
 
@@ -8,6 +8,8 @@ export interface TiledRasterOptions {
   opacity?: number;
   pane?: string;
   tileSize?: number;
+  fileId?: string;
+  version?: number;
   viewport?: LatLngBoundsBox | null;
   onProgress?: (progress: {
     percent: number;
@@ -144,6 +146,8 @@ export class TiledRasterLayer extends L.LayerGroup {
           if (inViewport) inViewportLoaded++;
 
           let imageUrl = '';
+          const tileCacheKey = options.fileId ? `tile_${options.fileId}_${key}_v${options.version || 1}` : '';
+
           if (blob) {
             imageUrl = URL.createObjectURL(blob);
           } else if (buffer) {
@@ -155,6 +159,9 @@ export class TiledRasterLayer extends L.LayerGroup {
               const imgData = new ImageData(new Uint8ClampedArray(buffer), tileW, tileH);
               ctx.putImageData(imgData, 0, 0);
               imageUrl = canvas.toDataURL('image/png');
+              if (tileCacheKey) {
+                saveCachedTile(tileCacheKey, imageUrl).catch(() => {});
+              }
             }
           }
 

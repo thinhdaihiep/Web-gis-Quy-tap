@@ -170,4 +170,9 @@ Cơ chế này tương thích hoàn hảo với cả hai phương thức cập n
   - Thử nghiệm sửa 1 mộ chí -> kiểm tra máy khách nhận biết cập nhật.
   - Thử nghiệm thêm 1 layer raster -> kiểm tra máy khách tự động cập nhật combobox.
   - Kiểm tra tài khoản khách: Đảm bảo không thấy lớp Firebase.
-- **Bước 5**: Báo cáo kết quả chi tiết cho Mr.Goal.
+- **Bước 5**: Triển khai cơ chế cache thời gian thực cho các lớp raster dựa trên ID và version trong metadata:
+  - Giữ cố định định danh ID (`RasterFileItem.id`) của từng mảnh khi reload/reset BBox.
+  - Tự động tăng `version` (+1) của mảnh và lớp khi BBox thay đổi hoặc được reset.
+  - Xây dựng kho lưu đệm `raster_tiles` trong IndexedDB (`gis_raster_cache_db` v2) để lưu trữ các tile 256x256px.
+  - Client diffing engine trong `src/components/Map.tsx`: Chỉ hủy và nạp lại tile của mảnh có version thay đổi; giữ nguyên 100% các mảnh không thay đổi trên bản đồ mà không làm mới toàn bộ lớp.
+- **Bước 6**: Báo cáo kết quả chi tiết cho người dùng.

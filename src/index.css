@@ -4,8 +4,14 @@
 html,
 body,
 #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
   overscroll-behavior: none;
   overscroll-behavior-y: none;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Ensure Leaflet container handles touch dragging cleanly without browser gesture interception */
@@ -16,7 +22,7 @@ body,
 
 /* Mobile Safe Area Bottom for Android 3-button navigation bar and iOS indicator */
 .safe-area-bottom {
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px);
 }
 
 @media (min-width: 640px) {

@@ -241,6 +241,7 @@ export interface RasterFileItem {
   minNativeZoom?: number;
   bounds?: LatLngBoundsBox | [[number, number], [number, number]] | null;
   fileSize?: number;
+  version?: number; // Incremental version per tile/chunk for real-time diffing & caching
   uploadedAt: string;
   source?: 'github' | 'firebase' | 'upload' | 'url';
 }
@@ -252,6 +253,7 @@ export interface RasterLayer {
   source?: 'github' | 'firebase' | 'upload' | 'url';
   files: RasterFileItem[];
   opacity?: number;
+  version?: number; // Incremental layer metadata version
   createdAt: string;
   updatedAt?: string;
   githubReleaseUrl?: string;

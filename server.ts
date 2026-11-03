@@ -260,22 +260,30 @@ async function seedDefaultAdmin() {
     });
 
     if (!hasAdmin) {
-      const defaultPassword = process.env.ADMIN_DEFAULT_PASSWORD || 'GisAdmin@2026';
-      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
-      const adminDoc = {
-        username: 'admin',
-        displayName: 'Bản đồ qk5',
-        role: 'admin',
-        password: hashedPassword,
-        createdAt: new Date().toISOString(),
-      };
-      await adminDb.collection('users').doc('user_admin').set(adminDoc);
-      console.log('----------------------------------------------------');
-      console.log('[Security Seed] Đã tự động tạo tài khoản admin mặc định: admin');
-      console.log('----------------------------------------------------');
+      const configuredPassword = (process.env.ADMIN_DEFAULT_PASSWORD || '').trim();
+      if (configuredPassword) {
+        const hashedPassword = await bcrypt.hash(configuredPassword, 10);
+        const adminDoc = {
+          username: 'admin',
+          displayName: 'Bản đồ qk5',
+          role: 'admin',
+          password: hashedPassword,
+          createdAt: new Date().toISOString(),
+        };
+        await adminDb.collection('users').doc('user_admin').set(adminDoc);
+        console.log('----------------------------------------------------');
+        console.log('[Security Seed] Đã khởi tạo tài khoản admin từ biến môi trường ADMIN_DEFAULT_PASSWORD.');
+        console.log('----------------------------------------------------');
+      } else {
+        console.log('----------------------------------------------------');
+        console.log('[Security Seed] Chưa có tài khoản admin trong CSDL.');
+        console.log('[Security Seed] Hệ thống không sử dụng mật khẩu mặc định cố định.');
+        console.log('[Security Seed] Để khởi tạo tài khoản admin ban đầu, vui lòng cấu hình biến môi trường ADMIN_DEFAULT_PASSWORD.');
+        console.log('----------------------------------------------------');
+      }
     }
   } catch (err: any) {
-    console.error('[Security Seed] Lỗi khởi tạo admin mặc định:', err);
+    console.error('[Security Seed] Lỗi kiểm tra/khởi tạo admin:', err);
   }
 }
 
@@ -492,7 +500,7 @@ syncRevokedTokens();
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.NODE_ENV === 'production' && process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = parseInt(process.env.PORT || '3000', 10) || 3000;
 
   // Security Headers
   app.disable('x-powered-by');
@@ -1698,6 +1706,155 @@ async function startServer() {
     return `${layerId}_id_${String(feat.name || 'unknown').toLowerCase().trim()}`;
   }
 
+  // ==========================================
+  // SERVER IN-MEMORY FEATURE STORE & DELTA SYNC ENGINE
+  // ==========================================
+  const inMemoryFeatureMap = new Map<string, any>();
+  const inMemoryDeletedKeys = new Set<string>();
+
+  interface FeatureChangeRecord {
+    version: number;
+    type: 'upsert' | 'delete';
+    key: string;
+    id?: string;
+    feature?: any;
+    timestamp: string;
+  }
+  const featureChangeHistory: FeatureChangeRecord[] = [];
+  const MAX_CHANGE_HISTORY = 1000;
+
+  let isFeatureStoreInitialized = false;
+  let featureStoreInitPromise: Promise<void> | null = null;
+  let cachedFeaturesAllPayload: { features: any[] } | null = null;
+  let cachedFeaturesAllEtag: string = '';
+
+  function invalidateFeaturesResponseCache() {
+    cachedFeaturesAllPayload = null;
+    cachedFeaturesAllEtag = '';
+  }
+
+  function recordFeatureChange(type: 'upsert' | 'delete', key: string, feature?: any) {
+    const currentVersion = (cachedSyncRegistry?.featuresVersion as number) || 1;
+    featureChangeHistory.push({
+      version: currentVersion,
+      type,
+      key: key.toLowerCase(),
+      id: feature?.id ? String(feature.id) : undefined,
+      feature: feature ? JSON.parse(JSON.stringify(feature)) : undefined,
+      timestamp: new Date().toISOString(),
+    });
+    if (featureChangeHistory.length > MAX_CHANGE_HISTORY) {
+      featureChangeHistory.shift();
+    }
+  }
+
+  async function ensureFeatureStoreInitialized(): Promise<void> {
+    if (isFeatureStoreInitialized) return;
+    if (featureStoreInitPromise) return featureStoreInitPromise;
+
+    featureStoreInitPromise = (async () => {
+      try {
+        if (!adminDb) return;
+        console.log('[FeatureStore] Đang khởi tạo In-Memory Store từ Firestore (Một lần duy nhất)...');
+
+        // 1. Đọc danh sách đã xóa
+        try {
+          const delSnap = await adminDb.collection('app_settings').doc('deleted_features').get();
+          if (delSnap.exists && Array.isArray(delSnap.data()?.keys)) {
+            delSnap.data()?.keys.forEach((k: string) => inMemoryDeletedKeys.add(String(k).toLowerCase().trim()));
+          }
+        } catch (_) {}
+
+        // 2. Đọc layer_chunks
+        try {
+          const chunksSnap = await adminDb.collection('layer_chunks').get();
+          chunksSnap.docs.forEach((docSnap: any) => {
+            const data = docSnap.data();
+            if (data && data.payloadJson) {
+              try {
+                const list = JSON.parse(data.payloadJson);
+                if (Array.isArray(list)) {
+                  list.forEach((item: any) => {
+                    if (item) {
+                      const uniqueKey = getServerFeatureUniqueKey(item);
+                      const lowerKey = uniqueKey.toLowerCase();
+                      const lowerId = String(item.id || '').toLowerCase();
+                      const lowerObjId = String(item.properties?.OBJECTID || '').toLowerCase();
+                      if (
+                        !inMemoryDeletedKeys.has(lowerKey) &&
+                        !inMemoryDeletedKeys.has(lowerId) &&
+                        (!lowerObjId || !inMemoryDeletedKeys.has(lowerObjId))
+                      ) {
+                        let coords = item.coordinates;
+                        if (typeof coords === 'string') {
+                          try { coords = JSON.parse(coords); } catch (_) { coords = []; }
+                        }
+                        item.coordinates = coords;
+                        inMemoryFeatureMap.set(uniqueKey, item);
+                      }
+                    }
+                  });
+                }
+              } catch (_) {}
+            }
+          });
+        } catch (cErr) {
+          console.warn('[FeatureStore] Lỗi đọc layer_chunks:', cErr);
+        }
+
+        // 3. Đọc map_features lẻ (ghi đè layer_chunks)
+        try {
+          const indivSnap = await adminDb.collection('map_features').get();
+          indivSnap.docs.forEach((docSnap: any) => {
+            const data = docSnap.data();
+            const featId = data.id || docSnap.id;
+            const uniqueKey = getServerFeatureUniqueKey(data);
+            const lowerKey = uniqueKey.toLowerCase();
+            const lowerId = String(featId).toLowerCase();
+            const lowerDocId = docSnap.id.toLowerCase();
+            const lowerObjId = String(data.properties?.OBJECTID || '').toLowerCase();
+
+            if (
+              inMemoryDeletedKeys.has(lowerKey) ||
+              inMemoryDeletedKeys.has(lowerId) ||
+              inMemoryDeletedKeys.has(lowerDocId) ||
+              (lowerObjId && inMemoryDeletedKeys.has(lowerObjId))
+            ) {
+              return;
+            }
+
+            let coords = data.coordinates;
+            if (typeof coords === 'string') {
+              try { coords = JSON.parse(coords); } catch (_) { coords = []; }
+            }
+            const item = {
+              id: featId,
+              layerId: data.layerId || 'layer1_tim_kiem',
+              name: data.name || '',
+              code: data.code || undefined,
+              type: data.type || 'Point',
+              coordinates: coords,
+              properties: data.properties || {},
+              updatedAt: data.updatedAt,
+            };
+            inMemoryFeatureMap.set(uniqueKey, item);
+          });
+        } catch (iErr) {
+          console.warn('[FeatureStore] Lỗi đọc map_features:', iErr);
+        }
+
+        isFeatureStoreInitialized = true;
+        console.log(`[FeatureStore] Khởi tạo thành công! Tổng cộng: ${inMemoryFeatureMap.size} đối tượng trong RAM.`);
+      } catch (err) {
+        console.error('[FeatureStore] Khởi tạo thất bại:', err);
+      } finally {
+        featureStoreInitPromise = null;
+      }
+    })();
+
+    return featureStoreInitPromise;
+  }
+
   // Save/Update a single map feature via Admin SDK
   app.post('/api/features/save', requireEditorOrAdmin, async (req, res) => {
     try {
@@ -1709,7 +1866,10 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing feature or feature id' });
       }
 
+      await ensureFeatureStoreInitialized();
+
       const rawCoords = feature.coordinates || feature.geometry?.coordinates || [];
+      const parsedCoords = typeof rawCoords === 'string' ? JSON.parse(rawCoords || '[]') : rawCoords;
       const coordsJsonStr = typeof rawCoords === 'string' ? rawCoords : JSON.stringify(rawCoords);
 
       const cleanedDoc: Record<string, any> = {
@@ -1743,8 +1903,25 @@ async function startServer() {
         }
       } catch (_) {}
 
-      cachedFeaturesResponse = null;
+      // Update in-memory feature store immediately (0ms propagation)
+      const cachedItem = {
+        id: String(feature.id),
+        layerId: cleanedDoc.layerId,
+        name: cleanedDoc.name,
+        code: cleanedDoc.code,
+        type: cleanedDoc.type,
+        coordinates: parsedCoords,
+        properties: cleanedDoc.properties,
+        updatedAt: cleanedDoc.updatedAt,
+      };
+      inMemoryDeletedKeys.delete(docId.toLowerCase());
+      inMemoryDeletedKeys.delete(String(feature.id).toLowerCase());
+      inMemoryFeatureMap.set(docId, cachedItem);
+      invalidateFeaturesResponseCache();
+
       await bumpSyncVersion('features');
+      recordFeatureChange('upsert', docId, cachedItem);
+
       res.json({ success: true, docId });
     } catch (err: any) {
       console.error('[API POST /api/features/save] Error:', err);
@@ -1874,8 +2051,47 @@ async function startServer() {
         await delRef.set({ keys: updatedKeys, updatedAt: new Date().toISOString() });
       } catch (_) {}
 
-      cachedFeaturesResponse = null;
-      await bumpSyncVersion('features');
+      // Update in-memory feature store immediately (0ms propagation)
+      for (const candId of candidateDocIds) {
+        inMemoryFeatureMap.delete(candId);
+        inMemoryDeletedKeys.add(candId.toLowerCase());
+      }
+      if (strId) {
+        inMemoryFeatureMap.delete(strId);
+        inMemoryDeletedKeys.add(strId.toLowerCase());
+      }
+      if (strUniqueKey) {
+        inMemoryFeatureMap.delete(strUniqueKey);
+        inMemoryDeletedKeys.add(strUniqueKey.toLowerCase());
+      }
+      if (strObjId) {
+        inMemoryDeletedKeys.add(strObjId.toLowerCase());
+      }
+      for (const [key, item] of Array.from(inMemoryFeatureMap.entries())) {
+        const itemId = String(item.id || '').toLowerCase();
+        const itemCode = String(item.code || '').toLowerCase();
+        const itemObjId = String(
+          item.properties?.OBJECTID ||
+          item.properties?.objectid ||
+          item.properties?.fid ||
+          ''
+        ).toLowerCase();
+        const isMatch =
+          (strId && (key.toLowerCase() === strId.toLowerCase() || itemId === strId.toLowerCase() || itemCode === strId.toLowerCase())) ||
+          (strObjId && (itemObjId === strObjId.toLowerCase() || itemCode.includes(strObjId.toLowerCase()))) ||
+          (strUniqueKey && key.toLowerCase() === strUniqueKey.toLowerCase());
+        if (isMatch) {
+          inMemoryFeatureMap.delete(key);
+          inMemoryDeletedKeys.add(key.toLowerCase());
+          inMemoryDeletedKeys.add(itemId);
+        }
+      }
+
+      invalidateFeaturesResponseCache();
+      const newVersion = await bumpSyncVersion('features');
+      const tombstoneKey = strUniqueKey || strId || (candidateDocIds.size > 0 ? Array.from(candidateDocIds)[0] : 'unknown');
+      recordFeatureChange('delete', tombstoneKey, undefined);
+
       res.json({ success: true });
     } catch (err: any) {
       console.error('[API POST /api/features/delete] Error:', err);
@@ -1914,10 +2130,24 @@ async function startServer() {
               payloadJson: sanitizedPayload,
               updatedAt: new Date().toISOString(),
             }, { merge: true });
+
+            try {
+              const list: any[] = JSON.parse(sanitizedPayload);
+              if (Array.isArray(list)) {
+                for (const item of list) {
+                  if (item) {
+                    const uniqueKey = getServerFeatureUniqueKey(item);
+                    inMemoryFeatureMap.set(uniqueKey, item);
+                    inMemoryDeletedKeys.delete(uniqueKey.toLowerCase());
+                    if (item.id) inMemoryDeletedKeys.delete(String(item.id).toLowerCase());
+                  }
+                }
+              }
+            } catch (_) {}
           }
         }
         await batch.commit();
-        cachedFeaturesResponse = null;
+        invalidateFeaturesResponseCache();
         await bumpSyncVersion('features');
         return res.json({ success: true, count: features?.length || 0 });
       }
@@ -1933,6 +2163,7 @@ async function startServer() {
               const docRef = adminDb.collection('map_features').doc(String(feat.id));
               const rawCoords = feat.coordinates || feat.geometry?.coordinates || [];
               const coordsJsonStr = typeof rawCoords === 'string' ? rawCoords : JSON.stringify(rawCoords);
+              const cleanedProps = cleanShapePropertiesServer(feat.properties || {});
               batch.set(
                 docRef,
                 {
@@ -1941,16 +2172,35 @@ async function startServer() {
                   name: feat.name || '',
                   type: feat.type || feat.geometry?.type || 'Point',
                   coordinates: coordsJsonStr,
-                  properties: cleanShapePropertiesServer(feat.properties || {}),
+                  properties: cleanedProps,
                   updatedAt: feat.updatedAt || new Date().toISOString(),
                 },
                 { merge: true }
               );
+
+              let parsedCoords = rawCoords;
+              if (typeof rawCoords === 'string') {
+                try { parsedCoords = JSON.parse(rawCoords); } catch (_) { parsedCoords = []; }
+              }
+              const cachedItem = {
+                id: String(feat.id),
+                layerId: feat.layerId || 'layer1_tim_kiem',
+                name: feat.name || '',
+                code: feat.code || undefined,
+                type: feat.type || feat.geometry?.type || 'Point',
+                coordinates: parsedCoords,
+                properties: cleanedProps,
+                updatedAt: feat.updatedAt || new Date().toISOString(),
+              };
+              const uniqueKey = getServerFeatureUniqueKey(cachedItem);
+              inMemoryFeatureMap.set(uniqueKey, cachedItem);
+              inMemoryDeletedKeys.delete(uniqueKey.toLowerCase());
+              inMemoryDeletedKeys.delete(String(feat.id).toLowerCase());
             }
           }
           await batch.commit();
         }
-        cachedFeaturesResponse = null;
+        invalidateFeaturesResponseCache();
         await bumpSyncVersion('features');
         return res.json({ success: true, count: features.length });
       }
@@ -1962,131 +2212,120 @@ async function startServer() {
     }
   });
 
-  // Server-side cache for map_features all
-  let cachedFeaturesResponse: {
-    payload: { features: any[] };
-    etag: string;
-    updatedAt: number;
-  } | null = null;
-
-  // GET all shared map features (layer_chunks and individual map_features merged) via Admin SDK
+  // GET all shared map features directly from in-memory store (zero Firestore reads on repeat requests!)
   app.get('/api/features/all', async (req, res) => {
     try {
-      const isFresh = req.query.fresh === '1' || req.headers['cache-control'] === 'no-cache';
-      if (cachedFeaturesResponse && !isFresh) {
-        const clientEtag = req.headers['if-none-match'];
-        if (clientEtag && clientEtag === cachedFeaturesResponse.etag) {
-          return res.status(304).end();
-        }
-        res.setHeader('Cache-Control', 'public, no-cache');
-        res.setHeader('ETag', cachedFeaturesResponse.etag);
-        return res.json(cachedFeaturesResponse.payload);
-      }
-
       if (!adminDb) return res.json({ features: [] });
 
-      // Read deleted tombstones
-      let deletedKeySet = new Set<string>();
-      try {
-        const delSnap = await adminDb.collection('app_settings').doc('deleted_features').get();
-        if (delSnap.exists && Array.isArray(delSnap.data()?.keys)) {
-          deletedKeySet = new Set(delSnap.data().keys.map((k: string) => String(k).toLowerCase()));
+      const isFresh = req.query.fresh === '1';
+      if (isFresh) {
+        isFeatureStoreInitialized = false;
+        featureStoreInitPromise = null;
+      }
+      await ensureFeatureStoreInitialized();
+
+      const { layerId, bbox } = req.query;
+
+      // When no query filters are specified: full dataset served with HTTP 304 ETag
+      if (!layerId && !bbox) {
+        if (!cachedFeaturesAllPayload || !cachedFeaturesAllEtag) {
+          const features = Array.from(inMemoryFeatureMap.values());
+          cachedFeaturesAllPayload = { features };
+          cachedFeaturesAllEtag = `W/"features-${features.length}-${crypto.createHash('md5').update(JSON.stringify(features)).digest('hex').slice(0, 16)}"`;
         }
-      } catch (_) {}
 
-      const itemsMap = new Map<string, any>();
-
-      // 1. Read layer_chunks
-      try {
-        const chunksSnap = await adminDb.collection('layer_chunks').get();
-        chunksSnap.docs.forEach((docSnap: any) => {
-          const data = docSnap.data();
-          if (data && data.payloadJson) {
-            try {
-              const list = JSON.parse(data.payloadJson);
-              if (Array.isArray(list)) {
-                list.forEach((item: any) => {
-                  if (item) {
-                    const uniqueKey = getServerFeatureUniqueKey(item);
-                    const lowerKey = uniqueKey.toLowerCase();
-                    const lowerId = String(item.id || '').toLowerCase();
-                    const lowerObjId = String(item.properties?.OBJECTID || '').toLowerCase();
-                    if (!deletedKeySet.has(lowerKey) && !deletedKeySet.has(lowerId) && (!lowerObjId || !deletedKeySet.has(lowerObjId))) {
-                      itemsMap.set(uniqueKey, item);
-                    }
-                  }
-                });
-              }
-            } catch (_) {}
-          }
-        });
-      } catch (cErr) {
-        console.warn('[API /api/features/all] Read layer_chunks warning:', cErr);
-      }
-
-      // 2. Read individual map_features (single edits override chunks)
-      try {
-        const indivSnap = await adminDb.collection('map_features').get();
-        indivSnap.docs.forEach((docSnap: any) => {
-          const data = docSnap.data();
-          const featId = data.id || docSnap.id;
-          const uniqueKey = getServerFeatureUniqueKey(data);
-          const lowerKey = uniqueKey.toLowerCase();
-          const lowerId = String(featId).toLowerCase();
-          const lowerDocId = docSnap.id.toLowerCase();
-          const lowerObjId = String(data.properties?.OBJECTID || '').toLowerCase();
-
-          if (
-            deletedKeySet.has(lowerKey) ||
-            deletedKeySet.has(lowerId) ||
-            deletedKeySet.has(lowerDocId) ||
-            (lowerObjId && deletedKeySet.has(lowerObjId))
-          ) {
-            return;
-          }
-
-          let coords = data.coordinates;
-          if (typeof coords === 'string') {
-            try {
-              coords = JSON.parse(coords);
-            } catch (_) {
-              coords = [];
-            }
-          }
-          const item = {
-            id: featId,
-            layerId: data.layerId || 'layer1_tim_kiem',
-            name: data.name || '',
-            code: data.code || undefined,
-            type: data.type || 'Point',
-            coordinates: coords,
-            properties: data.properties || {},
-            updatedAt: data.updatedAt,
-          };
-          itemsMap.set(uniqueKey, item);
-        });
-      } catch (iErr) {
-        console.warn('[API /api/features/all] Read map_features warning:', iErr);
-      }
-
-      const features = Array.from(itemsMap.values());
-      const payload = { features };
-      const etag = `W/"features-${features.length}-${crypto.createHash('md5').update(JSON.stringify(features)).digest('hex').slice(0, 16)}"`;
-      cachedFeaturesResponse = { payload, etag, updatedAt: Date.now() };
-
-      if (!isFresh) {
         const clientEtag = req.headers['if-none-match'];
-        if (clientEtag && clientEtag === etag) {
+        if (clientEtag && clientEtag === cachedFeaturesAllEtag && !isFresh) {
           return res.status(304).end();
         }
+
+        res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+        res.setHeader('ETag', cachedFeaturesAllEtag);
+        return res.json(cachedFeaturesAllPayload);
       }
 
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-      res.setHeader('ETag', etag);
-      return res.json(payload);
+      // Filtered query by layerId and/or bbox
+      let filtered = Array.from(inMemoryFeatureMap.values());
+      if (layerId && typeof layerId === 'string') {
+        filtered = filtered.filter((f) => f.layerId === layerId);
+      }
+
+      if (bbox && typeof bbox === 'string') {
+        const parts = bbox.split(',').map(Number);
+        if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
+          const [minLng, minLat, maxLng, maxLat] = parts;
+          filtered = filtered.filter((f) => {
+            const coords = f.coordinates;
+            if (!coords) return true;
+            if (f.type === 'Point' && Array.isArray(coords) && coords.length >= 2) {
+              const [lng, lat] = coords;
+              return lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat;
+            }
+            return true;
+          });
+        }
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=60');
+      return res.json({ features: filtered });
     } catch (err: any) {
       console.error('[API GET /api/features/all] Error:', err);
       res.status(500).json({ error: err.message || 'Failed to load features' });
+    }
+  });
+
+  // GET incremental delta of shared map features
+  app.get('/api/features/delta', async (req, res) => {
+    try {
+      if (!adminDb) return res.json({ status: 'full', currentVersion: 0, features: [] });
+
+      await ensureFeatureStoreInitialized();
+      const sinceVersion = parseInt(String(req.query.sinceVersion || '0'), 10);
+      const registry = await getSyncRegistry();
+      const currentVersion = (registry?.featuresVersion as number) || 1;
+
+      if (sinceVersion > 0 && sinceVersion === currentVersion) {
+        return res.json({ status: 'up_to_date', currentVersion });
+      }
+
+      const minRecordedVer = featureChangeHistory.length > 0 ? featureChangeHistory[0].version : currentVersion;
+      if (sinceVersion > 0 && sinceVersion >= minRecordedVer) {
+        const upserted: any[] = [];
+        const deletedKeys: string[] = [];
+        const seenUpsertKeys = new Set<string>();
+
+        for (const change of featureChangeHistory) {
+          if (change.version > sinceVersion) {
+            if (change.type === 'delete') {
+              deletedKeys.push(change.key);
+            } else if (change.type === 'upsert' && change.feature) {
+              if (!seenUpsertKeys.has(change.key)) {
+                seenUpsertKeys.add(change.key);
+                upserted.push(change.feature);
+              }
+            }
+          }
+        }
+
+        return res.json({
+          status: 'delta',
+          currentVersion,
+          sinceVersion,
+          upserted,
+          deletedKeys,
+        });
+      }
+
+      // If sinceVersion is 0 or older than retained history, return full snapshot
+      const features = Array.from(inMemoryFeatureMap.values());
+      return res.json({
+        status: 'full',
+        currentVersion,
+        features,
+      });
+    } catch (err: any) {
+      console.error('[API GET /api/features/delta] Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to load feature delta' });
     }
   });
 
@@ -2288,9 +2527,15 @@ async function startServer() {
             minZoom: data.minZoom || 12,
             maxZoom: data.maxZoom || 18,
             bounds: data.bounds || null,
+            version: typeof data.version === 'number' ? data.version : 1,
             uploadedAt: data.createdAt || new Date().toISOString(),
           }];
         }
+        const mappedFiles = files.map((f: any, idx: number) => ({
+          ...f,
+          id: f.id || `${d.id}_file_${idx}`,
+          version: typeof f.version === 'number' ? f.version : 1,
+        }));
         layers.push({
           id: d.id,
           name: data.name || 'Bản đồ nền',
@@ -2299,8 +2544,9 @@ async function startServer() {
           storagePath: data.storagePath,
           githubReleaseUrl: data.githubReleaseUrl,
           bounds: data.bounds || null,
-          files,
+          files: mappedFiles,
           opacity: data.opacity ?? 1.0,
+          version: typeof data.version === 'number' ? data.version : 1,
           enabled: data.enabled !== false,
           createdAt: data.createdAt || new Date().toISOString(),
           updatedAt: data.updatedAt,
@@ -2409,7 +2655,7 @@ async function startServer() {
         cachedRasterLayersResponse = null;
       }
       if (!target || target === 'all' || target === 'features') {
-        cachedFeaturesResponse = null;
+        invalidateFeaturesResponseCache();
       }
       if (!target || target === 'all' || target === 'layer_configs') {
         cachedLayerConfigsResponse = null;
@@ -2539,9 +2785,16 @@ async function startServer() {
         source: layer.source || 'github',
         storagePath: layer.storagePath || '',
         githubReleaseUrl: layer.githubReleaseUrl || '',
-        files: Array.isArray(layer.files) ? layer.files : [],
+        files: Array.isArray(layer.files)
+          ? layer.files.map((f: any, idx: number) => ({
+              ...f,
+              id: f.id || `file_${idx}_${Date.now()}`,
+              version: typeof f.version === 'number' ? f.version : 1,
+            }))
+          : [],
         bounds: layer.bounds || null,
         opacity: layer.opacity ?? 1.0,
+        version: typeof layer.version === 'number' ? layer.version : 1,
         enabled: layer.enabled !== false,
         updatedAt: new Date().toISOString(),
       };
@@ -3397,8 +3650,12 @@ async function startServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
+    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: isHmrDisabled ? false : undefined,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -3412,6 +3669,9 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    ensureFeatureStoreInitialized().catch((err) => {
+      console.warn('[Server] Pre-warm feature store warning:', err?.message || err);
+    });
   });
 }
 

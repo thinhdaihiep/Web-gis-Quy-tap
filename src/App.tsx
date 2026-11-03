@@ -33,7 +33,9 @@ import {
   signOutUser,
   getStoredUser,
   getAuthHeaders,
-  syncAllCachedDataIfOutdated
+  syncAllCachedDataIfOutdated,
+  getCachedMapFeatures,
+  setCachedMapFeatures
 } from './firebaseService';
 import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMatch, getFeatureDisplayCode } from './fieldAlias';
 import { sanitizePropertiesForLayer } from './FieldSchema';
@@ -786,43 +788,34 @@ export default function App() {
 
   // Load shared features, field aliases, and layer configs from Firestore database on mount
   useEffect(() => {
-    // 0. Load local storage cache first so data is instantly available even offline or when quota exceeded
-    try {
-      const cached = localStorage.getItem('gis_local_map_features');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setMapFeatures((prev) => {
-            const list = [...prev, ...parsed]
-              .filter((f) => !isInvalidOrTargetToDeleteFeature(f))
-              .map((f) => {
-                const isBusiness =
-                  f.layerId === 'layer5_nghiep_vu' ||
-                  f.layerId === 'layer_nghiep_vu' ||
-                  (f.layerId && (f.layerId.includes('nghiep_vu') || f.layerId.includes('nghiepvu')));
-                if (isBusiness) {
-                  f.properties = sanitizePropertiesForLayer(f.properties || {}, f.layerId);
-                }
-                return f;
-              });
-            return deduplicateFeaturesList(list);
-          });
-        }
+    // 0. Nạp bộ nhớ đệm IndexedDB tức thì (0ms) giúp bản đồ hiển thị ngay lập tức
+    getCachedMapFeatures().then((cached) => {
+      if (cached && cached.length > 0) {
+        setMapFeatures((prev) => {
+          const list = [...prev, ...cached]
+            .filter((f) => !isInvalidOrTargetToDeleteFeature(f))
+            .map((f) => {
+              const isBusiness =
+                f.layerId === 'layer5_nghiep_vu' ||
+                f.layerId === 'layer_nghiep_vu' ||
+                (f.layerId && (f.layerId.includes('nghiep_vu') || f.layerId.includes('nghiepvu')));
+              if (isBusiness) {
+                f.properties = sanitizePropertiesForLayer(f.properties || {}, f.layerId);
+              }
+              return f;
+            });
+          return deduplicateFeaturesList(list);
+        });
       }
-    } catch (e) {
-      console.warn('Lỗi đọc local cache:', e);
-    }
+    }).catch((e) => console.warn('Lỗi đọc local cache:', e));
 
     async function initSharedDb() {
       try {
-        setSplashStatusText('Đang kết nối CSDL & tải dữ liệu không gian...');
-        // 1. Load shared map features with Clean Overwrite (CSDL là nguồn chân lý duy nhất)
-        const dbFeatures = await loadSharedFeaturesFromFirestore(true);
+        setSplashStatusText('Đang nạp dữ liệu không gian...');
+        // 1. Nạp dữ liệu không gian từ bộ nhớ đệm hoặc tải nhẹ (false = ưu tiên cache nếu có)
+        const dbFeatures = await loadSharedFeaturesFromFirestore(false);
         if (dbFeatures && dbFeatures.length > 0) {
           setMapFeatures(dbFeatures);
-          try {
-            localStorage.setItem('gis_local_map_features', JSON.stringify(dbFeatures));
-          } catch (e) {}
         }
 
         setSplashStatusText('Đang nạp bảng ánh xạ thuộc tính tiếng Việt...');
@@ -1935,7 +1928,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen h-[100dvh] w-screen w-[100dvw] overflow-hidden bg-slate-900 font-sans text-slate-900">
+    <div className="fixed inset-0 flex flex-col h-full w-full overflow-hidden bg-slate-900 font-sans text-slate-900">
       {/* Top High Density Header */}
       <Header
         currentRole={effectiveRole}

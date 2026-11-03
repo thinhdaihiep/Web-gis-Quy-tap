@@ -3,7 +3,8 @@
 
 const DB_NAME = 'gis_raster_cache_db';
 const STORE_NAME = 'raster_files';
-const DB_VERSION = 1;
+const TILE_STORE_NAME = 'raster_tiles';
+const DB_VERSION = 2;
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -13,6 +14,9 @@ function openDB(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
+      }
+      if (!db.objectStoreNames.contains(TILE_STORE_NAME)) {
+        db.createObjectStore(TILE_STORE_NAME);
       }
     };
 
@@ -208,14 +212,82 @@ export async function clearAllRasterCache(): Promise<void> {
   try {
     const db = await openDB();
     return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const tx = db.transaction([STORE_NAME, TILE_STORE_NAME], 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      const clearReq = store.clear();
-      clearReq.onsuccess = () => resolve();
-      clearReq.onerror = () => resolve();
+      const tileStore = tx.objectStore(TILE_STORE_NAME);
+      store.clear();
+      tileStore.clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
     });
   } catch (err) {
     console.warn('IndexedDB clear error:', err);
+  }
+}
+
+/**
+ * Retrieve cached tile data (PNG blob/dataURL) for a specific tile key
+ */
+export async function getCachedTile(tileKey: string): Promise<string | null> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(TILE_STORE_NAME, 'readonly');
+      const store = tx.objectStore(TILE_STORE_NAME);
+      const req = store.get(tileKey);
+      req.onsuccess = () => resolve((req.result as string) || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save tile data URL to IndexedDB tile cache
+ */
+export async function saveCachedTile(tileKey: string, dataUrl: string): Promise<void> {
+  if (!tileKey || !dataUrl) return;
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(TILE_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(TILE_STORE_NAME);
+      const req = store.put(dataUrl, tileKey);
+      req.onsuccess = () => resolve();
+      req.onerror = () => resolve();
+    });
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Delete all cached tiles matching a prefix (e.g. "tile_layerId_fileId_")
+ */
+export async function removeCachedTilesForPrefix(prefix: string): Promise<void> {
+  if (!prefix) return;
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(TILE_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(TILE_STORE_NAME);
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
+            cursor.delete();
+          }
+          cursor.continue();
+        } else {
+          resolve();
+        }
+      };
+      req.onerror = () => resolve();
+    });
+  } catch {
+    // ignore
   }
 }
 

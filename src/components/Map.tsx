@@ -549,7 +549,7 @@ export const MapComponent: React.FC<MapProps> = ({
   const layerSubGroupsRef = useRef<Map<string, L.LayerGroup>>(new Map());
   const tempDrawLayerRef = useRef<L.LayerGroup | null>(null);
   const clickMarkerRef = useRef<L.CircleMarker | null>(null);
-  const rasterLayersCacheRef = useRef<Map<string, { layer: any; metadata: any }>>(new Map());
+  const rasterLayersCacheRef = useRef<Map<string, { layer: any; metadata: any; version?: number; boundsStr?: string; url?: string }>>(new Map());
   const hasActivatedRasterRef = useRef<boolean>(false);
   const selectedCRSRef = useRef<'4326' | '3405' | '3406'>(selectedCRS);
   selectedCRSRef.current = selectedCRS;
@@ -1197,24 +1197,28 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
       }
 
       let allFilesToProcess: Array<{
+        id?: string;
         url: string;
         fileName?: string;
         format?: 'COG' | 'GEOTIFF';
         opacity?: number;
         bounds?: any;
+        version?: number;
       }> = [];
 
       targetLayers.forEach((layer) => {
         if (layer?.files && Array.isArray(layer.files) && layer.files.length > 0) {
           layer.files.forEach((f) => {
-            if (f?.url) allFilesToProcess.push({ ...f, opacity: layer.opacity ?? 1.0 });
+            if (f?.url) allFilesToProcess.push({ ...f, opacity: layer.opacity ?? 1.0, version: f.version || 1 });
           });
         } else if (layer?.url) {
           allFilesToProcess.push({
+            id: `${layer.id}_file_0`,
             url: layer.url,
             fileName: layer.name,
             opacity: layer.opacity ?? 1.0,
             bounds: layer.bounds,
+            version: layer.version || 1,
           });
         }
       });
@@ -1267,17 +1271,37 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         return;
       }
 
-      // Sync active layers on the map
-      const currentUrls = new Set(activeFiles.map((f) => f.url));
+      // Evict stale cache items if version or bounds changed for active files (Real-time selective diffing)
+      activeFiles.forEach((file) => {
+        const cacheKey = file.id || file.url;
+        const cachedItem = cache.get(cacheKey);
+        if (cachedItem) {
+          const currentBoundsStr = JSON.stringify(file.bounds || null);
+          const isVersionMismatch = typeof file.version === 'number' && cachedItem.version !== file.version;
+          const isBoundsMismatch = cachedItem.boundsStr && cachedItem.boundsStr !== currentBoundsStr;
+          if (isVersionMismatch || isBoundsMismatch) {
+            if (rasterGroup.hasLayer(cachedItem.layer)) {
+              rasterGroup.removeLayer(cachedItem.layer);
+            }
+            if (typeof (cachedItem.layer as any).destroy === 'function') {
+              (cachedItem.layer as any).destroy();
+            }
+            cache.delete(cacheKey);
+          }
+        }
+      });
+
+      // Sync active layers on the map: remove layers whose file is not in activeFiles
+      const currentActiveKeys = new Set(activeFiles.map((f) => f.id || f.url));
       rasterGroup.eachLayer((layer: any) => {
-        let layerUrl = null;
-        for (const [url, item] of cache.entries()) {
+        let matchedKey: string | null = null;
+        for (const [key, item] of cache.entries()) {
           if (item.layer === layer) {
-            layerUrl = url;
+            matchedKey = key;
             break;
           }
         }
-        if (layerUrl && !currentUrls.has(layerUrl)) {
+        if (matchedKey && !currentActiveKeys.has(matchedKey)) {
           rasterGroup.removeLayer(layer);
         }
       });
@@ -1296,8 +1320,9 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
       // Attach already-cached layers that are in the Active Set
       activeFiles.forEach((file) => {
-        if (cache.has(file.url)) {
-          const cachedItem = cache.get(file.url)!;
+        const cacheKey = file.id || file.url;
+        if (cache.has(cacheKey)) {
+          const cachedItem = cache.get(cacheKey)!;
           if (typeof (cachedItem.layer as any).setOpacity === 'function') {
             (cachedItem.layer as any).setOpacity(file.opacity ?? 1.0);
           }
@@ -1343,7 +1368,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         allFilesToProcess.forEach((f) => {
           const name = getShortRasterName(f);
           if (name) {
-            const isLoaded = cache.has(f.url);
+            const isLoaded = cache.has(f.id || f.url);
             const isFailed = failedUrls.has(f.url);
             const inView = inViewportUrls.has(f.url);
             const fileState: 'loading' | 'loaded' | 'error' = isLoaded ? 'loaded' : isFailed ? 'error' : 'loading';
@@ -1389,7 +1414,8 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
 
       // Shared single raster loader function
       const loadSingleRaster = async (file: any) => {
-        if (!isActive || !file || !file.url || cache.has(file.url) || pendingUrls.has(file.url)) {
+        const cacheKey = file.id || file.url;
+        if (!isActive || !file || !file.url || cache.has(cacheKey) || pendingUrls.has(file.url)) {
           return;
         }
 
@@ -1420,10 +1446,18 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             resolution: 256,
             pane: 'rasterPane',
             viewport: currentViewportBox,
+            fileId: file.id,
+            version: file.version || 1,
           });
 
           if (isActive && mapInstanceRef.current) {
-            cache.set(file.url, { layer: geoRasterLayer, metadata });
+            cache.set(cacheKey, {
+              layer: geoRasterLayer,
+              metadata,
+              version: file.version || 1,
+              boundsStr: JSON.stringify(file.bounds || null),
+              url: file.url,
+            });
             if (!rasterGroup.hasLayer(geoRasterLayer)) {
               rasterGroup.addLayer(geoRasterLayer);
             }
@@ -1501,7 +1535,7 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
         }
       };
 
-      const pendingFiles = activeFiles.filter((f) => f.url && !cache.has(f.url));
+      const pendingFiles = activeFiles.filter((f) => f.url && !cache.has(f.id || f.url));
       if (pendingFiles.length > 0) {
         // Ưu tiên tải các file nằm trong khung nhìn trước, sau đó mới tải các file đệm xung quanh
         const inViewportUrls = new Set(
@@ -1538,7 +1572,8 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
             const processNext = async () => {
               if (!isActive || idx >= pendingFiles.length) return;
               const file = pendingFiles[idx++];
-              if (file && file.url && !cache.has(file.url) && !pendingUrls.has(file.url)) {
+              const cacheKey = file ? (file.id || file.url) : '';
+              if (file && file.url && !cache.has(cacheKey) && !pendingUrls.has(file.url)) {
                 // Yield to main thread before loading each raster
                 await new Promise((res) => setTimeout(res, 60));
                 await loadSingleRaster(file);
@@ -1574,13 +1609,15 @@ function getShortRasterName(f: { fileName?: string; name?: string; url?: string 
     const handleClearRasterCacheEvent = (e: any) => {
       const urls: string[] = e?.detail?.urls;
       if (urls && Array.isArray(urls)) {
-        urls.forEach((u) => {
-          const item = cache.get(u);
-          if (item && typeof (item.layer as any).destroy === 'function') {
-            (item.layer as any).destroy();
+        const urlSet = new Set(urls);
+        for (const [key, item] of cache.entries()) {
+          if (urlSet.has(item.url || '') || urlSet.has(key)) {
+            if (item && typeof (item.layer as any).destroy === 'function') {
+              (item.layer as any).destroy();
+            }
+            cache.delete(key);
           }
-          cache.delete(u);
-        });
+        }
       } else {
         cache.forEach((item) => {
           if (item && typeof (item.layer as any).destroy === 'function') {

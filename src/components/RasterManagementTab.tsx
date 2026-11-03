@@ -115,7 +115,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   };
 
   // Scan files and extract bounding boxes from Firebase Storage via server
-  const scanFirebaseStorage = async (rawPath: string, existingFiles?: RasterFileItem[]) => {
+  const scanFirebaseStorage = async (rawPath: string, existingFiles?: RasterFileItem[], fullScan: boolean = false) => {
     let cleanPath = rawPath.trim();
     if (!cleanPath) {
       throw new Error('Vui lòng nhập đường dẫn thư mục trên Firebase Storage.');
@@ -133,7 +133,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
     }
 
     const data = await res.json();
-    const existingBoundsMap = new Map((existingFiles || []).map((f) => [f.fileName, f.bounds]));
+    const existingFileMap = new Map((existingFiles || []).map((f) => [f.fileName, f]));
     const files: RasterFileItem[] = [];
     const boundsList: (LatLngBoundsBox | null)[] = [];
 
@@ -148,23 +148,37 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         console.warn(`Không thể trích xuất BBox cho ${item.fileName}:`, e);
       }
 
-      // Preserve previously verified bounds if new scan could not read
-      if (!bounds && existingBoundsMap.has(item.fileName)) {
-        bounds = (existingBoundsMap.get(item.fileName) as LatLngBoundsBox) || null;
+      const prevFile = existingFileMap.get(item.fileName);
+
+      // Preserve previously verified bounds if new scan could not read and not fullScan
+      if (!bounds && prevFile?.bounds && !fullScan) {
+        bounds = (prevFile.bounds as LatLngBoundsBox) || null;
       }
 
       if (bounds) {
         boundsList.push(bounds);
       }
 
+      // Preserve stable file ID
+      const stableId = prevFile?.id || `fb_${item.fileName.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
+      // Bump version if bounds changed or fullScan was performed
+      const boundsChanged = prevFile && prevFile.bounds && bounds
+        ? JSON.stringify(prevFile.bounds) !== JSON.stringify(bounds)
+        : !!(bounds && !prevFile?.bounds);
+      const version = prevFile
+        ? (fullScan || boundsChanged ? (prevFile.version || 1) + 1 : (prevFile.version || 1))
+        : 1;
+
       files.push({
-        id: `fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        id: stableId,
         fileName: item.fileName,
         url: item.url,
         fileSize: item.fileSize,
         bounds,
         format: 'COG',
-        uploadedAt: item.updatedAt || new Date().toISOString(),
+        version,
+        uploadedAt: item.updatedAt || prevFile?.uploadedAt || new Date().toISOString(),
         source: 'firebase',
       });
     }
@@ -174,7 +188,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   };
 
   // Scan files and extract bounding boxes from GitHub Release
-  const scanGithubRelease = async (url: string, existingFiles?: RasterFileItem[]) => {
+  const scanGithubRelease = async (url: string, existingFiles?: RasterFileItem[], fullScan: boolean = false) => {
     const trimmed = url.trim();
     if (!trimmed) {
       throw new Error('Vui lòng nhập đường link GitHub Release.');
@@ -190,7 +204,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       throw new Error('Không tìm thấy file GeoTIFF/COG (.tif, .tiff) nào trong Release này.');
     }
 
-    const existingBoundsMap = new Map((existingFiles || []).map((f) => [f.fileName, f.bounds]));
+    const existingFileMap = new Map((existingFiles || []).map((f) => [f.fileName, f]));
     const files: RasterFileItem[] = [];
     const boundsList: (LatLngBoundsBox | null)[] = [];
 
@@ -205,23 +219,37 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         console.warn(`Không thể trích xuất BBox cho asset ${asset.name}:`, e);
       }
 
-      // Preserve previously verified bounds if new scan could not read
-      if (!bounds && existingBoundsMap.has(asset.name)) {
-        bounds = (existingBoundsMap.get(asset.name) as LatLngBoundsBox) || null;
+      const prevFile = existingFileMap.get(asset.name);
+
+      // Preserve previously verified bounds if new scan could not read and not fullScan
+      if (!bounds && prevFile?.bounds && !fullScan) {
+        bounds = (prevFile.bounds as LatLngBoundsBox) || null;
       }
 
       if (bounds) {
         boundsList.push(bounds);
       }
 
+      // Preserve stable file ID
+      const stableId = prevFile?.id || `gh_${asset.id || asset.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
+      // Bump version if bounds changed or fullScan was performed
+      const boundsChanged = prevFile && prevFile.bounds && bounds
+        ? JSON.stringify(prevFile.bounds) !== JSON.stringify(bounds)
+        : !!(bounds && !prevFile?.bounds);
+      const version = prevFile
+        ? (fullScan || boundsChanged ? (prevFile.version || 1) + 1 : (prevFile.version || 1))
+        : 1;
+
       files.push({
-        id: `gh_${asset.id || Date.now()}`,
+        id: stableId,
         fileName: asset.name,
         url: asset.downloadUrl,
         fileSize: asset.size,
         bounds,
         format: 'COG',
-        uploadedAt: asset.updatedAt || new Date().toISOString(),
+        version,
+        uploadedAt: asset.updatedAt || prevFile?.uploadedAt || new Date().toISOString(),
         source: 'github',
       });
     }
@@ -289,9 +317,10 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
             source: sourceType,
             storagePath,
             githubReleaseUrl,
-            files,
+            files: files.map((f) => ({ ...f, version: f.version || 1 })),
             bounds: combinedBounds,
             opacity: 1.0,
+            version: 1,
             enabled: true,
           },
         }),
@@ -310,9 +339,10 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         source: sourceType,
         storagePath,
         githubReleaseUrl,
-        files,
+        files: files.map((f) => ({ ...f, version: f.version || 1 })),
         bounds: combinedBounds,
         opacity: 1.0,
+        version: 1,
         createdAt: new Date().toISOString(),
       };
 
@@ -346,11 +376,11 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       if (layer.source === 'firebase' || (!layer.githubReleaseUrl && layer.storagePath)) {
         const targetPath = layer.storagePath || layer.name;
-        const result = await scanFirebaseStorage(targetPath, fullScan ? [] : layer.files);
+        const result = await scanFirebaseStorage(targetPath, layer.files, fullScan);
         updatedFiles = result.files;
         combinedBounds = result.combinedBounds || (layer.bounds as LatLngBoundsBox) || null;
       } else if (layer.githubReleaseUrl) {
-        const result = await scanGithubRelease(layer.githubReleaseUrl, fullScan ? [] : layer.files);
+        const result = await scanGithubRelease(layer.githubReleaseUrl, layer.files, fullScan);
         updatedFiles = result.files;
         combinedBounds = result.combinedBounds || (layer.bounds as LatLngBoundsBox) || null;
       } else {
@@ -362,10 +392,14 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
             const info = await parseGeoTiffMetadata(file.url);
             if (info && info.bounds) {
               b = info.bounds;
-              boundsList.push(b);
             }
           } catch (_) {}
-          updatedFiles.push({ ...file, bounds: b });
+          if (b) {
+            boundsList.push(b);
+          }
+          const boundsChanged = fullScan || JSON.stringify(file.bounds) !== JSON.stringify(b);
+          const version = boundsChanged ? (file.version || 1) + 1 : (file.version || 1);
+          updatedFiles.push({ ...file, bounds: b, version });
         }
         combinedBounds = computeCombinedBounds(boundsList);
       }
@@ -373,12 +407,14 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       // Invalidate cache for refreshed files
       removeCachedRasters(layer.files.map((f) => f.url));
 
+      const nextLayerVersion = (layer.version || 1) + 1;
       await fetch('/api/raster-layers/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           layer: {
             ...layer,
+            version: nextLayerVersion,
             files: updatedFiles,
             bounds: combinedBounds,
           },
@@ -389,6 +425,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         l.id === layer.id
           ? {
               ...l,
+              version: nextLayerVersion,
               files: updatedFiles,
               bounds: combinedBounds,
               updatedAt: new Date().toISOString(),

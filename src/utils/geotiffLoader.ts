@@ -344,6 +344,8 @@ export async function createLeafletGeoRasterLayer(
     maxNativeZoom?: number;
     pane?: string;
     viewport?: LatLngBoundsBox | null;
+    fileId?: string;
+    version?: number;
     onProgress?: (percent: number) => void;
   } = {}
 ): Promise<{ layer: L.Layer; metadata: ParsedGeoRasterInfo }> {
@@ -372,6 +374,8 @@ export async function createLeafletGeoRasterLayer(
         pane: options.pane || 'rasterPane',
         tileSize: 256,
         viewport: options.viewport || null,
+        fileId: options.fileId,
+        version: options.version,
         onProgress: (p) => {
           if (options.onProgress) {
             options.onProgress(p.percent);
