@@ -41,76 +41,15 @@ import { extractObjectId, deduplicateFeaturesList, getItemUniqueKey, isFeatureMa
 import { sanitizePropertiesForLayer } from './FieldSchema';
 import { OsmItem } from './utils/osmService';
 import { Upload, X, Check, ShieldAlert, FileText, Server, Database, AlertTriangle, RotateCw, RefreshCw, CheckCircle2, Layers, Loader2 } from 'lucide-react';
+import {
+  getFeatureCoordsAndType,
+  computeFeatureCenter,
+  shiftFeatureCoordinates,
+  isInvalidOrTargetToDeleteFeature,
+} from './utils/featureGeometryUtils';
+import { RasterToast } from './components/RasterToast';
+import { useNotificationPolling } from './hooks/useNotificationPolling';
 
-function getFeatureCoordsAndType(featOrGeom: any): { type: string; coordinates: any } {
-  if (!featOrGeom) return { type: 'Point', coordinates: [0, 0] };
-  const type = featOrGeom.type || featOrGeom.geometry?.type || 'Point';
-  const coordinates = featOrGeom.coordinates || featOrGeom.geometry?.coordinates || [0, 0];
-  return { type, coordinates };
-}
-
-function computeFeatureCenter(featOrGeom: any): [number, number] {
-  const { type, coordinates } = getFeatureCoordsAndType(featOrGeom);
-  if (type === 'Point' && Array.isArray(coordinates) && typeof coordinates[0] === 'number' && !isNaN(coordinates[0])) {
-    return [coordinates[0], coordinates[1]];
-  }
-
-  let totalLng = 0;
-  let totalLat = 0;
-  let count = 0;
-
-  const extract = (arr: any) => {
-    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
-      totalLng += arr[0];
-      totalLat += arr[1];
-      count++;
-    } else if (Array.isArray(arr)) {
-      arr.forEach(extract);
-    }
-  };
-
-  extract(coordinates);
-  if (count === 0) return [0, 0];
-  return [totalLng / count, totalLat / count];
-}
-
-function shiftFeatureCoordinates(featOrGeom: any, deltaLng: number, deltaLat: number): any {
-  const { coordinates } = getFeatureCoordsAndType(featOrGeom);
-
-  const shift = (arr: any): any => {
-    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && !isNaN(arr[0]) && typeof arr[1] === 'number' && !isNaN(arr[1])) {
-      return [
-        Number((arr[0] + deltaLng).toFixed(6)),
-        Number((arr[1] + deltaLat).toFixed(6)),
-      ];
-    }
-    if (Array.isArray(arr)) {
-      return arr.map(shift);
-    }
-    return arr;
-  };
-
-  return shift(coordinates);
-}
-
-function isInvalidOrTargetToDeleteFeature(f: any): boolean {
-  if (!f) return true;
-  if (isDemoFeatureId(f.id)) return true;
-  const strId = String(f.id || '');
-  const strObjId = String(
-    f.properties?.OBJECTID ||
-      f.properties?.objectid ||
-      f.properties?.ObjectID ||
-      f.objectid ||
-      f.OBJECTID ||
-      ''
-  );
-
-  if (strId.includes('1785978345694') || strObjId.includes('1785978345694')) {
-    return true;
-  }
-  return false;
-}
 
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null);
@@ -170,7 +109,7 @@ export default function App() {
   const [isDatabaseManagementModalOpen, setIsDatabaseManagementModalOpen] = useState<boolean>(false);
   const [databaseManagementActiveTab, setDatabaseManagementActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>('import');
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
-  const [unreadNotificationCount, setUnreadNotificationCount] = useState<number>(0);
+  const { unreadNotificationCount, setUnreadNotificationCount } = useNotificationPolling(effectiveRole);
   const [feedbackModalState, setFeedbackModalState] = useState<{
     isOpen: boolean;
     objectId: string | number | null;
@@ -184,57 +123,6 @@ export default function App() {
     featureName: '',
     layerName: '',
   });
-
-  // Smart Polling: Kiểm tra số lượng thông báo chưa đọc cho Admin và Editor
-  useEffect(() => {
-    if (effectiveRole !== 'admin' && effectiveRole !== 'editor') {
-      setUnreadNotificationCount(0);
-      return;
-    }
-
-    let isMounted = true;
-
-    const fetchUnreadCount = async () => {
-      try {
-        const res = await fetch(`/api/notifications/unread-count?_t=${Date.now()}`, {
-          headers: getAuthHeaders(),
-          cache: 'no-store',
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (isMounted && typeof data.count === 'number') {
-            setUnreadNotificationCount(data.count);
-          }
-        }
-      } catch (err) {
-        console.warn('Lỗi kiểm tra thông báo:', err);
-      }
-    };
-
-    fetchUnreadCount();
-
-    // Polling định kỳ mỗi 60 giây
-    const intervalId = setInterval(fetchUnreadCount, 60000);
-
-    // Kiểm tra ngay khi người dùng chuyển lại tab (focus / visibility) hoặc khi có thông báo mới
-    const handleFocus = () => fetchUnreadCount();
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') fetchUnreadCount();
-    };
-    const handleNotificationUpdated = () => fetchUnreadCount();
-
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('webgis:notification-updated', handleNotificationUpdated);
-
-    return () => {
-      isMounted = false;
-      clearInterval(intervalId);
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('webgis:notification-updated', handleNotificationUpdated);
-    };
-  }, [effectiveRole]);
 
   const [isWebsiteInfoModalOpen, setIsWebsiteInfoModalOpen] = useState<boolean>(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
@@ -2123,153 +2011,13 @@ export default function App() {
           />
 
           {/* Raster Loading Status - Leaflet Control Style (Bottom Left, above Coordinate Bar) */}
-          {showRasterToast && isRasterVisible && (() => {
-            const fileStatuses = rasterToastData.fileStatuses || [];
-            // Lọc chính xác các tệp raster đang nằm trong khung nhìn (viewport)
-            const visibleFileStatuses = fileStatuses.filter(fs => fs.inViewport);
-
-            // Hàm chuẩn hóa tên file để so sánh (bỏ đuôi .tif/.tiff/... và khoảng trắng, không phân biệt hoa thường)
-            const normalizeRasterName = (name?: string) => {
-              if (!name) return '';
-              const cleaned = name.trim().toLowerCase().split('?')[0].split('#')[0];
-              const base = cleaned.split('/').pop() || cleaned;
-              return base.replace(/\.(tif|tiff|geotiff|cog|png|jpg|jpeg)$/i, '').trim();
-            };
-
-            // Xác định tệp raster nào trong layer hiện tại đang chứa markpoint (cursorLocation || userLocation || targetMarkerLocation)
-            let containingRasterFileName: string | null = null;
-            const activeMarkpoint = cursorLocation || userLocation || targetMarkerLocation;
-
-            if (activeMarkpoint && activeRasterLayerId) {
-              const currentActiveLayer = rasterLayers.find((l) => l.id === activeRasterLayerId);
-              if (currentActiveLayer && Array.isArray(currentActiveLayer.files)) {
-                const { lat, lng } = activeMarkpoint;
-                const matched = currentActiveLayer.files.find((f) => {
-                  const bBox = normalizeBoundsBox(f.bounds);
-                  if (!bBox) return false;
-                  return lat >= bBox.south && lat <= bBox.north && lng >= bBox.west && lng <= bBox.east;
-                });
-                if (matched) {
-                  containingRasterFileName = normalizeRasterName(matched.fileName || (matched as any).name || matched.url);
-                }
-              }
-            }
-            
-            const isOverallLoading =
-              rasterToastData.state === 'loading' &&
-              (rasterToastData.totalCount ?? 0) > 0 &&
-              ((rasterToastData.loadedCount ?? 0) + (rasterToastData.failedCount ?? 0)) < (rasterToastData.totalCount ?? 0);
-
-            const currentLoadingName = isOverallLoading ? rasterToastData.currentLoadingName : undefined;
-
-            // Nếu raster đang tải trùng với raster ở khung nhìn thì ẩn tên raster ở khung nhìn đi (tự động hiện lại khi tải xong)
-            const filteredVisibleStatuses = visibleFileStatuses.filter(
-              (fs) => !(currentLoadingName && fs.name === currentLoadingName && fs.state !== 'loaded')
-            );
-
-            const hasFailedFiles = (rasterToastData.failedCount ?? 0) > 0;
-            const isFinishedWithErrors = !isOverallLoading && hasFailedFiles;
-            const displayTitle = visibleFileStatuses.map(fs => fs.name).join(', ');
-            
-            const handleRetryFailed = () => {
-              window.dispatchEvent(new CustomEvent('retry-failed-rasters'));
-            };
-
-            // Unified single status icon:
-            // 1. Đang tải: Loader2 animate-spin màu xanh lam
-            // 2. Gặp lỗi: AlertTriangle màu vàng (tam giác chấm than)
-            // 3. Đã tải: CheckCircle2 màu xanh lá
-            let unifiedStatusIcon: React.ReactNode = null;
-            if (isOverallLoading) {
-              unifiedStatusIcon = <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin shrink-0" />;
-            } else if (hasFailedFiles) {
-              unifiedStatusIcon = <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />;
-            } else {
-              unifiedStatusIcon = <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />;
-            }
-
-            return (
-              <div
-                className="absolute bottom-0 left-0 z-[1000] pointer-events-auto bg-white/90 backdrop-blur-[3px] text-slate-700 text-[11px] px-2.5 py-1 flex items-center gap-2 rounded-tr-md border-t border-r border-slate-200/80 shadow-xs max-w-[360px] sm:max-w-[480px]"
-                title={displayTitle}
-              >
-                {/* Unified status icon */}
-                {unifiedStatusIcon}
-
-                {/* 1. Phần danh sách file trong khung nhìn (ẩn file đang tải nếu trùng, tự động hiện lại khi tải xong) */}
-                <span className="font-medium truncate whitespace-nowrap overflow-hidden flex items-center gap-1.5">
-                  {rasterToastData.message && rasterToastData.message.includes('tạm dừng') ? (
-                    <span className="text-amber-600 font-semibold inline-flex items-center">
-                      {rasterToastData.message}
-                    </span>
-                  ) : filteredVisibleStatuses.length > 0 ? (
-                    filteredVisibleStatuses.map((fs, idx) => {
-                      let statusClasses = 'text-amber-600 font-semibold inline-flex items-center';
-                      let dotColor = 'bg-amber-600';
-                      
-                      if (fs.state === 'loaded') {
-                        statusClasses = 'text-emerald-600 font-semibold inline-flex items-center';
-                        dotColor = 'bg-emerald-600';
-                      } else if (fs.state === 'error') {
-                        statusClasses = 'text-amber-600 font-semibold inline-flex items-center';
-                        dotColor = 'bg-amber-600';
-                      }
-
-                      const isContainingMarkpoint = containingRasterFileName && (
-                        normalizeRasterName(fs.name) === containingRasterFileName
-                      );
-
-                      return (
-                        <span key={idx} className="inline-flex items-center">
-                          <span className={statusClasses}>
-                            {isContainingMarkpoint && (
-                              <span className={`w-1.5 h-1.5 rounded-full ${dotColor} shrink-0 mr-1`} />
-                            )}
-                            {fs.name}
-                          </span>
-                          {idx < filteredVisibleStatuses.length - 1 ? <span className="text-slate-300 ml-1.5 mr-0.5">|</span> : ''}
-                        </span>
-                      );
-                    })
-                  ) : visibleFileStatuses.length > 0 && currentLoadingName ? (
-                    // Nếu tất cả ảnh trong khung nhìn đang được tải (đã hiển thị ở phần đang tải bên cạnh)
-                    null
-                  ) : (
-                    <span className="text-slate-400 font-medium flex items-center">
-                      Không có ảnh!
-                    </span>
-                  )}
-                </span>
-                
-                {/* 2. Phần raster đang tải: hiển thị tên raster màu vàng cam */}
-                {isOverallLoading && currentLoadingName && (
-                  <div className={`flex items-center gap-1.5 ${filteredVisibleStatuses.length > 0 ? 'pl-2 border-l border-slate-200' : ''}`}>
-                    <span
-                      className="text-amber-600 font-bold text-[11px] truncate max-w-[150px] sm:max-w-[200px] inline-flex items-center"
-                      title={`Đang tải: ${currentLoadingName}`}
-                    >
-                      <span className="truncate">{currentLoadingName}</span>
-                    </span>
-                  </div>
-                )}
-
-                {/* 3. Nút Retry khi hoàn tất quá trình tải mà có file bị lỗi */}
-                {isFinishedWithErrors && (
-                  <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
-                    <button
-                      type="button"
-                      onClick={handleRetryFailed}
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded transition-colors cursor-pointer shadow-2xs"
-                      title="Thử tải lại các file raster chưa thành công"
-                    >
-                      <RotateCw className="w-3 h-3 text-red-600" />
-                      <span>Thử lại</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
+          <RasterToast
+            show={showRasterToast && isRasterVisible}
+            data={rasterToastData}
+            activeMarkpoint={cursorLocation || userLocation || targetMarkerLocation}
+            rasterLayers={rasterLayers}
+            activeRasterLayerId={activeRasterLayerId}
+          />
         </section>
 
         {/* Right Attribute Pane in Pointer Mode */}

@@ -20,7 +20,7 @@ export async function notifyServerCacheInvalidation(target: 'raster_layers' | 'l
   try {
     await fetch('/api/cache/invalidate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ target }),
     });
   } catch (_) {}

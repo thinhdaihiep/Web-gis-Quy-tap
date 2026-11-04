@@ -1,8 +1,8 @@
-# Settings for Cloud Run service created by Firebase App Hosting
+# Settings for Cloud Run service created by Firebase App Hosting (Cost-Optimized)
 runConfig:
   cpu: 1
   memoryMiB: 1024
-  concurrency: 80
+  concurrency: 60
   maxInstances: 10
   minInstances: 0
 

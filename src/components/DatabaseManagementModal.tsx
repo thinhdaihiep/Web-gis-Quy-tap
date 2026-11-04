@@ -1,112 +1,27 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Database,
-  Upload,
-  Download,
-  FileSpreadsheet,
   X,
   ShieldAlert,
-  FileText,
-  CheckCircle2,
-  AlertTriangle,
   Layers,
-  Plus,
-  Trash2,
-  Search,
-  Eye,
-  Save,
-  Check,
+  Upload,
+  Download,
   Users,
-  MapPin,
-  UploadCloud,
-  Loader2,
 } from 'lucide-react';
-import proj4 from 'proj4';
 import { RasterManagementTab } from './RasterManagementTab';
 import { UserManagementTab } from './UserManagementTab';
-import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy, RasterLayer, LatLngBoundsBox, RasterLoadingStatus, AppUser } from '../types';
+import { ImportDataTab } from './database/ImportDataTab';
+import { ExportDataTab } from './database/ExportDataTab';
+import { AttributesTab } from './database/AttributesTab';
 import {
-  extractObjectId,
-  getFeatureDisplayCode,
-  getCustomAliasMap,
-  getHiddenFieldsMap,
-  saveCustomAliasMap,
-  getAllAliasRules,
-  FieldAliasRule
-} from '../fieldAlias';
-import { saveCommuneChunksToFirestore } from '../firebaseService';
-import { invalidateCommuneCache } from '../utils/communeLookup';
-import { cleanShapeProperties, isShapeProperty } from '../utils/shapeFieldUtils';
-
-proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
-proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
-
-function convertCoordinatesToWGS84(coords: any): any {
-  if (!Array.isArray(coords) || coords.length === 0) return coords;
-
-  if (typeof coords[0] === 'number' && !isNaN(coords[0]) && typeof coords[1] === 'number' && !isNaN(coords[1])) {
-    let [x, y] = coords;
-    if (Math.abs(x) > 180 || Math.abs(y) > 90) {
-      try {
-        const [lng, lat] = proj4('EPSG:3405', 'EPSG:4326', [x, y]);
-        return [lng, lat];
-      } catch (err) {
-        console.warn('Proj4 convert error:', err);
-      }
-    }
-    return [x, y];
-  }
-
-  return coords.map((c) => convertCoordinatesToWGS84(c));
-}
-
-function parseDmsToLatLng(toaDoStr: string): { lat: number; lng: number } | null {
-  if (!toaDoStr || typeof toaDoStr !== 'string') return null;
-  const latMatch = toaDoStr.match(/(\d+)°(?:(\d+)'|′)?(?:(\d+)(?:\.\d+)?"|″)?\s*([NSns])/);
-  const lngMatch = toaDoStr.match(/(\d+)°(?:(\d+)'|′)?(?:(\d+)(?:\.\d+)?"|″)?\s*([EWew])/);
-
-  if (latMatch && lngMatch) {
-    const latDeg = parseFloat(latMatch[1]) || 0;
-    const latMin = parseFloat(latMatch[2]) || 0;
-    const latSec = parseFloat(latMatch[3]) || 0;
-    const latDir = latMatch[4].toUpperCase();
-    let lat = latDeg + latMin / 60 + latSec / 3600;
-    if (latDir === 'S') lat = -lat;
-
-    const lngDeg = parseFloat(lngMatch[1]) || 0;
-    const lngMin = parseFloat(lngMatch[2]) || 0;
-    const lngSec = parseFloat(lngMatch[3]) || 0;
-    const lngDir = lngMatch[4].toUpperCase();
-    let lng = lngDeg + lngMin / 60 + lngSec / 3600;
-    if (lngDir === 'W') lng = -lng;
-
-    return { lat, lng };
-  }
-  return null;
-}
-
-function computePolygonCentroid(coords: any): { lat: number; lng: number } | null {
-  if (!coords) return null;
-  const pts: Array<[number, number]> = [];
-  const traverse = (arr: any) => {
-    if (Array.isArray(arr) && arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
-      const [x, y] = arr;
-      if (Math.abs(x) > 90 && Math.abs(y) <= 90) pts.push([y, x]);
-      else pts.push([x, y]);
-    } else if (Array.isArray(arr)) {
-      arr.forEach(traverse);
-    }
-  };
-  traverse(coords);
-  if (pts.length === 0) return null;
-  let sumLng = 0;
-  let sumLat = 0;
-  pts.forEach(([lng, lat]) => {
-    sumLng += lng;
-    sumLat += lat;
-  });
-  return { lng: sumLng / pts.length, lat: sumLat / pts.length };
-}
+  LayerConfig,
+  GeoJsonFeatureItem,
+  DuplicateStrategy,
+  RasterLayer,
+  LatLngBoundsBox,
+  RasterLoadingStatus,
+  AppUser,
+} from '../types';
 
 export interface DatabaseManagementModalProps {
   isOpen: boolean;
@@ -135,20 +50,11 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
   existingFeatures,
   currentUser,
   onImportConfirm,
-  onBatchUpdateFeatures,
   onAliasesUpdated,
   onRasterLayersUpdated,
   onSelectAndFlyToRaster,
   rasterStatus,
 }) => {
-  const [hasMounted, setHasMounted] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (isOpen && !hasMounted) {
-      setHasMounted(true);
-    }
-  }, [isOpen, hasMounted]);
-
   const [activeTab, setActiveTab] = useState<'import' | 'export' | 'attributes' | 'raster' | 'users'>(defaultTab);
 
   // Sync activeTab when defaultTab changes
@@ -159,476 +65,6 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
       setActiveTab(defaultTab);
     }
   }, [defaultTab]);
-
-  // --- TAB 1: IMPORT STATE ---
-  const [selectedLayerId, setSelectedLayerId] = useState<string>(
-    layers[0]?.id || 'layer1_tim_kiem'
-  );
-  const [duplicateStrategy, setDuplicateStrategy] = useState<DuplicateStrategy>('overwrite');
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [parsedFeatures, setParsedFeatures] = useState<GeoJsonFeatureItem[] | null>(null);
-  const [parseError, setParseError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // --- COMMUNE IMPORT STATE ---
-  const communeFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [isImportingCommunes, setIsImportingCommunes] = useState<boolean>(false);
-  const [communeImportProgress, setCommuneImportProgress] = useState<{ msg: string; percent: number } | null>(null);
-  const [communeImportStatus, setCommuneImportStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  // --- TAB 2: EXPORT STATE ---
-  const [selectedExportLayer, setSelectedExportLayer] = useState<string>('all');
-  const [prettyPrint, setPrettyPrint] = useState<boolean>(true);
-  const [exportFileName, setExportFileName] = useState<string>('CSDL_MoLietSi_QK5');
-  const [exportNotice, setExportNotice] = useState<string | null>(null);
-
-  // --- TAB 3: ATTRIBUTES STATE ---
-  const [draftMap, setDraftMap] = useState<Record<string, string>>({});
-  const [draftHiddenMap, setDraftHiddenMap] = useState<Record<string, boolean>>({});
-  const [rules, setRules] = useState<FieldAliasRule[]>([]);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [newKey, setNewKey] = useState<string>('');
-  const [newAlias, setNewAlias] = useState<string>('');
-  const [aliasSavedSuccess, setAliasSavedSuccess] = useState<boolean>(false);
-
-  const hasInitializedAttributesRef = useRef<boolean>(false);
-  useEffect(() => {
-    if (hasMounted && activeTab === 'attributes' && !hasInitializedAttributesRef.current) {
-      hasInitializedAttributesRef.current = true;
-      const initialMap = getCustomAliasMap();
-      const initialHiddenMap = getHiddenFieldsMap();
-      setDraftMap(initialMap);
-      setDraftHiddenMap(initialHiddenMap);
-      setRules(getAllAliasRules(initialMap, initialHiddenMap));
-    }
-  }, [hasMounted, activeTab]);
-
-  if (!hasMounted && !isOpen) return null;
-
-  const targetLayer = layers.find((l) => l.id === selectedLayerId) || (layers.length > 0 ? layers[0] : null);
-
-  // Helper check if duplicate in existingFeatures
-  const checkIsDuplicate = (feature: GeoJsonFeatureItem): boolean => {
-    const featObjId = extractObjectId(feature);
-
-    return existingFeatures.some((existing) => {
-      if (existing.layerId !== selectedLayerId) return false;
-
-      const existObjId = extractObjectId(existing);
-      if (featObjId && existObjId && featObjId.toLowerCase() === existObjId.toLowerCase()) {
-        return true;
-      }
-
-      const matchId =
-        existing.id &&
-        feature.id &&
-        String(existing.id).toLowerCase() === String(feature.id).toLowerCase();
-      const matchCode =
-        existing.code &&
-        feature.code &&
-        String(existing.code).toLowerCase() === String(feature.code).toLowerCase();
-      return Boolean(matchId || matchCode);
-    });
-  };
-
-  // Process uploaded JSON/GeoJSON
-  const processGeoJsonContent = (jsonString: string, name: string) => {
-    try {
-      setParseError(null);
-      const geojson = JSON.parse(jsonString);
-
-      let rawFeatures: any[] = [];
-      if (geojson.type === 'FeatureCollection' && Array.isArray(geojson.features)) {
-        rawFeatures = geojson.features;
-      } else if (geojson.type === 'Feature') {
-        rawFeatures = [geojson];
-      } else if (Array.isArray(geojson)) {
-        rawFeatures = geojson;
-      } else {
-        throw new Error('Định dạng tập tin không khớp với chuẩn GeoJSON (cần chứa FeatureCollection hoặc Feature).');
-      }
-
-      if (rawFeatures.length === 0) {
-        throw new Error('Tập tin GeoJSON không chứa đối tượng hình học (Feature) nào.');
-      }
-
-      const formatted: GeoJsonFeatureItem[] = rawFeatures.map((f: any, idx: number) => {
-        const rawProps = f.properties || {};
-        const geom = f.geometry || {};
-        const rawId =
-          f.id ?? rawProps.OBJECTID ?? rawProps.objectID ?? rawProps.id ?? `IMP-${Date.now()}-${idx + 1}`;
-
-        const props: Record<string, any> = cleanShapeProperties({ ...rawProps });
-
-        // Remove temporary state props
-        delete props['TrangThaiMoi'];
-        delete props['trang_thai_moi'];
-        delete props['trangthaimoi'];
-
-        const featureName =
-          props.Ten ||
-          props.ten ||
-          (props.Xa || props.Tinh ? `Khu vực Quy tập ${props.Xa ? props.Xa + ', ' : ''}${props.Tinh || ''}` : null) ||
-          rawProps.name ||
-          rawProps.ten_khu_vuc ||
-          `Khu vực Quy tập #${props.OBJECTID || idx + 1}`;
-
-        let coords = geom.coordinates || [];
-        let geomType = geom.type || 'Polygon';
-
-        if (coords && coords.length > 0) {
-          coords = convertCoordinatesToWGS84(coords);
-        }
-
-        let firstCoord: any = Array.isArray(coords) && coords.length > 0 ? coords[0] : null;
-        while (Array.isArray(firstCoord) && firstCoord.length > 0) {
-          firstCoord = firstCoord[0];
-        }
-
-        const isValidWgs84 = typeof firstCoord === 'number' && !isNaN(firstCoord) && Math.abs(firstCoord) <= 180;
-
-        if (!coords || coords.length === 0 || !isValidWgs84) {
-          if (props.ToaDo) {
-            const parsedDms = parseDmsToLatLng(props.ToaDo);
-            if (parsedDms) {
-              const { lat, lng } = parsedDms;
-              const delta = 0.008;
-              geomType = 'Polygon';
-              coords = [
-                [
-                  [lng - delta, lat + delta],
-                  [lng + delta, lat + delta],
-                  [lng + delta, lat - delta],
-                  [lng - delta, lat - delta],
-                  [lng - delta, lat + delta],
-                ],
-              ];
-            }
-          } else {
-            const baseLat = 13.9 + (idx % 5) * 0.2;
-            const baseLng = 108.0 + (idx % 4) * 0.2;
-            const delta = 0.01;
-            geomType = 'Polygon';
-            coords = [
-              [
-                [baseLng - delta, baseLat + delta],
-                [baseLng + delta, baseLat + delta],
-                [baseLng + delta, baseLat - delta],
-                [baseLng - delta, baseLat - delta],
-                [baseLng - delta, baseLat + delta],
-              ],
-            ];
-          }
-        }
-
-        return {
-          id: String(rawId),
-          layerId: selectedLayerId,
-          name: String(featureName),
-          code: String(props.OBJECTID || props.code || rawId),
-          type: geomType,
-          coordinates: coords,
-          properties: props,
-          status: props.PhanLoai === 1 ? 'xac_dinh' : 'chua_xac_dinh',
-          updatedAt: new Date().toISOString().split('T')[0],
-        };
-      });
-
-      setFileName(name);
-      setParsedFeatures(formatted);
-    } catch (err: any) {
-      setParseError(err.message || 'Lỗi đọc tập tin GeoJSON.');
-      setParsedFeatures(null);
-    }
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      processGeoJsonContent(content, file.name);
-    };
-    reader.readAsText(file);
-  };
-
-  const handleCommuneFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsImportingCommunes(true);
-    setCommuneImportStatus(null);
-    setCommuneImportProgress({ msg: 'Đang đọc tệp tin...', percent: 5 });
-
-    try {
-      const text = await file.text();
-      let json: any;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        throw new Error('Tệp không đúng định dạng JSON/GeoJSON hợp lệ.');
-      }
-
-      let features: any[] = [];
-      if (json.type === 'FeatureCollection' && Array.isArray(json.features)) {
-        features = json.features;
-      } else if (Array.isArray(json)) {
-        features = json;
-      } else if (json.type === 'Feature') {
-        features = [json];
-      } else {
-        throw new Error('Tệp không chứa danh sách FeatureCollection hợp lệ.');
-      }
-
-      if (features.length === 0) {
-        throw new Error('Tệp không chứa đối tượng hình học xã nào.');
-      }
-
-      setCommuneImportProgress({ msg: `Đang xử lý ${features.length} đối tượng xã...`, percent: 15 });
-
-      const res = await saveCommuneChunksToFirestore(features, (msg, percent) => {
-        setCommuneImportProgress({ msg, percent });
-      });
-
-      if (res.success) {
-        await invalidateCommuneCache();
-        setCommuneImportStatus({
-          type: 'success',
-          text: `Đã nhập thành công ${res.count} xã vào CSDL Firebase.`,
-        });
-      } else {
-        setCommuneImportStatus({
-          type: 'error',
-          text: res.error || 'Lỗi khi lưu dữ liệu xã lên Firebase.',
-        });
-      }
-    } catch (err: any) {
-      setCommuneImportStatus({
-        type: 'error',
-        text: err?.message || 'Có lỗi xảy ra khi xử lý tệp tin xã.',
-      });
-    } finally {
-      setIsImportingCommunes(false);
-      setCommuneImportProgress(null);
-      if (communeFileInputRef.current) {
-        communeFileInputRef.current.value = '';
-      }
-    }
-  };
-
-  const duplicateCount =
-    parsedFeatures?.filter((f) => checkIsDuplicate(f)).length || 0;
-  const newCount = (parsedFeatures?.length || 0) - duplicateCount;
-
-  const handleConfirmImport = () => {
-    if (!parsedFeatures || parsedFeatures.length === 0) return;
-
-    const updatedWithLayer = parsedFeatures.map((f) => ({
-      ...f,
-      layerId: selectedLayerId,
-    }));
-
-    onImportConfirm(selectedLayerId, updatedWithLayer, duplicateStrategy);
-    onClose();
-  };
-
-  // --- TAB 2: EXPORT HANDLER ---
-  const handleExportGeoJson = () => {
-    const exportFeatures =
-      selectedExportLayer === 'all'
-        ? existingFeatures
-        : existingFeatures.filter((f) => f.layerId === selectedExportLayer);
-
-    if (exportFeatures.length === 0) {
-      setExportNotice('Không có đối tượng nào để xuất.');
-      return;
-    }
-
-    const exportLayerObj = layers.find((l) => l.id === selectedExportLayer);
-    const layerName = exportLayerObj ? exportLayerObj.name : 'TatCaCacLop';
-
-    const featureCollection = {
-      type: 'FeatureCollection',
-      name: `CSDL_GIS_${layerName}`,
-      crs: {
-        type: 'name',
-        properties: { name: 'urn:ogc:def:crs:OGC:1.3:CRS84' },
-      },
-      features: exportFeatures.map((f) => {
-        // Xử lý tọa độ: parse chuỗi JSON nếu lưu dưới dạng string trong Firestore
-        let parsedCoordinates = f.coordinates;
-        if (typeof parsedCoordinates === 'string') {
-          try {
-            parsedCoordinates = JSON.parse(parsedCoordinates);
-          } catch (err) {
-            console.warn(`[Export GeoJSON] Lỗi parse tọa độ đối tượng ${f.id}:`, err);
-          }
-        }
-        parsedCoordinates = convertCoordinatesToWGS84(parsedCoordinates);
-
-        // Lọc bỏ các trường Shape_*, trường nội bộ, trường trạng thái tạm thời
-        const cleanedRawProps = cleanShapeProperties(f.properties || {});
-        const IGNORED_EXPORT_KEYS = new Set([
-          'layerid',
-          'updatedat',
-          '__deleted__',
-          'trangthaimoi',
-          'trang_thai_moi',
-          'trang_thai',
-          '_id',
-          'selected',
-          'highlighted',
-        ]);
-
-        const sanitizedProps: Record<string, any> = {};
-        for (const [key, val] of Object.entries(cleanedRawProps)) {
-          const normKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-          if (!IGNORED_EXPORT_KEYS.has(normKey) && !isShapeProperty(key)) {
-            sanitizedProps[key] = val;
-          }
-        }
-
-        // Chuẩn hóa OBJECTID và Ten
-        const objectId = sanitizedProps.OBJECTID ?? f.code ?? f.id;
-        sanitizedProps.OBJECTID = objectId;
-
-        const ten = sanitizedProps.Ten ?? f.name;
-        if (ten !== undefined && ten !== null) {
-          sanitizedProps.Ten = ten;
-        }
-
-        // Bảo tồn nguyên vẹn giá trị Phân loại thực tế (1, 2, 3, 4, 5...) nếu có
-        if (sanitizedProps.PhanLoai !== undefined && sanitizedProps.PhanLoai !== null && sanitizedProps.PhanLoai !== '') {
-          const num = Number(sanitizedProps.PhanLoai);
-          sanitizedProps.PhanLoai = isNaN(num) ? sanitizedProps.PhanLoai : num;
-        }
-
-        // Sắp xếp các trường thuộc tính theo thứ tự logic GIS chuẩn
-        const priorityKeys = [
-          'OBJECTID',
-          'Ten',
-          'PhanLoai',
-          'HienTrang',
-          'Xa',
-          'Huyen',
-          'Tinh',
-          'DiaDanh3C',
-          'TimDuoc',
-          'ChuaThay',
-          'QuyTap',
-          'ThoiGian',
-          'CapNhat',
-          'Nguon',
-          'NguoiSua',
-          'HoSo',
-          'DonVi',
-          'BenTa',
-          'BenDich',
-          'CongTrinh',
-          'GhiChu',
-          'ToaDo',
-          'DiaDiem',
-          'DiaChi',
-          'SoMo',
-          'MoCoTen',
-          'MoVoDanh',
-          'ThanhLap',
-          'DienThoai',
-        ];
-
-        const orderedProps: Record<string, any> = {};
-        for (const key of priorityKeys) {
-          if (key in sanitizedProps) {
-            orderedProps[key] = sanitizedProps[key];
-          }
-        }
-        for (const [key, val] of Object.entries(sanitizedProps)) {
-          if (!(key in orderedProps)) {
-            orderedProps[key] = val;
-          }
-        }
-
-        return {
-          type: 'Feature' as const,
-          id: f.id,
-          geometry: {
-            type: f.type,
-            coordinates: parsedCoordinates,
-          },
-          properties: orderedProps,
-        };
-      }),
-    };
-
-    const jsonString = prettyPrint
-      ? JSON.stringify(featureCollection, null, 2)
-      : JSON.stringify(featureCollection);
-
-    const blob = new Blob([jsonString], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const downloadLink = document.createElement('a');
-    const finalName = exportFileName.toLowerCase().endsWith('.geojson')
-      ? exportFileName
-      : `${exportFileName}.geojson`;
-
-    downloadLink.href = url;
-    downloadLink.download = finalName;
-    document.body.appendChild(downloadLink);
-    downloadLink.click();
-    document.body.removeChild(downloadLink);
-    URL.revokeObjectURL(url);
-
-    setExportNotice(`Đã xuất thành công ${exportFeatures.length} đối tượng ra tệp ${finalName}`);
-    setTimeout(() => setExportNotice(null), 4000);
-  };
-
-  // --- TAB 3: ATTRIBUTES HANDLERS ---
-  const updateDraft = (newMap: Record<string, string>, newHiddenMap: Record<string, boolean>) => {
-    setDraftMap(newMap);
-    setDraftHiddenMap(newHiddenMap);
-    setRules(getAllAliasRules(newMap, newHiddenMap));
-  };
-
-  const handleToggleVisibility = (key: string, currentlyVisible: boolean) => {
-    const nextHiddenMap = { ...draftHiddenMap, [key]: currentlyVisible };
-    updateDraft(draftMap, nextHiddenMap);
-  };
-
-  const handleAddRule = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newKey.trim() || !newAlias.trim()) return;
-
-    const trimmedKey = newKey.trim();
-    const trimmedAlias = newAlias.trim();
-
-    const nextMap = { ...draftMap, [trimmedKey]: trimmedAlias };
-    const nextHiddenMap = { ...draftHiddenMap, [trimmedKey]: false };
-    updateDraft(nextMap, nextHiddenMap);
-
-    setNewKey('');
-    setNewAlias('');
-  };
-
-  const handleDeleteRule = (keyToDelete: string) => {
-    const nextMap = { ...draftMap, [keyToDelete]: '__DELETED__' };
-    const nextHiddenMap = { ...draftHiddenMap };
-    delete nextHiddenMap[keyToDelete];
-    updateDraft(nextMap, nextHiddenMap);
-  };
-
-  const handleSaveAttributes = () => {
-    saveCustomAliasMap(draftMap, draftHiddenMap);
-    if (onAliasesUpdated) onAliasesUpdated();
-    setAliasSavedSuccess(true);
-    setTimeout(() => setAliasSavedSuccess(false), 2500);
-  };
-
-  const filteredRules = rules.filter(
-    (r) =>
-      r.key.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.alias.toLowerCase().includes(searchQuery.toLowerCase())
-  );
 
   return (
     <div
@@ -662,7 +98,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
           </button>
         </div>
 
-        {/* Tab Navigation - Compact, responsive layout showing all tabs on mobile without icons */}
+        {/* Tab Navigation - Compact, responsive layout */}
         <div className="bg-slate-100 border-b border-slate-200 px-2 sm:px-4 pt-2 grid grid-cols-5 gap-1 shrink-0">
           <button
             type="button"
@@ -702,7 +138,7 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
           >
             <span className="truncate">Thuộc tính</span>
           </button>
-          
+
           <button
             type="button"
             onClick={() => setActiveTab('raster')}
@@ -724,442 +160,33 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
                 ? 'bg-white text-blue-700 border-slate-300 border-b-transparent -mb-px shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
             }`}
-            title="Quản lý Người dùng"
+            title="Người dùng"
           >
             <span className="truncate">Người dùng</span>
           </button>
         </div>
 
-        {/* TAB 1: NHẬP DỮ LIỆU */}
+        {/* Tab Content Panels */}
         {activeTab === 'import' && (
-          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-700 flex-1">
-            {/* Nhập dữ liệu hành chính xã */}
-            <div className="bg-emerald-50/80 p-3 rounded-lg border border-emerald-200 space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-emerald-900 font-bold">
-                  <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span className="uppercase tracking-wider text-[11px] sm:text-xs">Dữ liệu hành chính xã</span>
-                </div>
-
-                <input
-                  type="file"
-                  ref={communeFileInputRef}
-                  accept=".geojson,.json"
-                  onChange={handleCommuneFileUpload}
-                  className="hidden"
-                />
-
-                <button
-                  type="button"
-                  disabled={isImportingCommunes}
-                  onClick={() => communeFileInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center space-x-1.5 transition cursor-pointer shadow-xs disabled:opacity-50 active:scale-95 shrink-0"
-                  title="Nhập dữ liệu hành chính xã"
-                >
-                  {isImportingCommunes ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <UploadCloud className="w-3.5 h-3.5" />
-                  )}
-                  <span>Nhập dữ liệu hành chính xã</span>
-                </button>
-              </div>
-
-              {/* Progress bar during import */}
-              {isImportingCommunes && communeImportProgress && (
-                <div className="space-y-1 pt-1">
-                  <div className="flex justify-between text-[11px] font-semibold text-emerald-800">
-                    <span>{communeImportProgress.msg}</span>
-                    <span>{communeImportProgress.percent}%</span>
-                  </div>
-                  <div className="w-full bg-emerald-200 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className="bg-emerald-600 h-1.5 rounded-full transition-all duration-300"
-                      style={{ width: `${communeImportProgress.percent}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Status message */}
-              {communeImportStatus && (
-                <div
-                  className={`p-2 rounded text-xs flex items-center space-x-2 ${
-                    communeImportStatus.type === 'success'
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : 'bg-red-50 text-red-700 border border-red-200'
-                  }`}
-                >
-                  {communeImportStatus.type === 'success' ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  ) : (
-                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-                  )}
-                  <span className="font-medium">{communeImportStatus.text}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Lớp dữ liệu đích */}
-            <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 space-y-2">
-              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <Layers className="w-4 h-4 text-blue-600" />
-                <span>Lớp dữ liệu đích</span>
-              </label>
-              <select
-                value={selectedLayerId}
-                onChange={(e) => setSelectedLayerId(e.target.value)}
-                className="w-full bg-white border border-slate-300 text-slate-800 text-xs font-semibold rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer shadow-xs"
-              >
-                {layers.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Tải lên Tập tin GeoJSON */}
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
-                Tập tin GeoJSON (.geojson, .json)
-              </label>
-
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept=".geojson,.json"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-lg p-4 flex flex-col items-center justify-center text-center bg-slate-50/80 hover:bg-blue-50/50 transition cursor-pointer group shadow-inner"
-              >
-                <FileText className="w-8 h-8 text-slate-400 group-hover:text-blue-600 mb-1 transition" />
-                <p className="font-bold text-slate-700 text-xs">
-                  {fileName ? fileName : 'Chọn hoặc kéo thả tập tin'}
-                </p>
-              </div>
-            </div>
-
-            {/* Error Message */}
-            {parseError && (
-              <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-xs flex items-center space-x-2">
-                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-                <span>{parseError}</span>
-              </div>
-            )}
-
-            {/* Analysis & Duplicate Handling */}
-            {parsedFeatures && (
-              <div className="space-y-4 border-t border-slate-200 pt-3 animate-in fade-in">
-                {/* Metrics Summary */}
-                <div className="bg-blue-900/5 border border-blue-200 p-3 rounded-lg grid grid-cols-3 gap-2 text-center">
-                  <div className="bg-white p-2 rounded border border-slate-200">
-                    <p className="text-[10px] uppercase font-bold text-slate-400">Tổng đối tượng</p>
-                    <p className="text-base font-extrabold text-slate-800">{parsedFeatures.length}</p>
-                  </div>
-                  <div className="bg-white p-2 rounded border border-slate-200">
-                    <p className="text-[10px] uppercase font-bold text-emerald-600">Đối tượng mới</p>
-                    <p className="text-base font-extrabold text-emerald-600">{newCount}</p>
-                  </div>
-                  <div className="bg-white p-2 rounded border border-slate-200">
-                    <p className="text-[10px] uppercase font-bold text-amber-600">Trùng</p>
-                    <p className="text-base font-extrabold text-amber-600">{duplicateCount}</p>
-                  </div>
-                </div>
-
-                {/* Duplicate Strategy Radio Selector */}
-                <div className="bg-amber-50/80 border border-amber-200 p-3 rounded-lg space-y-2">
-                  <label className="block text-xs font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
-                    <span>Xử lý trùng lặp</span>
-                  </label>
-
-                  <div className="space-y-1.5 pt-0.5">
-                    <label className="flex items-center gap-2 bg-white p-2 rounded border border-amber-200 cursor-pointer hover:border-amber-400 transition">
-                      <input
-                        type="radio"
-                        name="strategy"
-                        value="overwrite"
-                        checked={duplicateStrategy === 'overwrite'}
-                        onChange={() => setDuplicateStrategy('overwrite')}
-                        className="text-blue-600 focus:ring-blue-500 cursor-pointer"
-                      />
-                      <span className="font-bold text-slate-800 text-xs">
-                        Ghi đè &amp; Cập nhật
-                      </span>
-                    </label>
-
-                    <label className="flex items-center gap-2 bg-white p-2 rounded border border-amber-200 cursor-pointer hover:border-amber-400 transition">
-                      <input
-                        type="radio"
-                        name="strategy"
-                        value="skip"
-                        checked={duplicateStrategy === 'skip'}
-                        onChange={() => setDuplicateStrategy('skip')}
-                        className="text-blue-600 focus:ring-blue-500 cursor-pointer"
-                      />
-                      <span className="font-bold text-slate-800 text-xs">
-                        Bỏ qua các đối tượng trùng
-                      </span>
-                    </label>
-
-                    <label className="flex items-center gap-2 bg-white p-2 rounded border border-amber-200 cursor-pointer hover:border-amber-400 transition">
-                      <input
-                        type="radio"
-                        name="strategy"
-                        value="append"
-                        checked={duplicateStrategy === 'append'}
-                        onChange={() => setDuplicateStrategy('append')}
-                        className="text-blue-600 focus:ring-blue-500 cursor-pointer"
-                      />
-                      <span className="font-bold text-slate-800 text-xs">
-                        Nhập tất cả (Tạo mã mới)
-                      </span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Preview Feature List */}
-                <div className="space-y-1.5">
-                  <p className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                    Xem trước ({parsedFeatures.length}):
-                  </p>
-                  <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 bg-white">
-                    {parsedFeatures.map((feat, i) => {
-                      const isDup = checkIsDuplicate(feat);
-                      return (
-                        <div
-                          key={i}
-                          className="p-2 flex items-center justify-between text-[11px] hover:bg-slate-50"
-                        >
-                          <div className="flex items-center space-x-2 truncate pr-2">
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase shrink-0 ${
-                                isDup
-                                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                  : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                              }`}
-                            >
-                              {isDup ? 'Trùng' : 'Mới'}
-                            </span>
-                            <span className="font-semibold text-slate-800 truncate">
-                              {feat.name}
-                            </span>
-                            <span className="font-mono text-slate-400 text-[10px]">
-                              ({getFeatureDisplayCode(feat)})
-                            </span>
-                          </div>
-                          <span className="text-slate-500 text-[10px] font-mono shrink-0">
-                            {feat.type}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <ImportDataTab
+            layers={layers}
+            existingFeatures={existingFeatures}
+            onImportConfirm={onImportConfirm}
+            onClose={onClose}
+          />
         )}
 
-        {/* TAB 2: XUẤT DỮ LIỆU */}
         {activeTab === 'export' && (
-          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-700 flex-1">
-            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-3">
-              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <Download className="w-4 h-4 text-blue-600" />
-                <span>Chọn Lớp dữ liệu cần Xuất</span>
-              </label>
-              <select
-                value={selectedExportLayer}
-                onChange={(e) => setSelectedExportLayer(e.target.value)}
-                className="w-full bg-white border border-slate-300 text-slate-800 text-xs font-semibold rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer shadow-xs"
-              >
-                <option value="all">
-                  Tất cả các lớp dữ liệu ({existingFeatures.length} đối tượng)
-                </option>
-                {layers.map((l) => {
-                  const layerCount = existingFeatures.filter((f) => f.layerId === l.id).length;
-                  return (
-                    <option key={l.id} value={l.id}>
-                      {l.name} ({layerCount} đối tượng)
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-
-            <div className="space-y-3 bg-white p-4 rounded-lg border border-slate-200">
-              <h4 className="font-bold text-slate-800 uppercase text-xs tracking-wider">
-                Tùy chọn Xuất tập tin GeoJSON
-              </h4>
-
-              <div className="space-y-2">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Tên tập tin khi tải về:
-                  </label>
-                  <input
-                    type="text"
-                    value={exportFileName}
-                    onChange={(e) => setExportFileName(e.target.value)}
-                    className="w-full px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <input
-                    type="checkbox"
-                    id="prettyPrintJson"
-                    checked={prettyPrint}
-                    onChange={(e) => setPrettyPrint(e.target.checked)}
-                    className="text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
-                  />
-                  <label htmlFor="prettyPrintJson" className="text-xs font-medium text-slate-700 cursor-pointer">
-                    Định dạng JSON đẹp mắt (Pretty-print format)
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            {/* Notice / Toast */}
-            {exportNotice && (
-              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3 rounded-lg text-xs flex items-center space-x-2 animate-in fade-in">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span className="font-semibold">{exportNotice}</span>
-              </div>
-            )}
-
-            <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg text-[11px] text-blue-900 space-y-1">
-              <p className="font-bold">Thông tin định dạng:</p>
-              <ul className="list-disc list-inside space-y-0.5 text-blue-800">
-                <li>Chuẩn dữ liệu: GeoJSON FeatureCollection (WGS84)</li>
-                <li>Tọa độ chuẩn quốc tế [Kinh độ, Vĩ độ]</li>
-                <li>Lưu giữ đầy đủ thuộc tính địa giới, tên, phân loại và kết quả quy tập.</li>
-              </ul>
-            </div>
-          </div>
+          <ExportDataTab
+            layers={layers}
+            existingFeatures={existingFeatures}
+          />
         )}
 
-        {/* TAB 3: BẢNG THUỘC TÍNH (FIELD ALIAS & VISIBILITY) */}
         {activeTab === 'attributes' && (
-          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-700 flex-1">
-            {/* Add New Rule Form */}
-            <form onSubmit={handleAddRule} className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2">
-              <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
-                <Plus className="w-3.5 h-3.5 text-blue-600" />
-                <span>Thêm tên hiển thị mới</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
-                <input
-                  type="text"
-                  placeholder="Tên trường gốc (vd: TimDuoc)"
-                  value={newKey}
-                  onChange={(e) => setNewKey(e.target.value)}
-                  className="sm:col-span-2 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
-                />
-                <input
-                  type="text"
-                  placeholder="Tên hiển thị (vd: Đã quy tập)"
-                  value={newAlias}
-                  onChange={(e) => setNewAlias(e.target.value)}
-                  className="sm:col-span-2 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 font-semibold text-slate-800"
-                />
-                <button
-                  type="submit"
-                  disabled={!newKey.trim() || !newAlias.trim()}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1 shadow-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Thêm</span>
-                </button>
-              </div>
-            </form>
-
-            {/* Search Input */}
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Tìm tên trường gốc hoặc tên hiển thị..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-100 border border-slate-200 rounded-md focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-
-            {/* Success notification */}
-            {aliasSavedSuccess && (
-              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-2.5 rounded-lg text-xs flex items-center space-x-2 animate-in fade-in">
-                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span className="font-bold">Đã lưu thành công tên thuộc tính &amp; cấu hình hiển thị!</span>
-              </div>
-            )}
-
-            {/* Mapping Table */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-100 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
-                    <th className="p-2.5 w-5/12">Tên trường</th>
-                    <th className="p-2.5 w-5/12">Tên hiển thị</th>
-                    <th className="p-2.5 w-12 text-center" title="Hiển thị ở Popup & Bảng thuộc tính">
-                      <Eye className="w-3.5 h-3.5 text-slate-600 mx-auto" />
-                    </th>
-                    <th className="p-2.5 w-10 text-center">
-                      <Trash2 className="w-3.5 h-3.5 text-slate-600 mx-auto" />
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800 font-medium">
-                  {filteredRules.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="p-4 text-center text-slate-400 italic">
-                        Không tìm thấy tên trường phù hợp
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredRules.map((rule, idx) => (
-                      <tr key={`rule_row_${idx}_${rule.key}`} className="hover:bg-blue-50/50 transition">
-                        <td className="p-2.5 font-mono text-blue-700 font-bold text-xs select-text">
-                          {rule.key}
-                        </td>
-                        <td className="p-2.5 text-slate-900 font-bold text-xs select-text">
-                          {rule.alias}
-                        </td>
-                        <td className="p-2.5 text-center">
-                          <input
-                            type="checkbox"
-                            checked={rule.visible}
-                            onChange={() => handleToggleVisibility(rule.key, rule.visible)}
-                            className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer accent-blue-600"
-                            title={rule.visible ? 'Đang hiển thị ở Popup & Bảng thuộc tính' : 'Đang ẩn ở Popup & Bảng thuộc tính'}
-                          />
-                        </td>
-                        <td className="p-2.5 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteRule(rule.key)}
-                            className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-100 rounded transition cursor-pointer"
-                            title="Xóa tên hiển thị này"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <AttributesTab onAliasesUpdated={onAliasesUpdated} />
         )}
 
-        {/* TAB 4: RASTER (BẢN ĐỒ NỀN) */}
         {activeTab === 'raster' && (
           <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-700 flex-1">
             <RasterManagementTab
@@ -1170,7 +197,6 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
           </div>
         )}
 
-        {/* TAB 5: NGƯỜI DÙNG */}
         {activeTab === 'users' && (
           <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-700 flex-1">
             <UserManagementTab />
@@ -1184,49 +210,12 @@ export const DatabaseManagementModal: React.FC<DatabaseManagementModalProps> = (
             <span className="hidden sm:inline">Phân quyền: Quản trị viên CSDL hệ thống</span>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-700 transition cursor-pointer"
-            >
-              Đóng
-            </button>
-
-            {activeTab === 'import' && (
-              <button
-                onClick={handleConfirmImport}
-                disabled={!parsedFeatures || parsedFeatures.length === 0}
-                className={`px-4 py-2 rounded text-xs font-bold uppercase tracking-wider flex items-center space-x-1.5 transition shadow-sm ${
-                  parsedFeatures && parsedFeatures.length > 0
-                    ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-95'
-                    : 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-70'
-                }`}
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Xác nhận</span>
-              </button>
-            )}
-
-            {activeTab === 'export' && (
-              <button
-                onClick={handleExportGeoJson}
-                className="px-4 py-2 rounded text-xs font-bold uppercase tracking-wider flex items-center space-x-1.5 transition shadow-sm bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-95"
-              >
-                <Download className="w-4 h-4" />
-                <span>Tải về</span>
-              </button>
-            )}
-
-            {activeTab === 'attributes' && (
-              <button
-                onClick={handleSaveAttributes}
-                className="px-4 py-2 rounded text-xs font-bold uppercase tracking-wider flex items-center space-x-1.5 transition shadow-sm bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-95"
-              >
-                <Save className="w-4 h-4" />
-                <span>Lưu</span>
-              </button>
-            )}
-          </div>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-700 transition cursor-pointer"
+          >
+            Đóng
+          </button>
         </div>
       </div>
     </div>

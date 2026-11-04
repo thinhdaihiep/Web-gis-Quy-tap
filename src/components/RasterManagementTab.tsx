@@ -27,6 +27,7 @@ import {
   loadRasterLayersFromFirestore,
   CACHE_KEY_RASTER_LAYERS,
   notifyServerCacheInvalidation,
+  getAuthHeaders,
 } from '../firebaseService';
 import { setCachedData } from '../utils/indexedDbCache';
 
@@ -309,7 +310,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
       const saveRes = await fetch('/api/raster-layers/save', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           layer: {
             name: finalName,
@@ -408,9 +409,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       removeCachedRasters(layer.files.map((f) => f.url));
 
       const nextLayerVersion = (layer.version || 1) + 1;
-      await fetch('/api/raster-layers/save', {
+      const res = await fetch('/api/raster-layers/save', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           layer: {
             ...layer,
@@ -420,6 +421,10 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
           },
         }),
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Không thể cập nhật lớp raster.');
+      }
 
       const updated = layers.map((l) =>
         l.id === layer.id
@@ -470,7 +475,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         try {
           await fetch('/api/raster-layers/clear-file-cache', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders(),
             body: JSON.stringify({ urls }),
           });
         } catch (serverErr) {
@@ -497,11 +502,15 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
   const handleToggleEnabled = async (layer: RasterLayer) => {
     const nextState = layer.enabled === false ? true : false;
     try {
-      await fetch('/api/raster-layers/update-enabled', {
+      const res = await fetch('/api/raster-layers/update-enabled', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ layerId: layer.id, enabled: nextState }),
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Không thể cập nhật trạng thái hiển thị lớp raster.');
+      }
 
       const updated = layers.map((l) => (l.id === layer.id ? { ...l, enabled: nextState } : l));
       setLayers(updated);
@@ -511,7 +520,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       if (onLayersChange) onLayersChange(updated);
     } catch (err: any) {
       console.error('Error toggling raster layer visibility:', err);
-      setErrorMessage('Không thể cập nhật trạng thái hiển thị lớp raster.');
+      setErrorMessage(err.message || 'Không thể cập nhật trạng thái hiển thị lớp raster.');
     }
   };
 
@@ -525,9 +534,9 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
     try {
       const targetLayer = layers.find((l) => l.id === layerId);
-      await fetch('/api/raster-layers/save', {
+      const res = await fetch('/api/raster-layers/save', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           layer: {
             ...targetLayer,
@@ -537,6 +546,11 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
         }),
       });
 
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Không thể đổi tên lớp raster.');
+      }
+
       const updated = layers.map((l) => (l.id === layerId ? { ...l, name: trimmed } : l));
       setLayers(updated);
       saveCachedRasterLayers(updated);
@@ -544,9 +558,10 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       await notifyServerCacheInvalidation('raster_layers');
       if (onLayersChange) onLayersChange(updated);
       setEditingLayerId(null);
+      setSuccessMessage(`Đã đổi tên lớp thành "${trimmed}"`);
     } catch (err: any) {
       console.error('Error renaming layer:', err);
-      setErrorMessage('Không thể đổi tên lớp raster.');
+      setErrorMessage(err.message || 'Không thể đổi tên lớp raster.');
     }
   };
 
@@ -558,11 +573,17 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
 
     setDeletingLayerId(layer.id);
     try {
-      await fetch('/api/raster-layers/delete', {
+      const res = await fetch('/api/raster-layers/delete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ id: layer.id }),
       });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Không thể xóa lớp raster.');
+      }
+
       removeCachedRasters(layer.files.map((f) => f.url));
 
       const updated = layers.filter((l) => l.id !== layer.id);
@@ -574,7 +595,7 @@ export const RasterManagementTab: React.FC<RasterManagementTabProps> = ({
       setSuccessMessage(`Đã xóa lớp "${layer.name}"`);
     } catch (err: any) {
       console.error('Error deleting layer:', err);
-      setErrorMessage('Không thể xóa lớp raster.');
+      setErrorMessage(err.message || 'Không thể xóa lớp raster.');
     } finally {
       setDeletingLayerId(null);
     }
