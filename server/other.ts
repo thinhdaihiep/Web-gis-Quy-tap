@@ -8,8 +8,19 @@ import { invalidateFeaturesResponseCache } from './features';
 import { invalidateRasterLayersCache } from './rasters';
 import { invalidateCommuneChunksCache } from './communes';
 
-// In-memory rate limiter for user feedback submissions
+// In-memory rate limiter for user feedback submissions (60s cooldown)
 export const feedbackRateLimiter = new Map<string, { count: number; resetAt: number }>();
+
+// In-memory daily limiter: key = `${ip}_${layerId}_${objectId}_${dateStr}` -> count (max 3/day)
+export const feedbackDailyLimiter = new Map<string, { count: number; date: string }>();
+
+function getVietnamDateString(): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+  } catch (_) {
+    return new Date().toISOString().split('T')[0];
+  }
+}
 
 // In-memory response caches
 let cachedLayerConfigsResponse: {
@@ -292,16 +303,19 @@ export function registerOtherRoutes(app: express.Express) {
     try {
       if (!adminDb) return res.status(500).json({ error: 'Admin SDK not initialized' });
 
+      // 1. Honeypot check for spam bots
+      if (req.body.website || req.body._hp) {
+        return res.status(400).json({ error: 'Yêu cầu không hợp lệ' });
+      }
+
       const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
       const nowTs = Date.now();
+
+      // 2. Cooldown check: 60s cooldown per IP
       const clientRate = feedbackRateLimiter.get(ip);
       if (clientRate && clientRate.resetAt > nowTs) {
-        if (clientRate.count >= 5) {
-          return res.status(429).json({ error: 'Bạn gửi góp ý quá nhanh. Vui lòng thử lại sau 1 phút.' });
-        }
-        clientRate.count++;
-      } else {
-        feedbackRateLimiter.set(ip, { count: 1, resetAt: nowTs + 60000 });
+        const remainingSec = Math.ceil((clientRate.resetAt - nowTs) / 1000);
+        return res.status(429).json({ error: `Bạn gửi góp ý quá nhanh. Vui lòng đợi ${remainingSec}s.` });
       }
 
       const { OBJECTID, Lop, TenLop, TenDoiTuong, Ten, DienThoai, NoiDung } = req.body;
@@ -313,9 +327,53 @@ export function registerOtherRoutes(app: express.Express) {
       const cleanLop = sanitizeInputText(String(Lop || ''), 100);
       const cleanTenLop = sanitizeInputText(String(TenLop || ''), 150);
       const cleanTenDoiTuong = sanitizeInputText(String(TenDoiTuong || ''), 200);
-      const cleanTen = sanitizeInputText(String(Ten || ''), 100);
-      const cleanDienThoai = sanitizeInputText(String(DienThoai || ''), 30);
-      const cleanNoiDung = sanitizeInputText(String(NoiDung || ''), 2000);
+      const cleanTen = sanitizeInputText(String(Ten || '').trim(), 50);
+      const cleanDienThoai = sanitizeInputText(String(DienThoai || '').trim(), 20);
+      const cleanNoiDung = sanitizeInputText(String(NoiDung || '').trim(), 500);
+
+      // 3. Ràng buộc ký tự & Định dạng
+      if (cleanTen.length < 2 || cleanTen.length > 50) {
+        return res.status(400).json({ error: 'Họ và tên cần từ 2 đến 50 ký tự' });
+      }
+
+      const phoneDigits = cleanDienThoai.replace(/[^0-9]/g, '');
+      if (!/^0[0-9]{9,10}$/.test(phoneDigits)) {
+        return res.status(400).json({ error: 'Số điện thoại không hợp lệ (cần 10-11 số, bắt đầu bằng 0)' });
+      }
+
+      if (cleanNoiDung.length < 10) {
+        return res.status(400).json({ error: 'Nội dung góp ý cần tối thiểu 10 ký tự' });
+      }
+      if (cleanNoiDung.length > 500) {
+        return res.status(400).json({ error: 'Nội dung góp ý tối đa 500 ký tự' });
+      }
+
+      // 4. Ràng buộc mỗi IP chỉ được gửi tối đa 3 góp ý / 1 đối tượng / 1 ngày
+      const todayStr = getVietnamDateString();
+      const dailyKey = `${ip}_${cleanLop}_${cleanObjectId}_${todayStr}`;
+      let currentDailyCount = 0;
+      const cachedDaily = feedbackDailyLimiter.get(dailyKey);
+
+      if (cachedDaily && cachedDaily.date === todayStr) {
+        currentDailyCount = cachedDaily.count;
+      } else {
+        try {
+          const countSnap = await adminDb
+            .collection('PhanAnh')
+            .where('clientIp', '==', ip)
+            .where('Lop', '==', cleanLop)
+            .where('OBJECTID', '==', cleanObjectId)
+            .where('ngayGui', '==', todayStr)
+            .get();
+          currentDailyCount = countSnap.size;
+        } catch (_) {}
+      }
+
+      if (currentDailyCount >= 3) {
+        return res.status(429).json({
+          error: 'Bạn đã gửi tối đa 3 góp ý cho đối tượng này trong ngày hôm nay.',
+        });
+      }
 
       const now = new Date();
       const timeFormatted = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
@@ -330,10 +388,16 @@ export function registerOtherRoutes(app: express.Express) {
         NoiDung: cleanNoiDung,
         ThoiGian: timeFormatted,
         TrangThai: 'moi',
+        clientIp: ip,
+        ngayGui: todayStr,
         createdAt: FieldValue.serverTimestamp(),
       };
 
       const docRef = await adminDb.collection('PhanAnh').add(feedbackData);
+
+      // Cập nhật bộ đếm giới hạn
+      feedbackDailyLimiter.set(dailyKey, { count: currentDailyCount + 1, date: todayStr });
+      feedbackRateLimiter.set(ip, { count: 1, resetAt: nowTs + 60000 });
 
       try {
         await adminDb.collection('notifications').add({
@@ -350,10 +414,46 @@ export function registerOtherRoutes(app: express.Express) {
         console.warn('Could not create notification for feedback:', nErr);
       }
 
-      res.json({ success: true, id: docRef.id });
+      res.json({ success: true, id: docRef.id, remainingToday: 3 - (currentDailyCount + 1) });
     } catch (err: any) {
       console.error('[API POST /api/feedback] Error:', err);
       res.status(500).json({ error: err.message || 'Lỗi gửi góp ý' });
+    }
+  });
+
+  // GET daily feedback count for specific object from current IP
+  app.get('/api/feedback/daily-count', async (req, res) => {
+    try {
+      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      const { objectId, layerId } = req.query;
+      if (!objectId || !layerId) {
+        return res.json({ count: 0, maxAllowed: 3, remaining: 3 });
+      }
+
+      const todayStr = getVietnamDateString();
+      const dailyKey = `${ip}_${String(layerId)}_${String(objectId)}_${todayStr}`;
+      const cached = feedbackDailyLimiter.get(dailyKey);
+
+      if (cached && cached.date === todayStr) {
+        return res.json({ count: cached.count, maxAllowed: 3, remaining: Math.max(0, 3 - cached.count) });
+      }
+
+      if (adminDb) {
+        const snap = await adminDb
+          .collection('PhanAnh')
+          .where('clientIp', '==', ip)
+          .where('Lop', '==', String(layerId))
+          .where('OBJECTID', '==', String(objectId))
+          .where('ngayGui', '==', todayStr)
+          .get();
+        const count = snap.size;
+        feedbackDailyLimiter.set(dailyKey, { count, date: todayStr });
+        return res.json({ count, maxAllowed: 3, remaining: Math.max(0, 3 - count) });
+      }
+
+      return res.json({ count: 0, maxAllowed: 3, remaining: 3 });
+    } catch (_) {
+      return res.json({ count: 0, maxAllowed: 3, remaining: 3 });
     }
   });
 

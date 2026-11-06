@@ -1,29 +1,31 @@
-import React, { useState } from 'react';
-import { Download, FileSpreadsheet, CheckCircle2, AlertTriangle } from 'lucide-react';
-import proj4 from 'proj4';
+import React, { useState, useEffect } from 'react';
+import { Download, FileSpreadsheet, CheckCircle2 } from 'lucide-react';
 import { LayerConfig, GeoJsonFeatureItem } from '../../types';
-import { cleanShapeProperties, isShapeProperty } from '../../utils/shapeFieldUtils';
+import { sanitizePropertiesForLayer, getSchemaForLayer } from '../../FieldSchema';
 
-proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
-proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
+function getTimestampString(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const h = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  return `${y}${m}${d}_${h}${min}`;
+}
 
-function convertCoordinatesToWGS84(coords: any): any {
-  if (!Array.isArray(coords) || coords.length === 0) return coords;
-
-  if (typeof coords[0] === 'number' && !isNaN(coords[0]) && typeof coords[1] === 'number' && !isNaN(coords[1])) {
-    const [x, y] = coords;
-    if (Math.abs(x) > 180 || Math.abs(y) > 90) {
-      try {
-        const [lng, lat] = proj4('EPSG:3405', 'EPSG:4326', [x, y]);
-        return [lng, lat];
-      } catch (err) {
-        console.warn('Proj4 convert error:', err);
-      }
-    }
-    return [x, y];
+function generateBackupFileName(layerId: string, layers: LayerConfig[]): string {
+  const timeStr = getTimestampString();
+  if (layerId === 'all') {
+    return `SaoLuu_ToanBoCSDL_${timeStr}`;
   }
-
-  return coords.map((c) => convertCoordinatesToWGS84(c));
+  const targetLayer = layers.find((l) => l.id === layerId);
+  const safeName = (targetLayer?.name || layerId)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  return `SaoLuu_${safeName}_${timeStr}`;
 }
 
 export interface ExportDataTabProps {
@@ -37,8 +39,15 @@ export const ExportDataTab: React.FC<ExportDataTabProps> = ({
 }) => {
   const [selectedExportLayer, setSelectedExportLayer] = useState<string>('all');
   const [prettyPrint, setPrettyPrint] = useState<boolean>(true);
-  const [exportFileName, setExportFileName] = useState<string>('CSDL_MoLietSi_QK5');
+  const [exportFileName, setExportFileName] = useState<string>(() =>
+    generateBackupFileName('all', layers)
+  );
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+
+  // Cập nhật tên tệp đề xuất khi người dùng đổi lớp chọn
+  useEffect(() => {
+    setExportFileName(generateBackupFileName(selectedExportLayer, layers));
+  }, [selectedExportLayer, layers]);
 
   const handleExportGeoJson = () => {
     const exportFeatures =
@@ -61,7 +70,7 @@ export const ExportDataTab: React.FC<ExportDataTabProps> = ({
         type: 'name',
         properties: { name: 'urn:ogc:def:crs:OGC:1.3:CRS84' },
       },
-      features: exportFeatures.map((f) => {
+      features: exportFeatures.map((f, idx) => {
         let parsedCoordinates = f.coordinates;
         if (typeof parsedCoordinates === 'string') {
           try {
@@ -70,84 +79,44 @@ export const ExportDataTab: React.FC<ExportDataTabProps> = ({
             console.warn(`[Export GeoJSON] Lỗi parse tọa độ đối tượng ${f.id}:`, err);
           }
         }
-        parsedCoordinates = convertCoordinatesToWGS84(parsedCoordinates);
 
-        const cleanedRawProps = cleanShapeProperties(f.properties || {});
-        const IGNORED_EXPORT_KEYS = new Set([
-          'layerid',
-          'updatedat',
-          '__deleted__',
-          'trangthaimoi',
-          'trang_thai_moi',
-          'trang_thai',
-          '_id',
-          'selected',
-          'highlighted',
-        ]);
+        // Lọc nghiêm ngặt theo đúng Schema Geodatabase của lớp
+        const sanitizedProps = sanitizePropertiesForLayer(f.properties || {}, f.layerId);
 
-        const sanitizedProps: Record<string, any> = {};
-        for (const [key, val] of Object.entries(cleanedRawProps)) {
-          const normKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-          if (!IGNORED_EXPORT_KEYS.has(normKey) && !isShapeProperty(key)) {
-            sanitizedProps[key] = val;
-          }
+        // Đảm bảo trường OBJECTID luôn hiện diện và viết hoa
+        if (
+          sanitizedProps.OBJECTID === undefined ||
+          sanitizedProps.OBJECTID === null ||
+          sanitizedProps.OBJECTID === ''
+        ) {
+          const rawId = f.code || f.id || idx + 1;
+          const numVal = parseInt(String(rawId).replace(/[^0-9]/g, ''), 10);
+          sanitizedProps.OBJECTID = !isNaN(numVal) ? numVal : rawId;
         }
 
-        const objectId = sanitizedProps.OBJECTID ?? f.code ?? f.id;
-        sanitizedProps.OBJECTID = objectId;
-
-        const ten = sanitizedProps.Ten ?? f.name;
-        if (ten !== undefined && ten !== null) {
-          sanitizedProps.Ten = ten;
+        // Đảm bảo trường Ten luôn hiện diện
+        if (!sanitizedProps.Ten && f.name) {
+          sanitizedProps.Ten = f.name;
         }
 
-        if (sanitizedProps.PhanLoai !== undefined && sanitizedProps.PhanLoai !== null && sanitizedProps.PhanLoai !== '') {
-          const num = Number(sanitizedProps.PhanLoai);
-          sanitizedProps.PhanLoai = isNaN(num) ? sanitizedProps.PhanLoai : num;
-        }
-
-        const priorityKeys = [
-          'OBJECTID',
-          'Ten',
-          'PhanLoai',
-          'HienTrang',
-          'Xa',
-          'Huyen',
-          'Tinh',
-          'DiaDanh3C',
-          'TimDuoc',
-          'ChuaThay',
-          'QuyTap',
-          'ThoiGian',
-          'CapNhat',
-          'Nguon',
-          'NguoiSua',
-          'HoSo',
-          'DonVi',
-          'BenTa',
-          'BenDich',
-          'CongTrinh',
-          'GhiChu',
-          'ToaDo',
-          'DiaDiem',
-          'DiaChi',
-          'SoMo',
-          'MoCoTen',
-          'MoVoDanh',
-          'ThanhLap',
-          'DienThoai',
-        ];
-
+        // Sắp xếp thứ tự các trường chuẩn theo Schema của lớp đó
+        const schema = getSchemaForLayer(f.layerId);
         const orderedProps: Record<string, any> = {};
-        for (const key of priorityKeys) {
-          if (key in sanitizedProps) {
-            orderedProps[key] = sanitizedProps[key];
-          }
+
+        // Đưa OBJECTID lên vị trí đầu tiên
+        if ('OBJECTID' in sanitizedProps) {
+          orderedProps['OBJECTID'] = sanitizedProps['OBJECTID'];
         }
-        for (const [key, val] of Object.entries(sanitizedProps)) {
-          if (!(key in orderedProps)) {
-            orderedProps[key] = val;
+
+        schema.forEach((fieldDef) => {
+          if (fieldDef.name !== 'OBJECTID' && fieldDef.name in sanitizedProps) {
+            orderedProps[fieldDef.name] = sanitizedProps[fieldDef.name];
           }
+        });
+
+        // Nếu xuất tất cả các lớp, lưu thêm layerId để khi khôi phục tự động phân bổ đúng lớp
+        if (selectedExportLayer === 'all') {
+          orderedProps['layerId'] = f.layerId;
         }
 
         return {
@@ -166,7 +135,7 @@ export const ExportDataTab: React.FC<ExportDataTabProps> = ({
       ? JSON.stringify(featureCollection, null, 2)
       : JSON.stringify(featureCollection);
 
-    const blob = new Blob([jsonString], { type: 'application/json' });
+    const blob = new Blob([jsonString], { type: 'application/geo+json;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const downloadLink = document.createElement('a');
     const finalName = exportFileName.toLowerCase().endsWith('.geojson')
@@ -180,8 +149,8 @@ export const ExportDataTab: React.FC<ExportDataTabProps> = ({
     document.body.removeChild(downloadLink);
     URL.revokeObjectURL(url);
 
-    setExportNotice(`Đã xuất thành công ${exportFeatures.length} đối tượng ra tệp ${finalName}`);
-    setTimeout(() => setExportNotice(null), 4000);
+    setExportNotice(`Đã sao lưu thành công ${exportFeatures.length} đối tượng ra tệp ${finalName}`);
+    setTimeout(() => setExportNotice(null), 5000);
   };
 
   return (

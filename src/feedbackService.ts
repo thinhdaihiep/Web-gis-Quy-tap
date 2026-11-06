@@ -24,9 +24,35 @@ export interface CreateFeedbackParams {
   Ten: string;
   DienThoai: string;
   NoiDung: string;
+  website?: string;
 }
 
-export async function createFeedback(params: CreateFeedbackParams): Promise<string> {
+export interface DailyCountInfo {
+  count: number;
+  maxAllowed: number;
+  remaining: number;
+}
+
+export async function getDailyFeedbackCount(
+  objectId: string | number,
+  layerId: string
+): Promise<DailyCountInfo> {
+  try {
+    const res = await fetch(
+      `/api/feedback/daily-count?objectId=${encodeURIComponent(objectId)}&layerId=${encodeURIComponent(layerId)}&_t=${Date.now()}`,
+      {
+        headers: getAuthHeaders(),
+        cache: 'no-store',
+      }
+    );
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (_) {}
+  return { count: 0, maxAllowed: 3, remaining: 3 };
+}
+
+export async function createFeedback(params: CreateFeedbackParams): Promise<{ id: string; remainingToday?: number }> {
   const res = await fetch('/api/feedback', {
     method: 'POST',
     headers: getAuthHeaders(),
@@ -42,7 +68,7 @@ export async function createFeedback(params: CreateFeedbackParams): Promise<stri
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('webgis:notification-updated'));
   }
-  return data.id || '';
+  return { id: data.id || '', remainingToday: data.remainingToday };
 }
 
 /**

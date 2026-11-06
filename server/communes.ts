@@ -242,7 +242,7 @@ export async function ensureCommunesIndexInitialized(forceReload = false): Promi
 
 export function registerCommuneRoutes(app: express.Express) {
   // Batch Upload via Admin SDK
-  app.post('/api/communes/batch', express.json({ limit: '50mb' }), requireEditorOrAdmin, async (req, res) => {
+  app.post('/api/communes/batch', express.json({ limit: '100mb' }), requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });

@@ -1,6 +1,6 @@
 {
-  "summary":  "Kế hoạch nâng cấp bảo mật thuần Firebase Admin SDK và Kiến trúc Đồng bộ Bộ đệm Toàn diện (Global Metadata Version Registry) cho toàn bộ CSDL (mộ chí, raster, ranh giới xã, cấu hình, bí danh), giúp máy khách nhận biết tức thời và chỉ đồng bộ chính xác dữ liệu có thay đổi.",
-  "updatedAt":  "2026-10-27T00:31:48.542448279Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Cập nhật tài liệu tiến độ: Đã hoàn tất bổ sung các ràng buộc chống spam cho tính năng Góp ý (Feedback) bao gồm: bẫy bot honeypot, bộ đếm & giới hạn ký tự (2-50 cho Họ tên, 10-11 số cho Điện thoại, 10-500 cho Nội dung) và giới hạn mỗi IP chỉ được gửi tối đa 3 góp ý/đối tượng/ngày (theo múi giờ VN GMT+7) cùng thiết kế ưu tiên Icon thay nhãn.",
+  "updatedAt": "2026-11-05T14:37:39.356744294Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

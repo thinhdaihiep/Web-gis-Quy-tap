@@ -6,59 +6,11 @@ import {
   UploadCloud,
   Loader2,
 } from 'lucide-react';
-import proj4 from 'proj4';
 import { LayerConfig, GeoJsonFeatureItem, DuplicateStrategy } from '../../types';
 import { extractObjectId, getFeatureDisplayCode } from '../../fieldAlias';
 import { saveCommuneChunksToFirestore } from '../../firebaseService';
 import { invalidateCommuneCache } from '../../utils/communeLookup';
-import { cleanShapeProperties } from '../../utils/shapeFieldUtils';
-
-proj4.defs('EPSG:3405', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
-proj4.defs('EPSG:32648', '+proj=utm +zone=48 +datum=WGS84 +units=m +no_defs');
-
-function convertCoordinatesToWGS84(coords: any): any {
-  if (!Array.isArray(coords) || coords.length === 0) return coords;
-
-  if (typeof coords[0] === 'number' && !isNaN(coords[0]) && typeof coords[1] === 'number' && !isNaN(coords[1])) {
-    const [x, y] = coords;
-    if (Math.abs(x) > 180 || Math.abs(y) > 90) {
-      try {
-        const [lng, lat] = proj4('EPSG:3405', 'EPSG:4326', [x, y]);
-        return [lng, lat];
-      } catch (err) {
-        console.warn('Proj4 convert error:', err);
-      }
-    }
-    return [x, y];
-  }
-
-  return coords.map((c) => convertCoordinatesToWGS84(c));
-}
-
-function parseDmsToLatLng(toaDoStr: string): { lat: number; lng: number } | null {
-  if (!toaDoStr || typeof toaDoStr !== 'string') return null;
-  const latMatch = toaDoStr.match(/(\d+)°(?:(\d+)'|′)?(?:(\d+)(?:\.\d+)?"|″)?\s*([NSns])/);
-  const lngMatch = toaDoStr.match(/(\d+)°(?:(\d+)'|′)?(?:(\d+)(?:\.\d+)?"|″)?\s*([EWew])/);
-
-  if (latMatch && lngMatch) {
-    const latDeg = parseFloat(latMatch[1]) || 0;
-    const latMin = parseFloat(latMatch[2]) || 0;
-    const latSec = parseFloat(latMatch[3]) || 0;
-    const latDir = latMatch[4].toUpperCase();
-    let lat = latDeg + latMin / 60 + latSec / 3600;
-    if (latDir === 'S') lat = -lat;
-
-    const lngDeg = parseFloat(lngMatch[1]) || 0;
-    const lngMin = parseFloat(lngMatch[2]) || 0;
-    const lngSec = parseFloat(lngMatch[3]) || 0;
-    const lngDir = lngMatch[4].toUpperCase();
-    let lng = lngDeg + lngMin / 60 + lngSec / 3600;
-    if (lngDir === 'W') lng = -lng;
-
-    return { lat, lng };
-  }
-  return null;
-}
+import { sanitizePropertiesForLayer } from '../../FieldSchema';
 
 export interface ImportDataTabProps {
   layers: LayerConfig[];
@@ -136,82 +88,73 @@ export const ImportDataTab: React.FC<ImportDataTabProps> = ({
         throw new Error('Tập tin GeoJSON không chứa đối tượng hình học (Feature) nào.');
       }
 
+      const targetLayer = layers.find((l) => l.id === selectedLayerId);
+      const isPolygonLayer =
+        targetLayer?.type === 'polygon' ||
+        selectedLayerId === 'layer1_tim_kiem' ||
+        selectedLayerId === 'layer4_khu_vuc_quy_tap' ||
+        selectedLayerId.includes('tim_kiem') ||
+        selectedLayerId.includes('quy_tap');
+
+      const isPointLayer =
+        targetLayer?.type === 'point' ||
+        selectedLayerId === 'layer2_tran_danh' ||
+        selectedLayerId === 'layer3_mo_chi' ||
+        selectedLayerId === 'layer4_nghia_trang' ||
+        selectedLayerId.includes('tran_danh') ||
+        selectedLayerId.includes('mo_chi') ||
+        selectedLayerId.includes('mo_liet_si') ||
+        selectedLayerId.includes('nghia_trang');
+
       const formatted: GeoJsonFeatureItem[] = rawFeatures.map((f: any, idx: number) => {
         const rawProps = f.properties || {};
-        const geom = f.geometry || {};
-        const rawId =
-          f.id ?? rawProps.OBJECTID ?? rawProps.objectID ?? rawProps.id ?? `IMP-${Date.now()}-${idx + 1}`;
+        const geom = f.geometry;
 
-        const props: Record<string, any> = cleanShapeProperties({ ...rawProps });
-        delete props['TrangThaiMoi'];
-        delete props['trang_thai_moi'];
-        delete props['trangthaimoi'];
-
-        const featureName =
-          props.Ten ||
-          props.ten ||
-          (props.Xa || props.Tinh ? `Khu vực Quy tập ${props.Xa ? props.Xa + ', ' : ''}${props.Tinh || ''}` : null) ||
-          rawProps.name ||
-          rawProps.ten_khu_vuc ||
-          `Khu vực Quy tập #${props.OBJECTID || idx + 1}`;
-
-        let coords = geom.coordinates || [];
-        let geomType = geom.type || 'Polygon';
-
-        if (coords && coords.length > 0) {
-          coords = convertCoordinatesToWGS84(coords);
+        if (!geom || !geom.coordinates || !Array.isArray(geom.coordinates) || geom.coordinates.length === 0) {
+          throw new Error(`Đối tượng thứ ${idx + 1} không có tọa độ hình học (geometry.coordinates).`);
         }
 
-        let firstCoord: any = Array.isArray(coords) && coords.length > 0 ? coords[0] : null;
-        while (Array.isArray(firstCoord) && firstCoord.length > 0) {
-          firstCoord = firstCoord[0];
+        const rawGeomType = geom.type || 'Point';
+        if (isPolygonLayer && rawGeomType !== 'Polygon' && rawGeomType !== 'MultiPolygon') {
+          throw new Error(
+            `Lớp "${targetLayer?.name || 'Vùng'}" yêu cầu hình học dạng Vùng (Polygon/MultiPolygon), nhưng đối tượng thứ ${idx + 1} có kiểu "${rawGeomType}".`
+          );
+        }
+        if (isPointLayer && rawGeomType !== 'Point' && rawGeomType !== 'MultiPoint') {
+          throw new Error(
+            `Lớp "${targetLayer?.name || 'Điểm'}" yêu cầu hình học dạng Điểm (Point), nhưng đối tượng thứ ${idx + 1} có kiểu "${rawGeomType}".`
+          );
         }
 
-        const isValidWgs84 = typeof firstCoord === 'number' && !isNaN(firstCoord) && Math.abs(firstCoord) <= 180;
+        // Lọc nghiêm ngặt theo Schema của lớp, chỉ giữ các trường trong schema, OBJECTID viết hoa
+        const props: Record<string, any> = sanitizePropertiesForLayer(rawProps, selectedLayerId);
 
-        if (!coords || coords.length === 0 || !isValidWgs84) {
-          if (props.ToaDo) {
-            const parsedDms = parseDmsToLatLng(props.ToaDo);
-            if (parsedDms) {
-              const { lat, lng } = parsedDms;
-              const delta = 0.008;
-              geomType = 'Polygon';
-              coords = [
-                [
-                  [lng - delta, lat + delta],
-                  [lng + delta, lat + delta],
-                  [lng + delta, lat - delta],
-                  [lng - delta, lat - delta],
-                  [lng - delta, lat + delta],
-                ],
-              ];
-            }
+        // Gán tên đối tượng theo đúng từng lớp
+        let featureName = props.Ten ? String(props.Ten).trim() : '';
+        if (!featureName) {
+          if (selectedLayerId.includes('tim_kiem') || selectedLayerId.includes('quy_tap')) {
+            featureName = props.Xa || props.Tinh ? `Khu vực quy tập ${props.Xa ? props.Xa + ', ' : ''}${props.Tinh || ''}` : `Khu vực quy tập #${props.OBJECTID || idx + 1}`;
+          } else if (selectedLayerId.includes('tran_danh')) {
+            featureName = `Trận đánh #${props.OBJECTID || idx + 1}`;
+          } else if (selectedLayerId.includes('mo_chi') || selectedLayerId.includes('mo_liet_si')) {
+            featureName = `Mộ liệt sĩ #${props.OBJECTID || idx + 1}`;
+          } else if (selectedLayerId.includes('nghia_trang')) {
+            featureName = props.Xa || props.Tinh ? `Nghĩa trang ${props.Xa ? props.Xa + ', ' : ''}${props.Tinh || ''}` : `Nghĩa trang #${props.OBJECTID || idx + 1}`;
           } else {
-            const baseLat = 13.9 + (idx % 5) * 0.2;
-            const baseLng = 108.0 + (idx % 4) * 0.2;
-            const delta = 0.01;
-            geomType = 'Polygon';
-            coords = [
-              [
-                [baseLng - delta, baseLat + delta],
-                [baseLng + delta, baseLat + delta],
-                [baseLng + delta, baseLat - delta],
-                [baseLng - delta, baseLat - delta],
-                [baseLng - delta, baseLat + delta],
-              ],
-            ];
+            featureName = `Đối tượng #${props.OBJECTID || idx + 1}`;
           }
         }
+
+        const rawId = f.id ?? props.OBJECTID ?? `IMP-${Date.now()}-${idx + 1}`;
 
         return {
           id: String(rawId),
           layerId: selectedLayerId,
-          name: String(featureName),
-          code: String(props.OBJECTID || props.code || rawId),
-          type: geomType,
-          coordinates: coords,
+          name: featureName,
+          code: String(props.OBJECTID || rawId),
+          type: rawGeomType as any,
+          coordinates: geom.coordinates,
           properties: props,
-          status: props.PhanLoai === 1 ? 'xac_dinh' : 'chua_xac_dinh',
           updatedAt: new Date().toISOString().split('T')[0],
         };
       });

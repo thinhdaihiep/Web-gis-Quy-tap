@@ -1056,6 +1056,26 @@ export default function App() {
     }
   };
 
+  const [reloadingLayerId, setReloadingLayerId] = useState<string | null>(null);
+
+  const handleReloadLayer = async (layerId: string) => {
+    setReloadingLayerId(layerId);
+    try {
+      const freshFeatures = await loadSharedFeaturesFromFirestore(true);
+      if (freshFeatures && Array.isArray(freshFeatures)) {
+        setMapFeatures(freshFeatures);
+      }
+      const targetLayer = layers.find((l) => l.id === layerId);
+      const layerName = targetLayer ? targetLayer.name : 'lớp dữ liệu';
+      showToast(`Đã làm mới ${layerName}`);
+    } catch (err) {
+      console.warn('Lỗi tải lại dữ liệu lớp:', err);
+      showToast('Lỗi khi tải lại dữ liệu lớp');
+    } finally {
+      setReloadingLayerId(null);
+    }
+  };
+
   const handleToggleLayerVisibility = (layerId: string) => {
     React.startTransition(() => {
       setLayers((prevLayers) =>
@@ -1861,6 +1881,8 @@ export default function App() {
               features={mapFeatures}
               onToggleVisibility={handleToggleLayerVisibility}
               onToggleGroupVisibility={handleToggleLayerGroupVisibility}
+              onReloadLayer={handleReloadLayer}
+              reloadingLayerId={reloadingLayerId}
               currentRole={effectiveRole}
               onClose={() => {
                 setIsLeftSidebarOpen(false);

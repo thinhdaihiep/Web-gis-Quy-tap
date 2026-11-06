@@ -19,6 +19,7 @@ import {
   subscribeFeedbacksForObject,
   deleteFeedback,
   updateFeedbackStatus,
+  getDailyFeedbackCount,
 } from '../feedbackService';
 
 interface FeedbackModalProps {
@@ -60,10 +61,13 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
   const [ten, setTen] = useState('');
   const [dienThoai, setDienThoai] = useState('');
   const [noiDung, setNoiDung] = useState('');
+  const [hpField, setHpField] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(true);
   const [secondsLeft, setSecondsLeft] = useState<number>(0);
+  const [dailyRemaining, setDailyRemaining] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const timerRef = useRef<any>(null);
@@ -92,40 +96,79 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     };
   }, []);
 
-  // Lắng nghe danh sách phản ánh theo OBJECTID và Lop
+  // Lắng nghe danh sách phản ánh & kiểm tra giới hạn trong ngày
   useEffect(() => {
     if (!isOpen || !objectId || !layerId) {
       setFeedbacks([]);
+      setDailyRemaining(null);
+      setErrorMessage(null);
       return;
     }
 
+    let isMounted = true;
     setIsLoadingList(true);
+
+    getDailyFeedbackCount(objectId, layerId).then((res) => {
+      if (isMounted) {
+        setDailyRemaining(res.remaining);
+      }
+    });
+
     const unsubscribe = subscribeFeedbacksForObject(
       objectId,
       layerId,
       (items) => {
-        setFeedbacks(items);
-        setIsLoadingList(false);
+        if (isMounted) {
+          setFeedbacks(items);
+          setIsLoadingList(false);
+        }
       },
       () => {
-        setIsLoadingList(false);
+        if (isMounted) {
+          setIsLoadingList(false);
+        }
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, [isOpen, objectId, layerId]);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage(null);
+
     if (secondsLeft > 0) return;
+    if (dailyRemaining !== null && dailyRemaining <= 0) {
+      setErrorMessage('Đã đạt giới hạn 3 góp ý/đối tượng/ngày');
+      return;
+    }
 
     const trimmedTen = ten.trim();
     const trimmedDienThoai = dienThoai.trim();
     const trimmedNoiDung = noiDung.trim();
 
-    if (!trimmedTen || !trimmedDienThoai || !trimmedNoiDung) {
+    if (trimmedTen.length < 2 || trimmedTen.length > 50) {
+      setErrorMessage('Họ tên từ 2 đến 50 ký tự');
+      return;
+    }
+
+    const phoneDigits = trimmedDienThoai.replace(/[^0-9]/g, '');
+    if (!/^0[0-9]{9,10}$/.test(phoneDigits)) {
+      setErrorMessage('Số ĐT không hợp lệ (10-11 số, bắt đầu bằng 0)');
+      return;
+    }
+
+    if (trimmedNoiDung.length < 10) {
+      setErrorMessage('Nội dung góp ý tối thiểu 10 ký tự');
+      return;
+    }
+    if (trimmedNoiDung.length > 500) {
+      setErrorMessage('Nội dung góp ý tối đa 500 ký tự');
       return;
     }
 
@@ -133,7 +176,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
 
     try {
       setIsSubmitting(true);
-      await createFeedback({
+      const res = await createFeedback({
         OBJECTID: objectId,
         Lop: layerId,
         TenLop: layerName,
@@ -141,6 +184,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
         Ten: trimmedTen,
         DienThoai: trimmedDienThoai,
         NoiDung: trimmedNoiDung,
+        website: hpField,
       });
 
       // Kích hoạt bộ đếm ngược chống spam (60s)
@@ -150,15 +194,22 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
       } catch (_) {}
       setSecondsLeft(60);
 
-      // Xóa nội dung nhưng giữ lại Tên/SĐT để người dùng tiện gửi thêm nếu cần
+      // Cập nhật số lượt còn lại trong ngày
+      if (typeof res.remainingToday === 'number') {
+        setDailyRemaining(res.remainingToday);
+      } else if (dailyRemaining !== null) {
+        setDailyRemaining(Math.max(0, dailyRemaining - 1));
+      }
+
       setNoiDung('');
+      setErrorMessage(null);
 
       if (onSuccessToast) {
         onSuccessToast('Gửi góp ý thành công!');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Lỗi khi gửi góp ý:', error);
-      alert('Không thể gửi góp ý. Vui lòng kiểm tra lại kết nối!');
+      setErrorMessage(error?.message || 'Không thể gửi góp ý');
     } finally {
       setIsSubmitting(false);
     }
@@ -190,6 +241,8 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     }
   };
 
+  const isDailyLimitReached = dailyRemaining !== null && dailyRemaining <= 0;
+
   return (
     <div className="fixed inset-0 z-[4000] bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
       <div className="bg-white rounded-xl shadow-2xl border border-slate-300 w-full max-w-xl max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in duration-150">
@@ -220,6 +273,19 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
           {/* PHẦN TRÊN: FORM NHẬP PHẢN ÁNH */}
           <section className="bg-slate-50 border border-slate-200 rounded-lg p-3 sm:p-3.5 shadow-2xs">
             <form onSubmit={handleSubmit} className="space-y-2.5">
+              {/* Honeypot field for bot protection */}
+              <input
+                type="text"
+                name="website"
+                value={hpField}
+                onChange={(e) => setHpField(e.target.value)}
+                tabIndex={-1}
+                autoComplete="off"
+                className="hidden"
+                aria-hidden="true"
+                style={{ display: 'none' }}
+              />
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-2.5">
                 {/* Ô 1: Họ tên */}
                 <div className="relative">
@@ -229,9 +295,14 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
                   <input
                     type="text"
                     required
+                    minLength={2}
+                    maxLength={50}
                     value={ten}
-                    onChange={(e) => setTen(e.target.value)}
-                    placeholder="Họ và tên"
+                    onChange={(e) => {
+                      setTen(e.target.value);
+                      if (errorMessage) setErrorMessage(null);
+                    }}
+                    placeholder="Họ tên"
                     className="w-full pl-8.5 pr-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md focus:outline-hidden focus:ring-1.5 focus:ring-sky-500 focus:border-sky-500 transition text-slate-900"
                   />
                 </div>
@@ -244,9 +315,14 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
                   <input
                     type="tel"
                     required
+                    minLength={10}
+                    maxLength={11}
                     value={dienThoai}
-                    onChange={(e) => setDienThoai(e.target.value)}
-                    placeholder="Số điện thoại"
+                    onChange={(e) => {
+                      setDienThoai(e.target.value);
+                      if (errorMessage) setErrorMessage(null);
+                    }}
+                    placeholder="Số ĐT"
                     className="w-full pl-8.5 pr-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md focus:outline-hidden focus:ring-1.5 focus:ring-sky-500 focus:border-sky-500 transition text-slate-900 font-mono"
                   />
                 </div>
@@ -257,50 +333,105 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
                 <textarea
                   required
                   rows={2}
+                  minLength={10}
+                  maxLength={500}
                   value={noiDung}
-                  onChange={(e) => setNoiDung(e.target.value)}
+                  onChange={(e) => {
+                    setNoiDung(e.target.value);
+                    if (errorMessage) setErrorMessage(null);
+                  }}
                   placeholder="Nội dung góp ý..."
                   className="w-full p-2.5 text-xs bg-white border border-slate-300 rounded-md focus:outline-hidden focus:ring-1.5 focus:ring-sky-500 focus:border-sky-500 transition text-slate-900 resize-none"
                 />
               </div>
 
-              {/* Nút gửi & Bộ đếm chống spam */}
+              {/* Thông báo lỗi nếu có */}
+              {errorMessage && (
+                <div className="flex items-center gap-1.5 p-1.5 bg-red-50 border border-red-200 rounded text-red-600 text-xs animate-in fade-in">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-red-500" />
+                  <span className="truncate">{errorMessage}</span>
+                </div>
+              )}
+
+              {/* Nút gửi & Bộ đếm ký tự & Giới hạn góp ý/ngày */}
               <div className="flex items-center justify-between pt-1">
-                <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                  {dailyRemaining !== null && (
+                    <span
+                      className="inline-flex items-center gap-1 font-mono"
+                      title="Số góp ý đã gửi / tối đa hôm nay"
+                    >
+                      {isDailyLimitReached ? (
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      ) : (
+                        <ShieldAlert className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                      )}
+                      <span>{Math.max(0, 3 - dailyRemaining)}/3</span>
+                    </span>
+                  )}
                   {!(currentRole === 'admin' || currentRole === 'editor') && (
-                    <span className="inline-flex items-center gap-1 text-slate-400">
-                      <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
-                      SĐT được ẩn công khai
+                    <span
+                      className="inline-flex items-center text-slate-400"
+                      title="SĐT được ẩn công khai"
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5 text-slate-400" />
                     </span>
                   )}
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={isSubmitting || secondsLeft > 0}
-                  className={`inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-semibold shadow-xs transition cursor-pointer ${
-                    secondsLeft > 0
-                      ? 'bg-slate-200 text-slate-500 border border-slate-300 cursor-not-allowed'
-                      : isSubmitting
-                      ? 'bg-sky-400 text-white cursor-wait'
-                      : 'bg-sky-600 hover:bg-sky-700 text-white active:scale-95'
-                  }`}
-                  title={secondsLeft > 0 ? `Vui lòng đợi ${secondsLeft}s trước khi gửi tiếp` : 'Gửi góp ý'}
-                >
-                  {secondsLeft > 0 ? (
-                    <>
-                      <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" />
-                      <span>{secondsLeft}s</span>
-                    </>
-                  ) : isSubmitting ? (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <>
-                      <Send className="w-3.5 h-3.5" />
-                      <span>Gửi</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-[11px] font-mono ${
+                      noiDung.length > 500
+                        ? 'text-red-500 font-bold'
+                        : noiDung.length >= 450
+                        ? 'text-amber-600 font-semibold'
+                        : 'text-slate-400'
+                    }`}
+                  >
+                    {noiDung.length}/500
+                  </span>
+
+                  <button
+                    type="submit"
+                    disabled={isSubmitting || secondsLeft > 0 || isDailyLimitReached}
+                    className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-semibold shadow-xs transition cursor-pointer ${
+                      isDailyLimitReached
+                        ? 'bg-slate-200 text-slate-500 border border-slate-300 cursor-not-allowed'
+                        : secondsLeft > 0
+                        ? 'bg-slate-200 text-slate-500 border border-slate-300 cursor-not-allowed'
+                        : isSubmitting
+                        ? 'bg-sky-400 text-white cursor-wait'
+                        : 'bg-sky-600 hover:bg-sky-700 text-white active:scale-95'
+                    }`}
+                    title={
+                      isDailyLimitReached
+                        ? 'Đã đạt giới hạn 3 góp ý/đối tượng/ngày'
+                        : secondsLeft > 0
+                        ? `Vui lòng đợi ${secondsLeft}s trước khi gửi tiếp`
+                        : 'Gửi'
+                    }
+                  >
+                    {isDailyLimitReached ? (
+                      <>
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+                        <span>3/3</span>
+                      </>
+                    ) : secondsLeft > 0 ? (
+                      <>
+                        <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" />
+                        <span>{secondsLeft}s</span>
+                      </>
+                    ) : isSubmitting ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <>
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Gửi</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </form>
           </section>

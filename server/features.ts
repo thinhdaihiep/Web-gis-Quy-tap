@@ -870,7 +870,7 @@ export function registerFeatureRoutes(app: express.Express) {
   });
 
   // Batch save / layer chunks save via Admin SDK
-  app.post('/api/features/batch', express.json({ limit: '50mb' }), requireEditorOrAdmin, async (req, res) => {
+  app.post('/api/features/batch', express.json({ limit: '100mb' }), requireEditorOrAdmin, async (req, res) => {
     try {
       if (!adminDb) {
         return res.status(500).json({ error: 'Firebase Admin SDK not initialized' });
@@ -878,45 +878,49 @@ export function registerFeatureRoutes(app: express.Express) {
       const { features, chunks } = req.body;
 
       if (Array.isArray(chunks) && chunks.length > 0) {
-        const batch = adminDb.batch();
-        for (const chunk of chunks) {
-          if (chunk.id && chunk.payloadJson) {
-            let sanitizedPayload = chunk.payloadJson;
-            try {
-              const list: any[] = JSON.parse(chunk.payloadJson);
-              if (Array.isArray(list)) {
-                const cleanedList = list.map((item) => ({
-                  ...item,
-                  properties: cleanShapePropertiesServer(item.properties || {}),
-                }));
-                sanitizedPayload = JSON.stringify(cleanedList);
-              }
-            } catch (_) {}
+        const BATCH_LIMIT = 400;
+        for (let b = 0; b < chunks.length; b += BATCH_LIMIT) {
+          const sliceChunks = chunks.slice(b, b + BATCH_LIMIT);
+          const batch = adminDb.batch();
+          for (const chunk of sliceChunks) {
+            if (chunk.id && chunk.payloadJson) {
+              let sanitizedPayload = chunk.payloadJson;
+              try {
+                const list: any[] = JSON.parse(chunk.payloadJson);
+                if (Array.isArray(list)) {
+                  const cleanedList = list.map((item) => ({
+                    ...item,
+                    properties: cleanShapePropertiesServer(item.properties || {}),
+                  }));
+                  sanitizedPayload = JSON.stringify(cleanedList);
+                }
+              } catch (_) {}
 
-            const chunkRef = adminDb.collection('layer_chunks').doc(chunk.id);
-            batch.set(chunkRef, {
-              chunkIndex: chunk.chunkIndex,
-              itemCount: chunk.itemCount,
-              payloadJson: sanitizedPayload,
-              updatedAt: new Date().toISOString(),
-            }, { merge: true });
+              const chunkRef = adminDb.collection('layer_chunks').doc(chunk.id);
+              batch.set(chunkRef, {
+                chunkIndex: chunk.chunkIndex,
+                itemCount: chunk.itemCount,
+                payloadJson: sanitizedPayload,
+                updatedAt: new Date().toISOString(),
+              }, { merge: true });
 
-            try {
-              const list: any[] = JSON.parse(sanitizedPayload);
-              if (Array.isArray(list)) {
-                for (const item of list) {
-                  if (item) {
-                    const uniqueKey = getServerFeatureUniqueKey(item);
-                    inMemoryFeatureMap.set(uniqueKey, item);
-                    inMemoryDeletedKeys.delete(uniqueKey.toLowerCase());
-                    if (item.id) inMemoryDeletedKeys.delete(String(item.id).toLowerCase());
+              try {
+                const list: any[] = JSON.parse(sanitizedPayload);
+                if (Array.isArray(list)) {
+                  for (const item of list) {
+                    if (item) {
+                      const uniqueKey = getServerFeatureUniqueKey(item);
+                      inMemoryFeatureMap.set(uniqueKey, item);
+                      inMemoryDeletedKeys.delete(uniqueKey.toLowerCase());
+                      if (item.id) inMemoryDeletedKeys.delete(String(item.id).toLowerCase());
+                    }
                   }
                 }
-              }
-            } catch (_) {}
+              } catch (_) {}
+            }
           }
+          await batch.commit();
         }
-        await batch.commit();
         invalidateFeaturesResponseCache();
         await bumpSyncVersion('features');
         return res.json({ success: true, count: features?.length || 0 });

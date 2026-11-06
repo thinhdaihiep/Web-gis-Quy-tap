@@ -102,7 +102,7 @@ function isSafePdfUpstream(urlStr: string): boolean {
 
 export function registerBattleRoutes(app: express.Express) {
   // Upload battle dossier PDF to Server
-  app.post('/api/battles/upload-hoso', express.json({ limit: '50mb' }), requireEditorOrAdmin, async (req, res) => {
+  app.post('/api/battles/upload-hoso', express.json({ limit: '100mb' }), requireEditorOrAdmin, async (req, res) => {
     try {
       const token = getEffectiveGitHubToken();
       if (!token) {

@@ -548,18 +548,26 @@ export async function saveImportedFeaturesToFirestore(
       }
     }
 
-    const res = await fetch('/api/features/batch', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ chunks }),
-    });
+    const CHUNK_POST_BATCH = 15;
+    for (let c = 0; c < chunks.length; c += CHUNK_POST_BATCH) {
+      const sliceChunks = chunks.slice(c, c + CHUNK_POST_BATCH);
+      const res = await fetch('/api/features/batch', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ chunks: sliceChunks }),
+      });
 
-    if (res.ok) {
-      return { success: true, count: cleanedFeatures.length };
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return {
+          success: false,
+          count: cleanedFeatures.length,
+          error: data.error || `Lỗi lưu đợt dữ liệu qua máy chủ (${c + 1}/${chunks.length})`,
+        };
+      }
     }
 
-    const data = await res.json().catch(() => ({}));
-    return { success: false, count: cleanedFeatures.length, error: data.error || 'Lỗi lưu theo đợt qua máy chủ' };
+    return { success: true, count: cleanedFeatures.length };
   } catch (err: any) {
     console.warn('Lưu ý CSDL Firestore (Đã lưu vào bộ nhớ máy):', err?.message || err);
     return {

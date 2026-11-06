@@ -226,26 +226,60 @@ export function getSchemaForLayer(layerId?: string): FieldDefinition[] {
 
 /**
  * Chuẩn hóa và làm sạch thuộc tính của đối tượng theo Schema của lớp.
- * Đặc biệt đối với Lớp nghiệp vụ (layer5_nghiep_vu), chỉ giữ lại đúng 9 trường được định nghĩa trong NGHIEP_VU_SCHEMA.
+ * Chỉ giữ lại các trường được định nghĩa trong Schema của lớp đó, loại bỏ các trường thừa (Shape_Area, Shape_Length, FID...).
+ * Đảm bảo trường OBJECTID luôn được viết hoa đúng chuẩn.
  */
 export function sanitizePropertiesForLayer(props: Record<string, any>, layerId?: string): Record<string, any> {
   if (!props || typeof props !== 'object') return {};
-  const isBusiness =
-    layerId === 'layer5_nghiep_vu' ||
-    layerId === 'layer_nghiep_vu' ||
-    (layerId && (layerId.includes('nghiep_vu') || layerId.includes('nghiepvu')));
 
-  if (isBusiness) {
-    const allowed = new Set(NGHIEP_VU_SCHEMA.map((f) => f.name.toLowerCase()));
-    const result: Record<string, any> = {};
-    for (const [k, v] of Object.entries(props)) {
-      if (allowed.has(k.toLowerCase())) {
-        result[k] = v;
+  const schema = getSchemaForLayer(layerId);
+  const schemaMap = new Map<string, FieldDefinition>();
+  schema.forEach((f) => {
+    schemaMap.set(f.name.toLowerCase(), f);
+  });
+
+  const result: Record<string, any> = {};
+
+  for (const [key, val] of Object.entries(props)) {
+    const lowerKey = key.toLowerCase();
+
+    // Kiểm tra nếu thuộc tính khớp với trường trong schema
+    const matchedField = schemaMap.get(lowerKey);
+    if (matchedField) {
+      const officialName = matchedField.name;
+
+      if (officialName === 'OBJECTID') {
+        const numVal = parseInt(String(val), 10);
+        result['OBJECTID'] = !isNaN(numVal) ? numVal : val;
+      } else if (officialName === 'PhanLoai') {
+        const numVal = parseInt(String(val).replace(/[^0-9]/g, ''), 10);
+        if (!isNaN(numVal) && numVal >= 1 && numVal <= 5) {
+          result['PhanLoai'] = numVal;
+        } else {
+          result['PhanLoai'] = val;
+        }
+      } else {
+        result[officialName] = val;
       }
     }
-    return result;
   }
 
-  return { ...props };
+  // Đảm bảo trường OBJECTID luôn hiện diện nếu trong props gốc có dưới các dạng biến thể
+  if (result['OBJECTID'] === undefined || result['OBJECTID'] === null || result['OBJECTID'] === '') {
+    const rawObjId =
+      props.OBJECTID ??
+      props.ObjectId ??
+      props.objectId ??
+      props.objectid ??
+      props.OBJECT_ID ??
+      props.FID ??
+      props.fid;
+    if (rawObjId !== undefined && rawObjId !== null && String(rawObjId).trim() !== '') {
+      const numVal = parseInt(String(rawObjId), 10);
+      result['OBJECTID'] = !isNaN(numVal) ? numVal : rawObjId;
+    }
+  }
+
+  return result;
 }
 

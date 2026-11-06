@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LayerConfig, UserRole, GeoJsonFeatureItem } from '../types';
-import { Layers, X, Info, ChevronDown, ChevronRight, Folder } from 'lucide-react';
+import { Layers, X, Info, ChevronDown, ChevronRight, Folder, RotateCw } from 'lucide-react';
 import { SearchAreaShapeBadge, BattleShapeBadge, GraveShapeBadge, CemeteryShapeBadge, BusinessShapeBadge } from './GisIcons';
 
 interface LeftSidebarProps {
@@ -10,6 +10,8 @@ interface LeftSidebarProps {
   onToggleGroupVisibility?: (layerIds: string[], visible: boolean) => void;
   onRenameLayer?: (layerId: string, newName: string) => void;
   onZoomToLayer?: (layerId: string) => void;
+  onReloadLayer?: (layerId: string) => Promise<void> | void;
+  reloadingLayerId?: string | null;
   currentRole: UserRole;
   onClose?: () => void;
 }
@@ -19,6 +21,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   features = [],
   onToggleVisibility,
   onToggleGroupVisibility,
+  onReloadLayer,
+  reloadingLayerId,
   currentRole,
   onClose,
 }) => {
@@ -192,8 +196,25 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             </span>
           </div>
 
-          {/* Action button: Info only (no text label) */}
-          <div className="flex items-center">
+          {/* Action buttons: Reload & Info (pure icons) */}
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              disabled={reloadingLayerId === layer.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                onReloadLayer?.(layer.id);
+              }}
+              className={`p-1 rounded transition cursor-pointer shrink-0 ${
+                reloadingLayerId === layer.id
+                  ? 'text-blue-600 bg-blue-50'
+                  : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'
+              }`}
+              title="Tải lại lớp"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${reloadingLayerId === layer.id ? 'animate-spin text-blue-600' : ''}`} />
+            </button>
+
             <button
               type="button"
               onClick={(e) => {

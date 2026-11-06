@@ -61,21 +61,29 @@ export async function syncRevokedTokens() {
   } catch (_) {}
 }
 
-let memorySecretFallback = '';
 export const getSecretToken = (): string => {
   const envSecret = process.env.SESSION_SECRET || process.env.session_secret;
   if (envSecret && envSecret.trim() !== '') {
     return envSecret.trim();
   }
-  if (!memorySecretFallback) {
-    memorySecretFallback = crypto.randomBytes(64).toString('hex');
-    console.log('[Auth] Đang sử dụng khóa ký phiên mật mã an toàn được sinh ngẫu nhiên trong bộ nhớ.');
+  return '';
+};
+
+export const validateSessionSecretConfig = (): boolean => {
+  const secret = getSecretToken();
+  if (!secret) {
+    console.warn('[Auth] Cảnh báo: SESSION_SECRET chưa được thiết lập trong biến môi trường. Hệ thống sẽ không cấp mã phiên đăng nhập.');
+    return false;
   }
-  return memorySecretFallback;
+  return true;
 };
 
 export const createSignedToken = (username: string, role: 'admin' | 'editor'): string => {
   const secret = getSecretToken();
+  if (!secret) {
+    console.error('[Auth] Lỗi: SESSION_SECRET chưa được thiết lập trong biến môi trường.');
+    throw new Error('Chưa cấu hình SESSION_SECRET trong biến môi trường');
+  }
   const timestamp = Date.now();
   const usernameB64 = Buffer.from(username, 'utf8').toString('base64url');
   const payload = `v1.${role}.${usernameB64}.${timestamp}`;
@@ -85,6 +93,9 @@ export const createSignedToken = (username: string, role: 'admin' | 'editor'): s
 
 export const verifySignedToken = (token: string): ActiveSession | null => {
   if (!token || isTokenRevoked(token)) return null;
+
+  const secret = getSecretToken();
+  if (!secret) return null;
 
   if (token.startsWith('v1.')) {
     const parts = token.split('.');
@@ -98,7 +109,6 @@ export const verifySignedToken = (token: string): ActiveSession | null => {
     const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
     if (Date.now() - timestamp > MAX_AGE_MS) return null;
 
-    const secret = getSecretToken();
     const payload = `v1.${role}.${usernameB64}.${timestampStr}`;
     const expectedSig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
 
@@ -125,7 +135,6 @@ export const verifySignedToken = (token: string): ActiveSession | null => {
     const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
     if (Date.now() - timestamp > MAX_AGE_MS) return null;
 
-    const secret = getSecretToken();
     const payload = `v1:${role}:${username}:${timestampStr}`;
     const expectedSig = crypto.createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
     const sigBuf = Buffer.from(sig, 'utf8');

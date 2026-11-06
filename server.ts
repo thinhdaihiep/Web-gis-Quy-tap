@@ -6,13 +6,16 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 
 import { adminDb, adminInitError } from './server/firebaseAdmin';
-import { registerAuthRoutes, seedDefaultAdmin, syncRevokedTokens } from './server/auth';
+import { registerAuthRoutes, seedDefaultAdmin, syncRevokedTokens, validateSessionSecretConfig } from './server/auth';
 import { registerSyncRoutes } from './server/sync';
 import { registerCommuneRoutes, ensureCommunesIndexInitialized } from './server/communes';
 import { registerFeatureRoutes, ensureFeatureStoreInitialized } from './server/features';
 import { registerRasterRoutes } from './server/rasters';
 import { registerBattleRoutes } from './server/battles';
 import { registerOtherRoutes } from './server/other';
+
+// Validate security session secret configuration
+validateSessionSecretConfig();
 
 // Execute initial background tasks
 seedDefaultAdmin();
@@ -30,8 +33,9 @@ async function startServer() {
     next();
   });
 
-  // Default body limit for standard endpoints
-  app.use(express.json({ limit: '2mb' }));
+  // Body parser limits up to 100MB to support large GeoJSON, commune boundaries, and dossier uploads
+  app.use(express.json({ limit: '100mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
   // Status endpoint for Pure Firebase Admin SDK
   app.get('/api/admin/firebase-status', (req, res) => {
@@ -53,6 +57,27 @@ async function startServer() {
   registerRasterRoutes(app);
   registerBattleRoutes(app);
   registerOtherRoutes(app);
+
+  // Global error handler middleware for Express (handles PayloadTooLargeError, JSON syntax errors)
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err) {
+      if (err.type === 'entity.too.large' || err.status === 413) {
+        return res.status(413).json({
+          error: 'Kích thước dữ liệu quá lớn (vượt quá giới hạn cho phép 100MB). Vui lòng chia nhỏ tệp để tải lên.',
+        });
+      }
+      if (err.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+        return res.status(400).json({
+          error: 'Dữ liệu JSON gửi lên máy chủ không hợp lệ.',
+        });
+      }
+      console.error('[Express Error]', err);
+      return res.status(err.status || 500).json({
+        error: err.message || 'Lỗi xử lý yêu cầu máy chủ',
+      });
+    }
+    next();
+  });
 
   // Vite middleware for development / Static files for production
   if (process.env.NODE_ENV !== 'production') {
