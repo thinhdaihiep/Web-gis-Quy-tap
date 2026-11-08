@@ -23,7 +23,10 @@ syncRevokedTokens();
 
 async function startServer() {
   const app = express();
-  const PORT = parseInt(process.env.PORT || '3000', 10) || 3000;
+  const isDev = process.env.NODE_ENV !== 'production';
+  // In development, the dev server must always run on port 3000 (AI Studio constraint).
+  // In production (Cloud Run), listen on process.env.PORT (e.g. 8080).
+  const PORT = isDev ? 3000 : (parseInt(process.env.PORT || '8080', 10) || 8080);
 
   // Security Headers
   app.disable('x-powered-by');
@@ -80,20 +83,38 @@ async function startServer() {
   });
 
   // Vite middleware for development / Static files for production
-  if (process.env.NODE_ENV !== 'production') {
-    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
+  if (isDev) {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: isHmrDisabled ? false : undefined,
+        hmr: false,
       },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+
+    // 1. Serve Vite hashed assets (/assets/*.js, *.css) with 1-year immutable cache
+    app.use('/assets', express.static(path.join(distPath, 'assets'), {
+      maxAge: '1y',
+      immutable: true,
+      etag: true,
+    }));
+
+    // 2. Serve other static assets (favicon, images, json) with 1-day cache
+    app.use(express.static(distPath, {
+      maxAge: '1d',
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
+        }
+      },
+    }));
+
+    // 3. SPA fallback: index.html with no-cache so browsers always get fresh bundle links
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

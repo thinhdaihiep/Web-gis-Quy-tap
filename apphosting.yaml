@@ -2,8 +2,8 @@
 runConfig:
   cpu: 1
   memoryMiB: 1024
-  concurrency: 60
-  maxInstances: 10
+  concurrency: 80
+  maxInstances: 3
   minInstances: 0
 
 # Custom build and run scripts for custom Node.js/Express + Vite app
